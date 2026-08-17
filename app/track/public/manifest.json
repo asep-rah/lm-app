@@ -1,0 +1,17 @@
+{
+    "name": "Laundry ERP System",
+    "short_name": "Laundry POS",
+    "description": "Sistem Manajemen & Kasir Laundry Enterprise",
+    "start_url": "/login",
+    "display": "standalone",
+    "background_color": "#f8fafc",
+    "theme_color": "#059669",
+    "icons": [
+      {
+        "src": "https://cdn-icons-png.flaticon.com/512/3003/3003984.png",
+        "sizes": "512x512",
+        "type": "image/png",
+        "purpose": "any maskable"
+      }
+    ]
+  }

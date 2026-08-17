@@ -1,0 +1,181 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+  'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
+  'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs'
+);
+
+export default function DriverDashboard() {
+  const [pickups, setPickups] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [driverName, setDriverName] = useState('Driver Internal');
+
+  const loadDriverTasks = async () => {
+    setIsLoading(true);
+    // Driver hanya melihat orderan yang statusnya sudah ditugaskan kepadanya ('Driver Menuju Lokasi')
+    const { data, error } = await supabase
+      .from('pickup_orders')
+      .select('*, outlets(name), customer_addresses(*)')
+      .eq('status', 'Driver Menuju Lokasi')
+      .order('created_at', { ascending: true });
+
+    if (data) setPickups(data);
+    if (error) alert('Gagal memuat tugas: ' + error.message);
+    setIsLoading(false);
+  };
+
+  useEffect(() => {
+    // Simulasi Login Nama Driver (Bisa disesuaikan nanti)
+    const driverStr = localStorage.getItem('laundry_user');
+    if (driverStr) {
+      setDriverName(JSON.parse(driverStr).name || 'Driver Internal');
+    }
+    
+    loadDriverTasks();
+    const interval = setInterval(loadDriverTasks, 15000); // Auto-refresh 15 detik
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleOpenMaps = (lat: number, lon: number) => {
+    const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
+    window.open(mapsUrl, '_blank');
+  };
+
+  const handleOpenWA = (phone: string) => {
+    let cleanPhone = phone.trim().replace(/\D/g, '');
+    if (cleanPhone.startsWith('0')) cleanPhone = '62' + cleanPhone.slice(1);
+    const msg = encodeURIComponent(`Halo Kak, saya Driver Laundrivery yang bertugas menjemput cucian Kakak. Saya sedang menuju ke lokasi ya Kak! 🛵💨`);
+    window.open(`https://wa.me/${cleanPhone}?text=${msg}`, '_blank');
+  };
+
+  const handleFinishTask = async (id: string) => {
+    if (!confirm('Apakah barang cucian sudah berhasil dijemput dan dibawa ke Outlet?')) return;
+    
+    // Update status menjadi Selesai (Di tahap penjemputan, Selesai artinya sudah tiba di kasir)
+    const { error } = await supabase.from('pickup_orders').update({ status: 'Selesai' }).eq('id', id);
+    if (!error) {
+      alert('✅ Tugas penjemputan selesai! Cucian masuk ke antrean Kasir.');
+      loadDriverTasks();
+    } else {
+      alert('Gagal menyelesaikan tugas: ' + error.message);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-100 flex justify-center pb-24 font-sans">
+      {/* Container seukuran HP */}
+      <div className="bg-slate-50 w-full max-w-md min-h-screen shadow-2xl flex flex-col relative">
+        
+        {/* HEADER DRIVER */}
+        <div className="bg-emerald-700 text-white p-5 rounded-b-3xl shadow-lg border-b border-emerald-900">
+          <div className="flex justify-between items-center mb-3">
+            <div>
+              <h1 className="text-xl font-black tracking-tight flex items-center gap-1.5">
+                <span>Portal Driver</span>
+                <span className="text-[10px] bg-emerald-900 text-white px-2 py-0.5 rounded-full font-bold">PRO</span>
+              </h1>
+              <p className="text-[10px] text-emerald-100 font-medium">🛵 Aplikasi Kurir Internal Laundrivery</p>
+            </div>
+            <button onClick={loadDriverTasks} className="bg-emerald-800 text-white text-[10px] font-bold px-3 py-1.5 rounded-full shadow-sm active:scale-95 transition">
+              🔄 Refresh
+            </button>
+          </div>
+          
+          <div className="bg-emerald-900/40 p-3 rounded-2xl flex items-center justify-between border border-emerald-600/50">
+            <div className="flex items-center gap-2.5">
+              <span className="text-2xl">👷‍♂️</span>
+              <div className="text-xs">
+                <p className="text-[9px] text-emerald-200 font-bold uppercase">Selamat Bertugas</p>
+                <p className="font-black text-white">{driverName}</p>
+              </div>
+            </div>
+            <div className="text-right">
+              <p className="text-[10px] text-emerald-200">Tugas Aktif</p>
+              <p className="font-black text-lg text-white">{pickups.length}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* DAFTAR TUGAS */}
+        <div className="p-4 flex-1 space-y-4">
+          
+          <div className="flex items-center justify-between">
+            <h2 className="text-xs font-black text-slate-700 uppercase tracking-wider">
+              📋 Daftar Titik Jemput Hari Ini
+            </h2>
+          </div>
+
+          {isLoading && <p className="text-center text-xs font-bold text-slate-500 animate-pulse py-4">Mencari tugas baru...</p>}
+
+          <div className="space-y-4">
+            {pickups.map((p, index) => (
+              <div key={p.id} className="bg-white border-2 border-emerald-500/20 rounded-3xl p-4 shadow-md space-y-3 relative overflow-hidden">
+                <div className="absolute top-0 right-0 bg-emerald-500 text-white text-[10px] font-black px-3 py-1 rounded-bl-xl shadow-sm">
+                  #{index + 1}
+                </div>
+
+                <div>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Data Pelanggan</p>
+                  <h3 className="font-black text-slate-900 text-lg leading-tight mt-0.5">{p.customer_phone}</h3>
+                  <p className="text-xs font-bold text-slate-700 mt-1 bg-slate-50 p-2 rounded-xl border border-slate-100">
+                    📍 {p.customer_addresses?.full_address || 'Alamat tidak ditemukan'}
+                    {p.customer_addresses?.patokan && p.customer_addresses.patokan !== '-' && (
+                      <span className="block mt-1 text-[10px] text-rose-600 italic">
+                        *Patokan: "{p.customer_addresses.patokan}"
+                      </span>
+                    )}
+                  </p>
+                </div>
+
+                <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl space-y-1">
+                  <p className="text-[10px] font-bold text-amber-900 uppercase">📦 Rincian Barang yang Dijemput:</p>
+                  <p className="text-xs text-amber-950 font-medium">Layanan: <b className="font-black">{p.service_type}</b></p>
+                  <p className="text-xs text-amber-950 font-medium">Estimasi Bawaan: <b className="font-black">{p.estimated_weight} Kg ({p.bag_count} Kantong)</b></p>
+                  <p className="text-xs text-amber-950 font-medium">Ongkir Tagihan: <b className="font-black text-blue-700">Rp {Number(p.delivery_fee).toLocaleString('id-ID')}</b></p>
+                </div>
+
+                {/* TOMBOL AKSI DRIVER */}
+                <div className="grid grid-cols-2 gap-2 pt-2 border-t">
+                  <button 
+                    onClick={() => handleOpenMaps(p.customer_addresses?.latitude, p.customer_addresses?.longitude)}
+                    className="flex flex-col items-center justify-center bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 font-bold p-3 rounded-xl transition active:scale-95"
+                  >
+                    <span className="text-xl mb-1">🗺️</span>
+                    <span className="text-[10px]">Buka Maps</span>
+                  </button>
+                  <button 
+                    onClick={() => handleOpenWA(p.customer_phone)}
+                    className="flex flex-col items-center justify-center bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 font-bold p-3 rounded-xl transition active:scale-95"
+                  >
+                    <span className="text-xl mb-1">💬</span>
+                    <span className="text-[10px]">Chat Pelanggan</span>
+                  </button>
+                </div>
+
+                <button 
+                  onClick={() => handleFinishTask(p.id)}
+                  className="w-full mt-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black py-4 rounded-xl text-xs shadow-lg transition active:scale-95 flex justify-center items-center gap-2"
+                >
+                  ✅ BARANG SUDAH DIAMBIL
+                </button>
+
+              </div>
+            ))}
+
+            {pickups.length === 0 && !isLoading && (
+              <div className="text-center py-16 border-2 border-dashed border-slate-300 rounded-3xl text-slate-500">
+                <span className="text-5xl block mb-3 opacity-50">☕</span>
+                <p className="text-sm font-black">Tidak ada tugas penjemputan.</p>
+                <p className="text-[10px] mt-1">Silakan istirahat atau standby di outlet.</p>
+              </div>
+            )}
+          </div>
+
+        </div>
+      </div>
+    </div>
+  );
+}
