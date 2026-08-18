@@ -29,9 +29,16 @@ export default function MonitorPickupsPage() {
     }
     loadData();
 
-    // Auto-Sync Realtime
-    const channel = supabase.channel('pickup_changes')
+    // Auto-Sync Realtime (Pickup Orders + Live Chat)
+    const channel = supabase.channel('cs_realtime_channel')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'pickup_orders' }, () => loadData())
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages' }, (payload) => {
+        try {
+          const audio = new Audio('/chat-notif.mp3');
+          audio.play().catch(() => {});
+        } catch (e) {}
+        alert(`💬 PESAN LIVE CHAT BARU dari ${payload.new.sender_name || 'Customer'}:\n"${payload.new.message}"`);
+      })
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
@@ -68,29 +75,43 @@ export default function MonitorPickupsPage() {
   };
 
   // KARYAWAN OUTLET KLIK SAAT DRIVER TIBA DI OUTLET (OTOMATIS MASUK POS)
+  // KARYAWAN OUTLET KLIK SAAT DRIVER TIBA DI OUTLET (OTOMATIS MASUK POS)
   const handleArrivedAtOutlet = async (pickup: any) => {
-    if (!confirm(`Konfirmasi penerimaan fisik cucian dari ${pickup.customer_name}? Data akan otomatis diteruskan ke Portal Kasir (POS).`)) return;
+    if (!confirm(`Konfirmasi penerimaan fisik cucian dari ${pickup.customer_name || pickup.customer_phone}? Data akan otomatis diteruskan ke Portal Kasir (POS).`)) return;
 
     // 1. Update status pickup
     await supabase.from('pickup_orders').update({
       status: 'Tiba di Outlet'
     }).eq('id', pickup.id);
 
-    // 2. Otomatis buat Draft Transaksi ke tabel transactions agar masuk ke POS
+    // 2. Otomatis buat Draft Transaksi ke tabel transactions agar masuk ke POS dengan data LENGKAP
     const draftResi = 'TRX-' + Math.floor(100000 + Math.random() * 900000);
+    const weightVal = Number(pickup.estimated_weight) > 0 ? Number(pickup.estimated_weight) : 3;
+    const feeVal = Number(pickup.delivery_fee) || 0;
+    const totalEst = (weightVal * 7000) + feeVal;
+
     const { error: txErr } = await supabase.from('transactions').insert([{
       receipt_number: draftResi,
       outlet_id: pickup.outlet_id,
-      customer_name: pickup.customer_name,
-      customer_phone: pickup.customer_phone || null,
+      customer_name: pickup.customer_name && pickup.customer_name !== 'Pelanggan' ? pickup.customer_name : (pickup.customer_phone || 'Customer Online'),
+      customer_phone: pickup.customer_phone || pickup.phone_number || null,
       service_type: pickup.service_type || 'Cuci Kering Gosok',
-      weight_kg: Number(pickup.estimated_weight) || 0,
-      pcs_count: Number(pickup.estimated_pcs) || 0,
-      amount: Number(pickup.estimated_price) || 0,
-      notes: pickup.notes || 'Orderan Jemputan Driver',
+      weight_kg: weightVal,
+      pcs_count: 0,
+      delivery_fee: feeVal, // FIX: Masukkan ongkir dari pickup_orders
+      amount: totalEst, // FIX: Masukkan hitungan estimasi awal
+      notes: pickup.service_detail || pickup.service_type || 'Orderan Penjemputan Driver', // FIX: Bawa detail rincian cucian
       order_type: 'Online',
       status: 'Pending Verifikasi Kasir'
     }]);
+
+    if (!txErr) {
+      alert(`✅ Cucian Diterima! Draft transaksi ${draftResi} otomatis masuk ke Portal Kasir.`);
+      loadData();
+    } else {
+      alert('⚠️ Status diperbarui, namun gagal sync POS: ' + txErr.message);
+    }
+  };
 
     if (!txErr) {
       alert(`✅ Cucian Diterima! Draft transaksi ${draftResi} otomatis masuk ke Portal Kasir.`);
