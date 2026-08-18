@@ -143,6 +143,7 @@ export default function POSPage() {
   const [editWeightKg, setEditWeightKg] = useState('');
   const [editPcsCount, setEditPcsCount] = useState('');
   const [editDeliveryFee, setEditDeliveryFee] = useState('');
+  const [editSatuanFee, setEditSatuanFee] = useState('0'); // STATE TAMBAHAN UNTUK ITEM SATUAN
   const [editNotes, setEditNotes] = useState('');
   const [editAmount, setEditAmount] = useState('');
 
@@ -175,39 +176,53 @@ export default function POSPage() {
   const [onlineRevenue, setOnlineRevenue] = useState(0);
   const [offlineRevenue, setOfflineRevenue] = useState(0);
 
-  // BUKA MODAL DETAIL & EDIT (DENGAN AUTO-FILL PRESISI NAMA, ONGKIR, CATATAN)
-  const handleOpenDetailModal = (tx: any) => {
+  // BUKA MODAL DETAIL & EDIT (DENGAN LOOKUP NAMA ASLI DARI TABLE CUSTOMERS)
+  const handleOpenDetailModal = async (tx: any) => {
     setSelectedTxDetail(tx);
+    setOrderType('Online');
 
-    // Auto-fill nama: Ambil dari customer_name, atau fallback ke customer_phone jika hanya 'Pelanggan'
-    const nameVal = (tx.customer_name && tx.customer_name !== 'Pelanggan') 
-      ? tx.customer_name 
-      : (tx.customer_phone || tx.phone_number || 'Pelanggan Online');
-      
     const phoneVal = tx.customer_phone || tx.phone_number || '';
-    const feeVal = tx.delivery_fee !== undefined && tx.delivery_fee !== null ? String(tx.delivery_fee) : '0';
-    const notesVal = tx.notes || tx.service_detail || tx.service_type || '';
+    let realName = tx.customer_name;
 
-    setEditCustomerName(nameVal);
+    // Jika customer_name masih berupa nomor HP atau bernilai 'Pelanggan'
+    if (phoneVal && (!realName || realName === 'Pelanggan' || realName === phoneVal)) {
+      const { data: custData } = await supabase
+        .from('customers')
+        .select('name')
+        .eq('phone', cleanPhone(phoneVal))
+        .limit(1);
+
+      if (custData && custData.length > 0 && custData[0].name) {
+        realName = custData[0].name;
+      }
+    }
+
+    setEditCustomerName(realName && realName !== 'Pelanggan' ? realName : 'Pelanggan Online');
     setEditCustomerPhone(phoneVal);
     setEditServiceType(tx.service_type || (services[0]?.name || 'Cuci Kering Gosok'));
     setEditDuration(tx.duration || 'Reguler (3 Hari)');
     setEditWeightKg(tx.weight_kg !== undefined && tx.weight_kg !== null ? String(tx.weight_kg) : '3');
     setEditPcsCount(tx.pcs_count !== undefined && tx.pcs_count !== null ? String(tx.pcs_count) : '0');
-    setEditDeliveryFee(feeVal);
-    setEditNotes(notesVal);
+    setEditDeliveryFee(tx.delivery_fee !== undefined && tx.delivery_fee !== null ? String(tx.delivery_fee) : '0');
+    setEditSatuanFee('0');
+    setEditNotes(tx.notes || tx.service_detail || '');
 
-    // Hitung subtotal
     const basePrice = 7000;
-    const kg = Number(tx.weight_kg) || 3;
-    const computedAmt = (kg * basePrice) + Number(feeVal);
+    const kg = Number(tx.weight_kg) > 0 ? Number(tx.weight_kg) : 3;
+    const fee = Number(tx.delivery_fee) || 0;
+    const computedAmt = (kg * basePrice) + fee;
+
     setEditAmount(tx.amount && Number(tx.amount) > 0 ? String(tx.amount) : String(computedAmt));
   };
 
-  // HITUNG OTOMATIS NOMINAL TAGIHAN EDIT (TERMASUK ONGKIR & LAYANAN BARU)
+  // HITUNG OTOMATIS NOMINAL TAGIHAN FINAL (KILOAN + BIAYA SATUAN + ONGKIR)
   useEffect(() => {
-    if (!selectedTxDetail || !editServiceType) return;
-    const activeSvc = services.find((s) => (s.name || '').trim().toLowerCase() === editServiceType.trim().toLowerCase());
+    if (!selectedTxDetail) return;
+
+    const activeSvc = services.find(
+      (s) => (s.name || '').trim().toLowerCase() === editServiceType.trim().toLowerCase()
+    );
+
     let unitPrice = 0;
     if (activeSvc) {
       const localPrice = outletOverrides?.[selectedOutlet]?.[activeSvc.id]?.price;
@@ -222,15 +237,17 @@ export default function POSPage() {
     if (editDuration.includes('Quick') || editDuration.includes('3 Jam')) durationMultiplier = 3.0;
 
     let qty = activeSvc && activeSvc.type === 'pcs' ? Number(editPcsCount) || 0 : Number(editWeightKg) || 0;
-    if (qty === 0) qty = 3; // Fallback standar berat kiloan
-
+    
+    const kiloanSubtotal = Math.round(unitPrice * qty * durationMultiplier);
     const ongkir = Number(editDeliveryFee) || 0;
-    const subtotal = Math.round(unitPrice * qty * durationMultiplier) + ongkir;
+    const biayaSatuan = Number(editSatuanFee) || 0;
 
-    setEditAmount(subtotal.toString());
-  }, [editServiceType, editDuration, editWeightKg, editPcsCount, editDeliveryFee]);
+    // Total Tagihan Final
+    const grandTotal = kiloanSubtotal + ongkir + biayaSatuan;
+    setEditAmount(grandTotal.toString());
+  }, [editServiceType, editDuration, editWeightKg, editPcsCount, editDeliveryFee, editSatuanFee]);
 
-  // FETCH RIWAYAT LOG PENGERJAAN SAAT MODAL DETAIL DIBUKA
+  // FETCH RIWAYAT LOG PENGERJAAN
   useEffect(() => {
     if (selectedTxDetail?.id) {
       supabase.from('work_logs')
@@ -245,16 +262,12 @@ export default function POSPage() {
     }
   }, [selectedTxDetail]);
 
-  // LOGIKA PEMBACAAN STAF PENGERJAAN
   const getStaffForStage = (stageName: string) => {
     if (!selectedTxDetail) return '-';
-    
     const key = 'by_' + stageName;
     if (selectedTxDetail[key]) return selectedTxDetail[key];
-
     const match = [...txWorkLogs].reverse().find(w => getStageKey(w.stage) === stageName);
     if (match) return match.employee_name;
-
     return '-';
   };
 
@@ -301,31 +314,22 @@ export default function POSPage() {
     loadInit();
   }, []);
 
-  // REALTIME LISTENER UNTUK ORDERAN ONLINE MASUK (TRIGGER SOUND & RED BADGE)
+  // REALTIME ORDER LISTENER (NOTIFICATION & RED BADGE)
   useEffect(() => {
     if (!selectedOutlet) return;
-
     const subscription = supabase
       .channel('realtime_pickup_orders')
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'pickup_orders' },
-        (payload) => {
-          // Play Notif Sound
-          try {
-            const audio = new Audio('/notification.mp3');
-            audio.play().catch(() => {});
-          } catch (e) {}
-
-          alert(`🔔 ORDERAN ONLINE BARU MASUK!\nResi/Pesan: ${payload.new.service_type || 'Penjemputan Customer'}`);
-          refreshData();
-        }
-      )
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'pickup_orders' }, (payload) => {
+        try {
+          const audio = new Audio('/notification.mp3');
+          audio.play().catch(() => {});
+        } catch (e) {}
+        alert(`🔔 ORDERAN ONLINE BARU MASUK!\nService: ${payload.new.service_type || 'Penjemputan Customer'}`);
+        refreshData();
+      })
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(subscription);
-    };
+    return () => { supabase.removeChannel(subscription); };
   }, [selectedOutlet]);
 
   useEffect(() => {
@@ -669,7 +673,7 @@ export default function POSPage() {
     setIsSubmitting(false);
   };
 
-  // SYNC PERUBAHAN DATA TRANSAKSI
+  // SYNC PERUBAHAN DATA TRANSAKSI POS
   const handleSaveTxChanges = async (needsCustomerApproval: boolean) => {
     if (!selectedTxDetail) return;
     setIsSubmitting(true);
@@ -681,6 +685,7 @@ export default function POSPage() {
     const payload = {
       customer_name: editCustomerName || selectedTxDetail.customer_name,
       customer_phone: editCustomerPhone || selectedTxDetail.customer_phone,
+      order_type: 'Online',
       service_type: editServiceType,
       duration: editDuration,
       weight_kg: Number(editWeightKg) || 0,
@@ -697,7 +702,7 @@ export default function POSPage() {
       const updatedTx = { ...selectedTxDetail, ...payload };
       setSelectedTxDetail(updatedTx);
       if (needsCustomerApproval) {
-        alert('⚠️ Perubahan berhasil disimpan & dikirim ke Dashboard CS untuk dikonfirmasi ke Customer!');
+        alert('⚠️ Perubahan berhasil disimpan & dikirim ke CS untuk dikonfirmasi ke Customer!');
       } else {
         alert('✅ Data transaksi berhasil diperbarui!');
       }
@@ -1098,7 +1103,8 @@ export default function POSPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
+              {/* INPUT BERAT, PCS, ONGKIR, DAN BIAYA SATUAN */}
+              <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="font-bold text-indigo-950 block mb-1">Berat (Kg)</label>
                   <input
@@ -1120,14 +1126,27 @@ export default function POSPage() {
                     className="w-full border rounded-xl p-2 text-xs font-bold bg-white text-indigo-900"
                   />
                 </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="font-bold text-indigo-950 block mb-1">Ongkir (Rp)</label>
+                  <label className="font-bold text-indigo-950 block mb-1">Biaya Ongkir (Rp)</label>
                   <input
                     type="number"
                     placeholder="0"
                     value={editDeliveryFee}
                     onChange={(e) => setEditDeliveryFee(e.target.value)}
-                    className="w-full border rounded-xl p-2 text-xs font-bold bg-white text-indigo-900"
+                    className="w-full border rounded-xl p-2 text-xs font-bold bg-white text-emerald-700 border-emerald-300"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold text-indigo-950 block mb-1">Biaya Satuan Tambahan (Rp)</label>
+                  <input
+                    type="number"
+                    placeholder="0"
+                    value={editSatuanFee}
+                    onChange={(e) => setEditSatuanFee(e.target.value)}
+                    className="w-full border rounded-xl p-2 text-xs font-bold bg-white text-purple-700 border-purple-300"
                   />
                 </div>
               </div>
