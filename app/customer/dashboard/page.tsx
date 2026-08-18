@@ -331,20 +331,20 @@ export default function CustomerDashboard() {
     setIsSubmitting(true);
 
     try {
-      const addr = addresses.find((a) => a.id === selectedAddressId);
-      
+      // 1. Rincian Layanan
       let details: string[] = [];
       if (useKiloan) {
-        details.push(`[KILOAN]: ${kiloanPackage} (~${estimatedKg} kg)`);
+        details.push(`KILOAN: ${kiloanPackage} (~${estimatedKg}kg)`);
       }
       if (selectedSatuanItems.length > 0) {
-        const satuanStr = selectedSatuanItems.map(i => `${i.name} (x${i.qty})`).join(', ');
-        details.push(`[SATUAN]: ${satuanStr}`);
+        const satuanStr = selectedSatuanItems.map(i => `${i.name} x${i.qty}`).join(', ');
+        details.push(`SATUAN: ${satuanStr}`);
       }
 
-      const mainServiceTitle = `ORDER ONLINE - ${speedOptions[speed].label.toUpperCase()}`;
-      const fullServiceDetails = `${details.join(' | ')} | Est. Pengerjaan: ${maxEstimateDays} | Est. Subtotal: Rp ${totalEstimasiLayanan.toLocaleString()} | Kondisi: ${bagCount} Kantong, Cuci: ${isSeparated ? 'Pisah' : 'Gabung'}, Luntur: ${hasFading ? 'YA' : 'TIDAK'}, Berharga: ${hasValuables ? 'YA' : 'TIDAK'}`;
+      // 2. Gabungkan seluruh informasi ke kolom standar service_type
+      const fullServiceString = `${speedOptions[speed].label.toUpperCase()} | ${details.join(' + ')} | Est: ${maxEstimateDays} (Rp ${totalEstimasiLayanan.toLocaleString('id-ID')})`;
 
+      // 3. Payload murni kolom standar Supabase
       const orderData = {
         order_number: 'ONL-' + Math.floor(100000 + Math.random() * 900000),
         customer_phone: customerPhone,
@@ -353,8 +353,7 @@ export default function CustomerDashboard() {
         distance_km: estimatedDistanceKm,
         delivery_fee: estimatedFee,
         status: 'Menunggu Driver',
-        service_type: mainServiceTitle,
-        service_detail: fullServiceDetails,
+        service_type: fullServiceString,
         estimated_weight: useKiloan ? Number(estimatedKg) : 0,
         bag_count: Number(bagCount),
         is_separated: isSeparated,
@@ -532,7 +531,7 @@ export default function CustomerDashboard() {
                       </div>
                       <div className="text-xs text-slate-300 space-y-1">
                         <p>📍 Cabang: <b className="text-white">{pkp.outlets?.name || 'POS Terdekat'}</b></p>
-                        <p>🧺 Detail: <b className="text-white">{pkp.service_detail || pkp.service_type}</b></p>
+                        <p>🧺 Detail: <b className="text-white">{pkp.service_type}</b></p>
                         <p>🚚 Estimasi Ongkir: <b className="text-emerald-400">Rp {Number(pkp.delivery_fee || 0).toLocaleString('id-ID')}</b></p>
                       </div>
                       {(pkp.status === 'Menunggu Driver' || pkp.status === 'PENDING_ONLINE_POS') && (
