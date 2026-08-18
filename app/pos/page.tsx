@@ -175,34 +175,44 @@ export default function POSPage() {
   const [onlineRevenue, setOnlineRevenue] = useState(0);
   const [offlineRevenue, setOfflineRevenue] = useState(0);
 
-  // BUKA MODAL DETAIL & EDIT
+  // BUKA MODAL DETAIL & EDIT (DENGAN AUTO-FILL PRESISI NAMA, ONGKIR, CATATAN)
   const handleOpenDetailModal = (tx: any) => {
     setSelectedTxDetail(tx);
-    setEditCustomerName(tx.customer_name || 'Pelanggan');
-    setEditCustomerPhone(tx.customer_phone || '');
+
+    // Auto-fill nama: Ambil dari customer_name, atau fallback ke customer_phone jika hanya 'Pelanggan'
+    const nameVal = (tx.customer_name && tx.customer_name !== 'Pelanggan') 
+      ? tx.customer_name 
+      : (tx.customer_phone || tx.phone_number || 'Pelanggan Online');
+      
+    const phoneVal = tx.customer_phone || tx.phone_number || '';
+    const feeVal = tx.delivery_fee !== undefined && tx.delivery_fee !== null ? String(tx.delivery_fee) : '0';
+    const notesVal = tx.notes || tx.service_detail || tx.service_type || '';
+
+    setEditCustomerName(nameVal);
+    setEditCustomerPhone(phoneVal);
     setEditServiceType(tx.service_type || (services[0]?.name || 'Cuci Kering Gosok'));
     setEditDuration(tx.duration || 'Reguler (3 Hari)');
-    setEditWeightKg(tx.weight_kg !== undefined && tx.weight_kg !== null ? String(tx.weight_kg) : '0');
+    setEditWeightKg(tx.weight_kg !== undefined && tx.weight_kg !== null ? String(tx.weight_kg) : '3');
     setEditPcsCount(tx.pcs_count !== undefined && tx.pcs_count !== null ? String(tx.pcs_count) : '0');
-    setEditDeliveryFee(tx.delivery_fee !== undefined && tx.delivery_fee !== null ? String(tx.delivery_fee) : '0');
-    setEditNotes(tx.notes || '');
-    setEditAmount(tx.amount !== undefined && tx.amount !== null ? String(tx.amount) : '0');
+    setEditDeliveryFee(feeVal);
+    setEditNotes(notesVal);
+
+    // Hitung subtotal
+    const basePrice = 7000;
+    const kg = Number(tx.weight_kg) || 3;
+    const computedAmt = (kg * basePrice) + Number(feeVal);
+    setEditAmount(tx.amount && Number(tx.amount) > 0 ? String(tx.amount) : String(computedAmt));
   };
 
   // HITUNG OTOMATIS NOMINAL TAGIHAN EDIT (TERMASUK ONGKIR & LAYANAN BARU)
   useEffect(() => {
-    if (!selectedTxDetail) return;
-
-    const activeSvc = services.find(
-      (s) => (s.name || '').trim().toLowerCase() === editServiceType.trim().toLowerCase()
-    );
-
+    if (!selectedTxDetail || !editServiceType) return;
+    const activeSvc = services.find((s) => (s.name || '').trim().toLowerCase() === editServiceType.trim().toLowerCase());
     let unitPrice = 0;
     if (activeSvc) {
       const localPrice = outletOverrides?.[selectedOutlet]?.[activeSvc.id]?.price;
       unitPrice = localPrice !== undefined ? Number(localPrice) : Number(activeSvc.price || 0);
     } else {
-      // Fallback jika layanan tidak ada di list master (misal layanan custom Kiloan/Satuan dari PWA)
       unitPrice = editServiceType.includes('Setrika') ? 5000 : 7000;
     }
 
@@ -212,19 +222,13 @@ export default function POSPage() {
     if (editDuration.includes('Quick') || editDuration.includes('3 Jam')) durationMultiplier = 3.0;
 
     let qty = activeSvc && activeSvc.type === 'pcs' ? Number(editPcsCount) || 0 : Number(editWeightKg) || 0;
+    if (qty === 0) qty = 3; // Fallback standar berat kiloan
+
     const ongkir = Number(editDeliveryFee) || 0;
+    const subtotal = Math.round(unitPrice * qty * durationMultiplier) + ongkir;
 
-    // Subtotal pengerjaan
-    let subtotalLayanan = Math.round(unitPrice * qty * durationMultiplier);
-
-    // Jika berat/pcs bernilai 0 tapi transaksi awal dari order online sudah membawa estimasi harga
-    if (subtotalLayanan === 0 && selectedTxDetail.amount > 0) {
-      subtotalLayanan = Number(selectedTxDetail.amount) - (Number(selectedTxDetail.delivery_fee) || 0);
-    }
-
-    const grandTotalFinal = Math.max(0, subtotalLayanan + ongkir);
-    setEditAmount(grandTotalFinal.toString());
-  }, [editServiceType, editDuration, editWeightKg, editPcsCount, editDeliveryFee, selectedTxDetail]);
+    setEditAmount(subtotal.toString());
+  }, [editServiceType, editDuration, editWeightKg, editPcsCount, editDeliveryFee]);
 
   // FETCH RIWAYAT LOG PENGERJAAN SAAT MODAL DETAIL DIBUKA
   useEffect(() => {
@@ -241,7 +245,7 @@ export default function POSPage() {
     }
   }, [selectedTxDetail]);
 
-  // LOGIKA PEMBACAAN STAF PENGERJAAN (DB TRANSACTION + WORK_LOGS)
+  // LOGIKA PEMBACAAN STAF PENGERJAAN
   const getStaffForStage = (stageName: string) => {
     if (!selectedTxDetail) return '-';
     
@@ -296,6 +300,33 @@ export default function POSPage() {
     }
     loadInit();
   }, []);
+
+  // REALTIME LISTENER UNTUK ORDERAN ONLINE MASUK (TRIGGER SOUND & RED BADGE)
+  useEffect(() => {
+    if (!selectedOutlet) return;
+
+    const subscription = supabase
+      .channel('realtime_pickup_orders')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'pickup_orders' },
+        (payload) => {
+          // Play Notif Sound
+          try {
+            const audio = new Audio('/notification.mp3');
+            audio.play().catch(() => {});
+          } catch (e) {}
+
+          alert(`🔔 ORDERAN ONLINE BARU MASUK!\nResi/Pesan: ${payload.new.service_type || 'Penjemputan Customer'}`);
+          refreshData();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(subscription);
+    };
+  }, [selectedOutlet]);
 
   useEffect(() => {
     async function checkCustDeposit() {
@@ -369,7 +400,8 @@ export default function POSPage() {
       .from('pickup_orders')
       .select('id')
       .eq('outlet_id', selectedOutlet)
-      .eq('status', 'Menunggu Driver');
+      .neq('status', 'Selesai')
+      .neq('status', 'Batal');
     setIncomingPickupsCount(incomingPkps?.length || 0);
 
     const { data: txData } = await supabase.from('transactions').select('amount, order_type, created_at').eq('outlet_id', selectedOutlet);
@@ -648,6 +680,7 @@ export default function POSPage() {
 
     const payload = {
       customer_name: editCustomerName || selectedTxDetail.customer_name,
+      customer_phone: editCustomerPhone || selectedTxDetail.customer_phone,
       service_type: editServiceType,
       duration: editDuration,
       weight_kg: Number(editWeightKg) || 0,
@@ -661,7 +694,7 @@ export default function POSPage() {
     const { error } = await supabase.from('transactions').update(payload).eq('id', selectedTxDetail.id);
 
     if (!error) {
-      const updatedTx = { ...selectedTxDetail, ...payload, customer_phone: editCustomerPhone || selectedTxDetail.customer_phone };
+      const updatedTx = { ...selectedTxDetail, ...payload };
       setSelectedTxDetail(updatedTx);
       if (needsCustomerApproval) {
         alert('⚠️ Perubahan berhasil disimpan & dikirim ke Dashboard CS untuk dikonfirmasi ke Customer!');
@@ -716,7 +749,6 @@ export default function POSPage() {
     setStockAddAmount(''); setSuccessMsg(`✅ Stok Ditambah!`); refreshData(); setTimeout(() => setSuccessMsg(''), 3000); setIsSubmitting(false);
   };
 
-  // UPDATE STATUS & HANDLER PROSES
   const handleUpdateStatus = async (order: any, nextStatus: string) => {
     setIsSubmitting(true);
 
@@ -845,10 +877,6 @@ export default function POSPage() {
     setTimeout(() => window.print(), 100);
   };
 
-  const handleCopyWA = () => {
-    if (!lastOrderInfo) return; navigator.clipboard.writeText(`Halo Kak ${lastOrderInfo.customer_name},\n\n*Resi: ${lastOrderInfo.receipt_number}*\n(Total: Rp ${Number(lastOrderInfo.amount).toLocaleString('id-ID')}).\n\nCek status: https://lm-coral.vercel.app/track\nTerima kasih! 🙏`); alert('✅ Pesan WA disalin!');
-  };
-
   const totalPayNum = Number(amount) || 0;
   const split1Num = Number(splitAmount1) || 0;
   const split2Num = Math.max(0, totalPayNum - split1Num);
@@ -957,7 +985,7 @@ export default function POSPage() {
         </div>
       )}
 
-      {/* POP-UP DETIK TERAKHIR: STRUK SETELAH BUAT ORDER BARU */}
+      {/* POP-UP STRUK SETELAH TRANSAKSI MASUK */}
       {createdTxSuccess && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-white rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl border border-slate-200">
@@ -992,7 +1020,7 @@ export default function POSPage() {
         </div>
       )}
 
-      {/* MODAL POP-UP EDIT INTERAKTIF & DETAIL TRANSAKSI POS */}
+      {/* MODAL EDIT & DETAIL TRANSAKSI POS */}
       {selectedTxDetail && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in overflow-y-auto">
           <div className="bg-white rounded-3xl p-5 md:p-6 max-w-lg w-full space-y-4 shadow-2xl border border-slate-200 my-8">
@@ -1036,7 +1064,7 @@ export default function POSPage() {
               </div>
             </div>
 
-            {/* FORM EDIT INTERAKTIF CULIAN & BIAYA */}
+            {/* FORM EDIT CULIAN & BIAYA */}
             <div className="bg-indigo-50/60 p-3.5 rounded-2xl border border-indigo-100 space-y-3 text-xs">
               <div className="grid grid-cols-2 gap-2">
                 <div>
@@ -1047,14 +1075,13 @@ export default function POSPage() {
                     className="w-full border rounded-xl p-2 text-xs font-bold text-indigo-900 bg-white"
                   >
                     {services.map((svc, i) => (
-                    <option key={i} value={svc.name}>{svc.name}</option>
-                  ))}
-                  {/* TAMBAHKAN 4 BARIS INI: */}
-                  <option value="Laundry Satuan - Bedcover / Sprei">👔 Satuan - Bedcover / Sprei</option>
-                  <option value="Laundry Satuan - Sepatu / Jaket / Jas">👟 Satuan - Sepatu / Jaket / Jas</option>
-                  <option value="Laundry Satuan - Karpet / Gordyn">🏠 Satuan - Karpet / Gordyn</option>
-                  <option value="Laundry Gabungan (Kiloan + Satuan)">📦 Laundry Gabungan (Kiloan + Satuan)</option>
-                </select>
+                      <option key={i} value={svc.name}>{svc.name}</option>
+                    ))}
+                    <option value="Laundry Satuan - Bedcover / Sprei">👔 Satuan - Bedcover / Sprei</option>
+                    <option value="Laundry Satuan - Sepatu / Jaket / Jas">👟 Satuan - Sepatu / Jaket / Jas</option>
+                    <option value="Laundry Satuan - Karpet / Gordyn">🏠 Satuan - Karpet / Gordyn</option>
+                    <option value="Laundry Gabungan (Kiloan + Satuan)">📦 Laundry Gabungan (Kiloan + Satuan)</option>
+                  </select>
                 </div>
                 <div>
                   <label className="font-bold text-indigo-950 block mb-1">Durasi Pengerjaan</label>
@@ -1191,7 +1218,7 @@ export default function POSPage() {
           </div>
         </div>
 
-        {/* DESKTOP NAV BAR DENGAN TOMBOL JEMPUTAN (7 KOLOM) */}
+        {/* DESKTOP NAV BAR */}
         <div className="hidden md:grid w-full max-w-xl grid-cols-7 gap-1 p-1.5 bg-white border rounded-xl mb-6 shadow-sm">
           <button onClick={() => setActiveTab('pos')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'pos' ? 'bg-emerald-600 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>🛒 POS</button>
           
@@ -1211,7 +1238,7 @@ export default function POSPage() {
           <button onClick={() => setActiveTab('performance')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'performance' ? 'bg-indigo-600 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>📊 Gaji</button>
         </div>
 
-        {/* MOBILE BOTTOM NAV BAR DENGAN TOMBOL JEMPUTAN */}
+        {/* MOBILE BOTTOM NAV BAR */}
         <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 flex justify-around p-2 pb-5 z-50 shadow-[0_-4px_10px_rgba(0,0,0,0.05)]">
           <button onClick={() => setActiveTab('pos')} className={`flex flex-col items-center flex-1 p-1 ${activeTab === 'pos' ? 'text-emerald-600' : 'text-slate-400'}`}><span className="text-xl">🛒</span><span className="text-[9px] font-bold mt-1">POS</span></button>
           
@@ -1384,21 +1411,25 @@ export default function POSPage() {
               </div>
               {activeOrders.map((order) => (
                 <div key={order.id} className="border rounded-xl p-4 space-y-3 bg-white shadow-sm hover:border-indigo-300 transition">
-                  {/* KLIK AREA HEADER KARTU UNTUK BUKA MODAL DETAIL & EDIT */}
                   <div onClick={() => handleOpenDetailModal(order)} className="flex justify-between items-start pb-2.5 cursor-pointer group">
                     <div>
                       <div className="flex items-center gap-2 flex-wrap">
-                        <h4 className="font-bold text-sm text-slate-800 group-hover:text-blue-600 transition">{order.customer_name}</h4>
+                        <h4 className="font-bold text-sm text-slate-800 group-hover:text-blue-600 transition">
+                          {(order.customer_name && order.customer_name !== 'Pelanggan') ? order.customer_name : (order.customer_phone || order.phone_number || 'Pelanggan Online')}
+                        </h4>
                         <span className="text-[10px] font-mono font-bold bg-slate-100 border border-slate-200 text-slate-700 px-2 py-0.5 rounded-md">{order.receipt_number || 'TRX-POS'}</span>
                       </div>
                       <p className="text-[10px] text-slate-500 mt-1">{order.service_type} • <b className="text-emerald-600">{order.weight_kg || 0} Kg</b> / <b className="text-amber-600">{order.pcs_count || 0} Pcs</b></p>
+                      {order.delivery_fee > 0 && <p className="text-[10px] font-bold text-indigo-600 mt-0.5">🚚 Ongkir: Rp {Number(order.delivery_fee).toLocaleString('id-ID')}</p>}
                     </div>
                     <div className="flex flex-col gap-1 items-end">
                       {order.delete_requested 
                         ? <span className="text-[9px] font-bold bg-amber-100 text-amber-800 px-2 py-1 rounded">⏳ Hapus</span> 
                         : <button onClick={(e) => { e.stopPropagation(); handleRequestDelete(order); }} className="text-[10px] font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 px-2.5 py-1 rounded transition">🗑️ Hapus</button>
                       }
-                      <span className="text-[9px] font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded border border-indigo-100">✏️ Detail & Edit</span>
+                      <button onClick={(e) => { e.stopPropagation(); handleOpenDetailModal(order); }} className="text-[10px] font-bold text-white bg-indigo-600 hover:bg-indigo-700 px-3 py-1 rounded-lg shadow-sm transition">
+                        ⚡ Input POS Otomatis
+                      </button>
                     </div>
                   </div>
                   <div className="pt-1 border-t">{renderNextStepButton(order)}</div>
