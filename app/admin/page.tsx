@@ -1,165 +1,312 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import Link from 'next/link';
-// 1. IMPORT KOMPONEN AI ASSISTANT ADMIN
-import AdminAIAssistant from '@/components/AdminAIAssistant';
 
 const supabase = createClient(
-  'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
-  'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs'
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-export default function SuperAdminPage() {
-  const [services, setServices] = useState<any[]>([]);
-  const [newServiceName, setNewServiceName] = useState('');
-  const [newServicePrice, setNewServicePrice] = useState('');
-  const [newServiceUnit, setNewServiceUnit] = useState('kg');
-  const [isLoading, setIsLoading] = useState(false);
+// Database Layanan Satuan Reguler (3 Hari untuk Pakaian/Bedcover, 7 Hari Sepatu, 14 Hari Karpet/Gordyn)
+const SATUAN_ITEMS = [
+  { id: '1', name: 'Bedcover Double', price: 40000, estimateDays: 3, unit: 'pcs' },
+  { id: '2', name: 'Bedcover Single', price: 25000, estimateDays: 3, unit: 'pcs' },
+  { id: '3', name: 'Jaket / Hoodie', price: 30000, estimateDays: 3, unit: 'pcs' },
+  { id: '4', name: 'Jas / Blazer', price: 30000, estimateDays: 3, unit: 'pcs' },
+  { id: '5', name: 'Sepatu', price: 45000, estimateDays: 7, unit: 'pasang' },
+  { id: '6', name: 'Karpet', price: 25000, estimateDays: 14, unit: 'm²' },
+  { id: '7', name: 'Gordyn', price: 15000, estimateDays: 14, unit: 'm²' },
+];
 
-  const fetchServices = async () => {
-    const { data } = await supabase.from('services').select('*').order('id', { ascending: true });
-    if (data) setServices(data);
+export default function OnlineOrderForm() {
+  const [customerName, setCustomerName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [address, setAddress] = useState('');
+  
+  const [category, setCategory] = useState<'KILOAN' | 'SATUAN'>('KILOAN');
+  const [kiloanPackage, setKiloanPackage] = useState('Cuci Komplit (Rp 7.000/kg)');
+  const [kiloanPricePerKg, setKiloanPricePerKg] = useState(7000);
+  const [estimatedKg, setEstimatedKg] = useState<number>(3);
+  
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedSatuanItems, setSelectedSatuanItems] = useState<{ id: string; name: string; price: number; qty: number; estimateDays: number; unit: string }[]>([]);
+
+  // Opsi Kecepatan: Reguler (1x), One Day (+50% = 1.5x), Express (+100% = 2x), Quick (+200% = 3x)
+  const [speed, setSpeed] = useState<'REGULER' | 'ONEDAY' | 'EXPRESS' | 'QUICK'>('REGULER');
+
+  const speedOptions = {
+    REGULER: { label: 'Reguler (Standar)', multiplier: 1.0 },
+    ONEDAY: { label: 'One Day (+50%)', multiplier: 1.5 },
+    EXPRESS: { label: 'Express (+100%)', multiplier: 2.0 },
+    QUICK: { label: 'Quick (+200%)', multiplier: 3.0 },
   };
 
-  useEffect(() => {
-    fetchServices();
-  }, []);
+  const [agreeOngkir, setAgreeOngkir] = useState(true);
+  const [loading, setLoading] = useState(false);
 
-  const handleAddService = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoading(true);
+  const filteredSatuan = useMemo(() => {
+    if (!searchQuery) return [];
+    return SATUAN_ITEMS.filter(item => item.name.toLowerCase().includes(searchQuery.toLowerCase()));
+  }, [searchQuery]);
 
-    const { error } = await supabase.from('services').insert([
-      {
-        name: newServiceName,
-        price: Number(newServicePrice),
-        unit: newServiceUnit,
-      },
-    ]);
+  const addSatuanItem = (item: typeof SATUAN_ITEMS[0]) => {
+    setSelectedSatuanItems(prev => {
+      const exist = prev.find(i => i.id === item.id);
+      if (exist) {
+        return prev.map(i => i.id === item.id ? { ...i, qty: i.qty + 1 } : i);
+      }
+      return [...prev, { ...item, qty: 1 }];
+    });
+    setSearchQuery('');
+  };
 
-    if (error) {
-      alert('Gagal menambah layanan: ' + error.message);
+  // Kalkulasi Subtotal Dasar
+  const subtotalBase = useMemo(() => {
+    if (category === 'KILOAN') {
+      return kiloanPricePerKg * estimatedKg;
     } else {
-      setNewServiceName('');
-      setNewServicePrice('');
-      fetchServices(); // Refresh tabel
+      return selectedSatuanItems.reduce((acc, curr) => acc + (curr.price * curr.qty), 0);
     }
-    setIsLoading(false);
-  };
+  }, [category, kiloanPricePerKg, estimatedKg, selectedSatuanItems]);
 
-  const handleDelete = async (id: number) => {
-    if (!confirm('Yakin ingin menghapus layanan ini?')) return;
-    await supabase.from('services').delete().eq('id', id);
-    fetchServices();
+  // Kalkulasi Harga Akhir dengan Pengali Kecepatan
+  const totalEstimasiLayanan = Math.round(subtotalBase * speedOptions[speed].multiplier);
+
+  // Logic Kalkulasi Estimasi Waktu Pengerjaan (Di dalam Komponen)
+  const maxEstimateDays = useMemo(() => {
+    if (category === 'KILOAN') {
+      return speed === 'QUICK' ? '3 Jam' : speed === 'EXPRESS' ? '6 Jam' : speed === 'ONEDAY' ? '24 Jam' : '3 Hari';
+    }
+    if (selectedSatuanItems.length === 0) return '-';
+    
+    const baseDays = Math.max(...selectedSatuanItems.map(i => i.estimateDays));
+
+    if (speed === 'QUICK') return '3 Jam (Kilat)';
+    if (speed === 'EXPRESS') return '6 Jam';
+    if (speed === 'ONEDAY') return '24 Jam (1 Hari)';
+    
+    return `${baseDays} Hari`;
+  }, [category, selectedSatuanItems, speed]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!agreeOngkir) {
+      alert('Mohon setujui persetujuan ongkos kirim.');
+      return;
+    }
+    setLoading(true);
+
+    try {
+      const orderData = {
+        order_type: 'ONLINE',
+        customer_name: customerName,
+        phone_number: phone,
+        pickup_address: address,
+        category: category,
+        service_detail: category === 'KILOAN' 
+          ? `${kiloanPackage} (~${estimatedKg} kg)`
+          : JSON.stringify(selectedSatuanItems),
+        speed_type: speed,
+        estimated_completion: maxEstimateDays,
+        estimated_subtotal: totalEstimasiLayanan,
+        status: 'PENDING_ONLINE_POS',
+        created_at: new Date().toISOString()
+      };
+
+      const { error } = await supabase.from('pickup_orders').insert([orderData]);
+
+      if (error) throw error;
+
+      alert('🚀 Order Online Berhasil Terkirim ke POS!');
+      setCustomerName('');
+      setPhone('');
+      setAddress('');
+      setSelectedSatuanItems([]);
+    } catch (err: any) {
+      alert('Gagal mengirim order: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-white p-4 md:p-8">
-      <div className="max-w-4xl mx-auto">
-        {/* HEADER PAGE */}
-        <div className="flex justify-between items-center mb-8">
-          <div>
-            <h1 className="text-3xl font-black text-indigo-400">👑 Super Admin Panel</h1>
-            <p className="text-sm text-slate-400">Kelola Master Data Sistem Laundry</p>
-          </div>
-          <Link href="/" className="bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-lg text-sm transition">
-            Kembali
-          </Link>
+    <div className="max-w-md mx-auto p-4 bg-slate-900 text-slate-100 min-h-screen rounded-xl shadow-2xl font-sans">
+      <h2 className="text-xl font-bold text-center mb-1 text-cyan-400">Order Laundry Online</h2>
+      <p className="text-xs text-center text-slate-400 mb-6">Penjemputan Langsung Terkoneksi ke POS Order Online</p>
+
+      <form onSubmit={handleSubmit} className="space-y-5">
+        <div className="space-y-3">
+          <input
+            type="text"
+            placeholder="Nama Lengkap"
+            required
+            value={customerName}
+            onChange={(e) => setCustomerName(e.target.value)}
+            className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-sm focus:outline-none focus:border-cyan-500"
+          />
+          <input
+            type="tel"
+            placeholder="Nomor WhatsApp"
+            required
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-sm focus:outline-none focus:border-cyan-500"
+          />
+          <textarea
+            placeholder="Alamat Lengkap Penjemputan"
+            required
+            rows={2}
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            className="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-sm focus:outline-none focus:border-cyan-500"
+          />
         </div>
 
-        {/* 2. WIDGET AI EXECUTIVE COPILOT & CHURN DETECTOR */}
-        <AdminAIAssistant />
+        <div className="grid grid-cols-2 gap-2 bg-slate-800 p-1 rounded-lg">
+          <button
+            type="button"
+            onClick={() => setCategory('KILOAN')}
+            className={`py-2 text-xs font-bold rounded-md transition ${category === 'KILOAN' ? 'bg-cyan-600 text-white' : 'text-slate-400'}`}
+          >
+            📦 LAUNDRY KILOAN
+          </button>
+          <button
+            type="button"
+            onClick={() => setCategory('SATUAN')}
+            className={`py-2 text-xs font-bold rounded-md transition ${category === 'SATUAN' ? 'bg-cyan-600 text-white' : 'text-slate-400'}`}
+          >
+            👔 LAUNDRY SATUAN
+          </button>
+        </div>
 
-        {/* GRID UTAMA (FORM & TABEL MASTER DATA) */}
-        <div className="grid md:grid-cols-3 gap-6">
-          {/* FORM TAMBAH LAYANAN */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl h-fit">
-            <h2 className="text-lg font-bold text-white mb-4 border-b border-slate-800 pb-2">➕ Tambah Layanan Baru</h2>
-            <form onSubmit={handleAddService} className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Nama Layanan</label>
-                <input
-                  type="text"
-                  placeholder="Contoh: Cuci Karpet"
-                  value={newServiceName}
-                  onChange={(e) => setNewServiceName(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 outline-none"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Harga Dasar (Rp)</label>
-                <input
-                  type="number"
-                  placeholder="Contoh: 15000"
-                  value={newServicePrice}
-                  onChange={(e) => setNewServicePrice(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 outline-none"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Satuan</label>
-                <select
-                  value={newServiceUnit}
-                  onChange={(e) => setNewServiceUnit(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:border-indigo-500 outline-none"
-                >
-                  <option value="kg">Per Kilo (Kg)</option>
-                  <option value="pcs">Per Potong (Pcs)</option>
-                  <option value="meter">Per Meter</option>
-                </select>
-              </div>
-              <button
-                type="submit"
-                disabled={isLoading}
-                className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 rounded-lg text-sm transition"
-              >
-                {isLoading ? 'Menyimpan...' : 'Simpan Layanan'}
-              </button>
-            </form>
-          </div>
+        {category === 'KILOAN' && (
+          <div className="space-y-3 bg-slate-800/50 p-3 rounded-lg border border-slate-700">
+            <label className="text-xs text-slate-400">Pilih Paket Kiloan</label>
+            <select
+              value={kiloanPackage}
+              onChange={(e) => {
+                setKiloanPackage(e.target.value);
+                setKiloanPricePerKg(e.target.value.includes('Setrika') ? 5000 : 7000);
+              }}
+              className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2.5 text-sm"
+            >
+              <option value="Cuci Komplit (Rp 7.000/kg)">Cuci Komplit (Rp 7.000/kg)</option>
+              <option value="Cuci Lipat (Rp 5.500/kg)">Cuci Lipat (Rp 5.500/kg)</option>
+              <option value="Setrika Saja (Rp 5.000/kg)">Setrika Saja (Rp 5.000/kg)</option>
+            </select>
 
-          {/* TABEL DAFTAR LAYANAN */}
-          <div className="md:col-span-2 bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-            <h2 className="text-lg font-bold text-white mb-4 border-b border-slate-800 pb-2">📋 Daftar Layanan Tersedia</h2>
-            
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="text-slate-400 border-b border-slate-800">
-                    <th className="py-2">No</th>
-                    <th className="py-2">Nama Layanan</th>
-                    <th className="py-2">Harga</th>
-                    <th className="py-2">Aksi</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {services.map((srv, index) => (
-                    <tr key={srv.id} className="border-b border-slate-800/50 hover:bg-slate-800/30">
-                      <td className="py-3 text-slate-500">{index + 1}</td>
-                      <td className="py-3 font-semibold text-slate-200">{srv.name}</td>
-                      <td className="py-3 text-emerald-400 font-bold">
-                        Rp {Number(srv.price).toLocaleString('id-ID')} <span className="text-xs text-slate-500 font-normal">/ {srv.unit}</span>
-                      </td>
-                      <td className="py-3">
-                        <button 
-                          onClick={() => handleDelete(srv.id)}
-                          className="text-xs bg-rose-500/20 text-rose-400 hover:bg-rose-500 hover:text-white px-2 py-1 rounded transition"
-                        >
-                          Hapus
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="flex justify-between items-center text-xs text-slate-300">
+              <span>Estimasi Berat (Kg):</span>
+              <input
+                type="number"
+                min="1"
+                value={estimatedKg}
+                onChange={(e) => setEstimatedKg(Number(e.target.value))}
+                className="w-16 bg-slate-800 border border-slate-700 text-center rounded p-1 text-sm font-bold text-cyan-400"
+              />
             </div>
           </div>
+        )}
+
+        {category === 'SATUAN' && (
+          <div className="space-y-3 bg-slate-800/50 p-3 rounded-lg border border-slate-700">
+            <label className="text-xs text-slate-400">Cari Item Satuan</label>
+            <input
+              type="text"
+              placeholder="🔍 Cari: Bedcover, Jaket, Karpet, Gordyn..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-xs"
+            />
+
+            {searchQuery && (
+              <div className="bg-slate-800 border border-slate-700 rounded-lg max-h-40 overflow-y-auto divide-y divide-slate-700">
+                {filteredSatuan.map((item) => (
+                  <div
+                    key={item.id}
+                    onClick={() => addSatuanItem(item)}
+                    className="p-2 text-xs flex justify-between cursor-pointer hover:bg-slate-700"
+                  >
+                    <div>
+                      <div className="font-semibold text-slate-200">{item.name}</div>
+                      <div className="text-[10px] text-slate-400">Est. Reguler: {item.estimateDays} Hari</div>
+                    </div>
+                    <span className="text-cyan-400 font-bold">Rp {item.price.toLocaleString()}/{item.unit}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="space-y-1">
+              {selectedSatuanItems.map(item => (
+                <div key={item.id} className="flex justify-between text-xs bg-slate-800 p-2 rounded items-center">
+                  <div>
+                    <div className="font-medium">{item.name} (x{item.qty})</div>
+                    <div className="text-[10px] text-slate-400">Reguler: {item.estimateDays} Hari</div>
+                  </div>
+                  <span className="font-bold text-cyan-400">Rp {(item.price * item.qty).toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-2">
+          <label className="text-xs text-slate-400 font-semibold">Pilih Layanan Kecepatan:</label>
+          <div className="grid grid-cols-2 gap-2">
+            {(Object.keys(speedOptions) as Array<keyof typeof speedOptions>).map((key) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setSpeed(key)}
+                className={`p-2.5 rounded-lg text-left border text-xs transition ${
+                  speed === key ? 'border-cyan-400 bg-cyan-950/50 text-cyan-300' : 'border-slate-800 bg-slate-800/40 text-slate-400'
+                }`}
+              >
+                <div className="font-bold">{speedOptions[key].label}</div>
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+
+        <div className="bg-slate-800/80 border border-cyan-500/30 p-3 rounded-xl space-y-2 text-xs">
+          <div className="flex justify-between text-slate-300">
+            <span>Estimasi Waktu Pengerjaan:</span>
+            <span className="font-bold text-yellow-400">{maxEstimateDays}</span>
+          </div>
+          <div className="flex justify-between text-slate-300">
+            <span>Subtotal Layanan:</span>
+            <span className="font-bold">Rp {totalEstimasiLayanan.toLocaleString()}</span>
+          </div>
+          <div className="flex justify-between text-slate-400">
+            <span>Ongkos Kirim:</span>
+            <span className="italic text-cyan-400">Divalidasi saat penjemputan</span>
+          </div>
+          <div className="border-t border-slate-700 pt-2 flex justify-between text-sm font-bold text-cyan-400">
+            <span>Total Estimasi:</span>
+            <span>Rp {totalEstimasiLayanan.toLocaleString()} + Ongkir</span>
+          </div>
+
+          <label className="flex items-start gap-2 pt-2 text-[11px] text-slate-400 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={agreeOngkir}
+              onChange={(e) => setAgreeOngkir(e.target.checked)}
+              className="mt-0.5 rounded border-slate-700 text-cyan-500 focus:ring-0"
+            />
+            <span>Saya menyetujui estimasi pengerjaan dan ongkir yang divalidasi oleh driver/admin.</span>
+          </label>
+        </div>
+
+        <button
+          type="submit"
+          disabled={loading}
+          className="w-full py-3.5 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-sm rounded-xl shadow-lg transition duration-200"
+        >
+          {loading ? 'MEMPROSES ORDER...' : '🚀 SETUJU & KIRIM ORDER ONLINE'}
+        </button>
+      </form>
     </div>
   );
 }
