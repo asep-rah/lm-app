@@ -10,15 +10,16 @@ const supabase = createClient(
   'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs'
 );
 
-// Database Layanan Satuan Reguler (3 Hari untuk Pakaian/Bedcover, 7 Hari Sepatu, 14 Hari Karpet/Gordyn)
+// Database Layanan Satuan Reguler
 const SATUAN_ITEMS = [
   { id: '1', name: 'Bedcover Double', price: 40000, estimateDays: 3, unit: 'pcs' },
   { id: '2', name: 'Bedcover Single', price: 25000, estimateDays: 3, unit: 'pcs' },
-  { id: '3', name: 'Jaket / Hoodie', price: 30000, estimateDays: 3, unit: 'pcs' },
-  { id: '4', name: 'Jas / Blazer', price: 30000, estimateDays: 3, unit: 'pcs' },
-  { id: '5', name: 'Sepatu', price: 45000, estimateDays: 7, unit: 'pasang' },
-  { id: '6', name: 'Karpet', price: 25000, estimateDays: 14, unit: 'm²' },
-  { id: '7', name: 'Gordyn', price: 15000, estimateDays: 14, unit: 'm²' },
+  { id: '3', name: 'Sprei Double / Single', price: 15000, estimateDays: 3, unit: 'pcs' },
+  { id: '4', name: 'Jaket / Hoodie', price: 30000, estimateDays: 3, unit: 'pcs' },
+  { id: '5', name: 'Jas / Blazer', price: 30000, estimateDays: 3, unit: 'pcs' },
+  { id: '6', name: 'Sepatu', price: 45000, estimateDays: 7, unit: 'pasang' },
+  { id: '7', name: 'Karpet', price: 25000, estimateDays: 14, unit: 'm²' },
+  { id: '8', name: 'Gordyn', price: 15000, estimateDays: 14, unit: 'm²' },
 ];
 
 const getDistanceInMeters = (lat1: number, lon1: number, lat2: number, lon2: number) => {
@@ -42,7 +43,6 @@ export default function CustomerDashboard() {
   const [outlets, setOutlets] = useState<any[]>([]);
   const [addresses, setAddresses] = useState<any[]>([]);
   const [activeOrders, setActiveOrders] = useState<any[]>([]);
-  const [completedOrders, setCompletedOrders] = useState<any[]>([]);
   const [activePickups, setActivePickups] = useState<any[]>([]);
   
   // Modal Notifikasi Cucian Selesai
@@ -57,18 +57,27 @@ export default function CustomerDashboard() {
   const [lat, setLat] = useState<number | null>(null);
   const [lon, setLon] = useState<number | null>(null);
 
-  // Form Request Pickup Baru
+  // Form Request Pickup Multi-Service
   const [customerName, setCustomerName] = useState('');
   const [selectedAddressId, setSelectedAddressId] = useState('');
-  const [category, setCategory] = useState<'KILOAN' | 'SATUAN'>('KILOAN');
+
+  // 1. Kiloan State
+  const [useKiloan, setUseKiloan] = useState(true);
   const [kiloanPackage, setKiloanPackage] = useState('Cuci Komplit (Rp 7.000/kg)');
   const [kiloanPricePerKg, setKiloanPricePerKg] = useState(7000);
   const [estimatedKg, setEstimatedKg] = useState<number>(3);
 
+  // 2. Satuan State
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSatuanItems, setSelectedSatuanItems] = useState<{ id: string; name: string; price: number; qty: number; estimateDays: number; unit: string }[]>([]);
 
-  // Speed Options: Reguler (1x), One Day (+50%), Express (+100%), Quick (+200%)
+  // 3. Detail Kondisi Cucian
+  const [bagCount, setBagCount] = useState<number>(1);
+  const [isSeparated, setIsSeparated] = useState<boolean>(false); // false = Gabung, true = Pisah Per Kantong
+  const [hasFading, setHasFading] = useState<boolean>(false);
+  const [hasValuables, setHasValuables] = useState<boolean>(false);
+
+  // 4. Opsi Kecepatan
   const [speed, setSpeed] = useState<'REGULER' | 'ONEDAY' | 'EXPRESS' | 'QUICK'>('REGULER');
 
   const speedOptions = {
@@ -126,7 +135,6 @@ export default function CustomerDashboard() {
       const finished = txData.filter((t) => t.status === 'Selesai' || t.status === 'Siap Diambil');
 
       setActiveOrders(active);
-      setCompletedOrders(finished);
 
       if (finished.length > 0 && !showFinishedModal) {
         setFinishedOrderData(finished[0]);
@@ -229,7 +237,7 @@ export default function CustomerDashboard() {
     } else alert('Gagal hapus: ' + error.message);
   };
 
-  // Kalkulasi Jarak & Ongkir
+  // Hitung Ongkir
   useEffect(() => {
     if (!selectedAddressId || addresses.length === 0 || outlets.length === 0) return;
     const addr = addresses.find((a) => a.id === selectedAddressId);
@@ -283,32 +291,39 @@ export default function CustomerDashboard() {
     setSearchQuery('');
   };
 
+  const removeSatuanItem = (id: string) => {
+    setSelectedSatuanItems(prev => prev.filter(i => i.id !== id));
+  };
+
+  // Subtotal Dasar (Kiloan + Satuan Gabungan)
   const subtotalBase = useMemo(() => {
-    if (category === 'KILOAN') {
-      return kiloanPricePerKg * estimatedKg;
-    } else {
-      return selectedSatuanItems.reduce((acc, curr) => acc + (curr.price * curr.qty), 0);
-    }
-  }, [category, kiloanPricePerKg, estimatedKg, selectedSatuanItems]);
+    let kiloanTotal = useKiloan ? kiloanPricePerKg * estimatedKg : 0;
+    let satuanTotal = selectedSatuanItems.reduce((acc, curr) => acc + (curr.price * curr.qty), 0);
+    return kiloanTotal + satuanTotal;
+  }, [useKiloan, kiloanPricePerKg, estimatedKg, selectedSatuanItems]);
 
   const totalEstimasiLayanan = Math.round(subtotalBase * speedOptions[speed].multiplier);
 
   const maxEstimateDays = useMemo(() => {
-    if (category === 'KILOAN') {
-      return speed === 'QUICK' ? '3 Jam' : speed === 'EXPRESS' ? '6 Jam' : speed === 'ONEDAY' ? '24 Jam' : '3 Hari';
-    }
-    if (selectedSatuanItems.length === 0) return '-';
-    
-    const baseDays = Math.max(...selectedSatuanItems.map(i => i.estimateDays));
+    let daysArr: number[] = [];
+    if (useKiloan) daysArr.push(3);
+    selectedSatuanItems.forEach(i => daysArr.push(i.estimateDays));
+
+    if (daysArr.length === 0) return '-';
+    const baseDays = Math.max(...daysArr);
+
     if (speed === 'QUICK') return '3 Jam (Kilat)';
     if (speed === 'EXPRESS') return '6 Jam';
     if (speed === 'ONEDAY') return '24 Jam (1 Hari)';
-    
     return `${baseDays} Hari`;
-  }, [category, selectedSatuanItems, speed]);
+  }, [useKiloan, selectedSatuanItems, speed]);
 
   const handleSubmitPickup = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!useKiloan && selectedSatuanItems.length === 0) {
+      alert('Pilih minimal 1 paket Kiloan atau 1 item Satuan!');
+      return;
+    }
     if (!agreeOngkir) {
       alert('Mohon setujui persetujuan ongkos kirim.');
       return;
@@ -317,16 +332,32 @@ export default function CustomerDashboard() {
 
     try {
       const addr = addresses.find((a) => a.id === selectedAddressId);
+      
+      // Susun Detail Rincian Layanan
+      let details: string[] = [];
+      if (useKiloan) {
+        details.push(`[KILOAN]: ${kiloanPackage} (~${estimatedKg} kg)`);
+      }
+      if (selectedSatuanItems.length > 0) {
+        const satuanStr = selectedSatuanItems.map(i => `${i.name} (x${i.qty})`).join(', ');
+        details.push(`[SATUAN]: ${satuanStr}`);
+      }
+
+      // Catatan Kondisi Cucian Tambahan
+      const notesStr = `[Kondisi]: ${bagCount} Kantong | Cuci: ${isSeparated ? 'Pisah Per Kantong' : 'Gabung'} | Luntur: ${hasFading ? 'ADA' : 'TIDAK'} | Berharga: ${hasValuables ? 'ADA' : 'TIDAK'}`;
+
       const orderData = {
-        order_type: 'ONLINE', // Flag otomatis untuk POS Order Online
+        order_type: 'ONLINE',
         customer_name: customerName || 'Customer PWA',
         phone_number: customerPhone,
         customer_phone: customerPhone,
         pickup_address: addr ? addr.full_address : fullAddress,
-        category: category,
-        service_detail: category === 'KILOAN' 
-          ? `${kiloanPackage} (~${estimatedKg} kg)`
-          : JSON.stringify(selectedSatuanItems),
+        category: useKiloan && selectedSatuanItems.length > 0 ? 'GABUNGAN' : useKiloan ? 'KILOAN' : 'SATUAN',
+        service_detail: `${details.join(' | ')} \n${notesStr}`,
+        bag_count: Number(bagCount),
+        is_separated: isSeparated,
+        has_fading_risk: hasFading,
+        has_valuables: hasValuables,
         speed_type: speed,
         estimated_completion: maxEstimateDays,
         estimated_subtotal: totalEstimasiLayanan,
@@ -341,7 +372,7 @@ export default function CustomerDashboard() {
 
       if (error) throw error;
 
-      alert('🚀 Order Online Berhasil Terkirim ke POS Order Online!');
+      alert('🚀 Order Online Berhasil Terkirim ke POS!');
       setCustomerName('');
       setSelectedSatuanItems([]);
       loadCustomerData();
@@ -388,7 +419,7 @@ export default function CustomerDashboard() {
           <InstallPWA />
         </div>
   
-        {/* HEADER APLIKASI PREMIUM */}
+        {/* HEADER APLIKASI */}
         <div className="bg-gradient-to-b from-blue-900/50 via-slate-900 to-slate-900 p-6 rounded-b-[2.5rem] border-b border-blue-500/20 backdrop-blur-xl">
           <div className="flex justify-between items-center mb-4">
             <div>
@@ -424,7 +455,7 @@ export default function CustomerDashboard() {
           </div>
         </div>
 
-        {/* MODAL POP-UP NOTIFIKASI CUCIAN SELESAI */}
+        {/* MODAL CUCIAN SELESAI */}
         {showFinishedModal && finishedOrderData && (
           <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
             <div className="bg-slate-900 border border-blue-500/30 rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl text-center">
@@ -466,7 +497,7 @@ export default function CustomerDashboard() {
           </div>
         )}
 
-        {/* CONTAINER CONTENT Utama */}
+        {/* CONTAINER CONTENT */}
         <div className="p-4 flex-1 space-y-5">
 
           {/* TAB 1: BERANDA */}
@@ -651,12 +682,12 @@ export default function CustomerDashboard() {
             </div>
           )}
 
-          {/* TAB 3: FORM PICKUP ONLINE DENGAN HARGA BARU */}
+          {/* TAB 3: FORM PICKUP ONLINE (MULTI-SERVICE + DETAIL CUCIAN) */}
           {activeTab === 'pickup' && (
             <div className="space-y-5">
               <div className="bg-slate-800/80 border border-slate-700/80 rounded-3xl p-5 shadow-xl backdrop-blur-md text-slate-100 font-sans">
                 <h3 className="text-base font-bold text-center mb-1 text-cyan-400">Order Laundry Online POS</h3>
-                <p className="text-[11px] text-center text-slate-400 mb-5">Penjemputan Langsung Terkoneksi ke POS Order Online</p>
+                <p className="text-[11px] text-center text-slate-400 mb-5">Pilih Kiloan dan/atau Satuan Sekaligus dalam 1 Order</p>
 
                 <form onSubmit={handleSubmitPickup} className="space-y-4">
                   <div className="space-y-2.5">
@@ -684,99 +715,183 @@ export default function CustomerDashboard() {
                     />
                   </div>
 
-                  {/* Tab Kategori Kiloan / Satuan */}
-                  <div className="grid grid-cols-2 gap-2 bg-slate-900 p-1 rounded-xl">
-                    <button
-                      type="button"
-                      onClick={() => setCategory('KILOAN')}
-                      className={`py-2 text-xs font-bold rounded-lg transition ${category === 'KILOAN' ? 'bg-cyan-600 text-white' : 'text-slate-400'}`}
-                    >
-                      📦 LAUNDRY KILOAN
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setCategory('SATUAN')}
-                      className={`py-2 text-xs font-bold rounded-lg transition ${category === 'SATUAN' ? 'bg-cyan-600 text-white' : 'text-slate-400'}`}
-                    >
-                      👔 LAUNDRY SATUAN
-                    </button>
+                  {/* SEKSI 1: PAKET KILOAN (OPSIONAL VIA CHECKBOX) */}
+                  <div className="bg-slate-900/80 p-3.5 rounded-2xl border border-slate-800 space-y-3">
+                    <label className="flex items-center gap-2 text-xs font-bold text-cyan-400 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={useKiloan}
+                        onChange={(e) => setUseKiloan(e.target.checked)}
+                        className="w-4 h-4 rounded border-slate-700 text-cyan-500 focus:ring-0"
+                      />
+                      <span>📦 TAMBAH PAKET LAUNDRY KILOAN</span>
+                    </label>
+
+                    {useKiloan && (
+                      <div className="space-y-3 pt-1 border-t border-slate-800/80">
+                        <select
+                          value={kiloanPackage}
+                          onChange={(e) => {
+                            setKiloanPackage(e.target.value);
+                            setKiloanPricePerKg(e.target.value.includes('Setrika') ? 5000 : 7000);
+                          }}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-white"
+                        >
+                          <option value="Cuci Komplit (Rp 7.000/kg)">Cuci Komplit (Rp 7.000/kg)</option>
+                          <option value="Cuci Lipat (Rp 5.500/kg)">Cuci Lipat (Rp 5.500/kg)</option>
+                          <option value="Setrika Saja (Rp 5.000/kg)">Setrika Saja (Rp 5.000/kg)</option>
+                        </select>
+
+                        <div className="flex justify-between items-center text-xs text-slate-300">
+                          <span>Estimasi Berat (Kg):</span>
+                          <input
+                            type="number"
+                            min="1"
+                            value={estimatedKg}
+                            onChange={(e) => setEstimatedKg(Number(e.target.value))}
+                            className="w-16 bg-slate-950 border border-slate-800 text-center rounded-lg p-1 text-xs font-bold text-cyan-400"
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
 
-                  {/* Kiloan Dropdown */}
-                  {category === 'KILOAN' && (
-                    <div className="space-y-3 bg-slate-900/60 p-3 rounded-xl border border-slate-800">
-                      <label className="text-[11px] text-slate-400">Pilih Paket Kiloan</label>
-                      <select
-                        value={kiloanPackage}
-                        onChange={(e) => {
-                          setKiloanPackage(e.target.value);
-                          setKiloanPricePerKg(e.target.value.includes('Setrika') ? 5000 : 7000);
-                        }}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-white"
-                      >
-                        <option value="Cuci Komplit (Rp 7.000/kg)">Cuci Komplit (Rp 7.000/kg)</option>
-                        <option value="Cuci Lipat (Rp 5.500/kg)">Cuci Lipat (Rp 5.500/kg)</option>
-                        <option value="Setrika Saja (Rp 5.000/kg)">Setrika Saja (Rp 5.000/kg)</option>
-                      </select>
+                  {/* SEKSI 2: ITEM SATUAN (SEARCH & ADD) */}
+                  <div className="bg-slate-900/80 p-3.5 rounded-2xl border border-slate-800 space-y-3">
+                    <label className="text-xs font-bold text-cyan-400 block">
+                      👔 TAMBAH ITEM LAUNDRY SATUAN
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="🔍 Cari: Bedcover, Sprei, Jas, Sepatu, Karpet..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-white"
+                    />
 
-                      <div className="flex justify-between items-center text-xs text-slate-300">
-                        <span>Estimasi Berat (Kg):</span>
-                        <input
-                          type="number"
-                          min="1"
-                          value={estimatedKg}
-                          onChange={(e) => setEstimatedKg(Number(e.target.value))}
-                          className="w-16 bg-slate-900 border border-slate-700 text-center rounded-lg p-1 text-xs font-bold text-cyan-400"
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Satuan Search */}
-                  {category === 'SATUAN' && (
-                    <div className="space-y-3 bg-slate-900/60 p-3 rounded-xl border border-slate-800">
-                      <label className="text-[11px] text-slate-400">Cari Item Satuan</label>
-                      <input
-                        type="text"
-                        placeholder="🔍 Cari: Bedcover, Jaket, Karpet, Gordyn..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-white"
-                      />
-
-                      {searchQuery && (
-                        <div className="bg-slate-900 border border-slate-700 rounded-xl max-h-40 overflow-y-auto divide-y divide-slate-800">
-                          {filteredSatuan.map((item) => (
-                            <div
-                              key={item.id}
-                              onClick={() => addSatuanItem(item)}
-                              className="p-2 text-xs flex justify-between cursor-pointer hover:bg-slate-800"
-                            >
-                              <div>
-                                <div className="font-semibold text-slate-200">{item.name}</div>
-                                <div className="text-[10px] text-slate-400">Est. Reguler: {item.estimateDays} Hari</div>
-                              </div>
-                              <span className="text-cyan-400 font-bold">Rp {item.price.toLocaleString()}/{item.unit}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      <div className="space-y-1">
-                        {selectedSatuanItems.map(item => (
-                          <div key={item.id} className="flex justify-between text-xs bg-slate-900 p-2 rounded-lg items-center border border-slate-800">
+                    {searchQuery && (
+                      <div className="bg-slate-950 border border-slate-800 rounded-xl max-h-40 overflow-y-auto divide-y divide-slate-800/80">
+                        {filteredSatuan.map((item) => (
+                          <div
+                            key={item.id}
+                            onClick={() => addSatuanItem(item)}
+                            className="p-2.5 text-xs flex justify-between cursor-pointer hover:bg-slate-800 transition"
+                          >
                             <div>
-                              <div className="font-medium text-slate-200">{item.name} (x{item.qty})</div>
+                              <div className="font-semibold text-slate-200">{item.name}</div>
                               <div className="text-[10px] text-slate-400">Reguler: {item.estimateDays} Hari</div>
                             </div>
-                            <span className="font-bold text-cyan-400">Rp {(item.price * item.qty).toLocaleString()}</span>
+                            <span className="text-cyan-400 font-bold">+ Rp {item.price.toLocaleString()}/{item.unit}</span>
                           </div>
                         ))}
                       </div>
-                    </div>
-                  )}
+                    )}
 
-                  {/* Opsi Kecepatan */}
+                    {/* Cart Item Satuan */}
+                    {selectedSatuanItems.length > 0 && (
+                      <div className="space-y-1.5 pt-1">
+                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Item Satuan Dipilih:</p>
+                        {selectedSatuanItems.map(item => (
+                          <div key={item.id} className="flex justify-between items-center text-xs bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                            <div>
+                              <div className="font-medium text-slate-200">{item.name} (x{item.qty})</div>
+                              <div className="text-[10px] text-slate-400">Rp {item.price.toLocaleString()} x {item.qty}</div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-cyan-400">Rp {(item.price * item.qty).toLocaleString()}</span>
+                              <button
+                                type="button"
+                                onClick={() => removeSatuanItem(item.id)}
+                                className="text-rose-400 font-bold px-1.5 py-0.5 hover:bg-rose-950/40 rounded"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* SEKSI 3: INFORMASI DETAIL KONDISI CUCIAN */}
+                  <div className="bg-slate-900/80 p-3.5 rounded-2xl border border-slate-800 space-y-3">
+                    <label className="text-xs font-bold text-cyan-400 block">
+                      📋 INFORMASI DETAIL CUCIAN
+                    </label>
+
+                    {/* 1. Berapa Kantong */}
+                    <div className="flex justify-between items-center text-xs text-slate-300">
+                      <span>1. Jumlah Kantong:</span>
+                      <select
+                        value={bagCount}
+                        onChange={(e) => setBagCount(Number(e.target.value))}
+                        className="bg-slate-950 border border-slate-800 rounded-lg p-1.5 text-xs text-cyan-400 font-bold"
+                      >
+                        <option value={1}>1 Kantong</option>
+                        <option value={2}>2 Kantong</option>
+                        <option value={3}>3 Kantong</option>
+                        <option value={4}>4 Kantong</option>
+                        <option value={5}>5+ Kantong</option>
+                      </select>
+                    </div>
+
+                    {/* 2. Proses Cuci */}
+                    <div className="flex justify-between items-center text-xs text-slate-300">
+                      <span>2. Proses Cuci:</span>
+                      <select
+                        value={isSeparated ? 'pis' : 'gab'}
+                        onChange={(e) => setIsSeparated(e.target.value === 'pis')}
+                        className="bg-slate-950 border border-slate-800 rounded-lg p-1.5 text-xs text-cyan-400 font-bold"
+                      >
+                        <option value="gab">Gabung Semua</option>
+                        <option value="pis">Pisah Per Kantong</option>
+                      </select>
+                    </div>
+
+                    {/* 3. Pakaian Luntur */}
+                    <div className="flex justify-between items-center text-xs text-slate-300">
+                      <span>3. Ada Pakaian Luntur?</span>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setHasFading(false)}
+                          className={`px-3 py-1 rounded-lg text-xs font-bold transition ${!hasFading ? 'bg-cyan-600 text-white' : 'bg-slate-950 text-slate-400 border border-slate-800'}`}
+                        >
+                          Tidak
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setHasFading(true)}
+                          className={`px-3 py-1 rounded-lg text-xs font-bold transition ${hasFading ? 'bg-rose-600 text-white' : 'bg-slate-950 text-slate-400 border border-slate-800'}`}
+                        >
+                          Ya
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 4. Barang Berharga */}
+                    <div className="flex justify-between items-center text-xs text-slate-300">
+                      <span>4. Ada Barang Berharga?</span>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setHasValuables(false)}
+                          className={`px-3 py-1 rounded-lg text-xs font-bold transition ${!hasValuables ? 'bg-cyan-600 text-white' : 'bg-slate-950 text-slate-400 border border-slate-800'}`}
+                        >
+                          Tidak
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setHasValuables(true)}
+                          className={`px-3 py-1 rounded-lg text-xs font-bold transition ${hasValuables ? 'bg-amber-600 text-white' : 'bg-slate-950 text-slate-400 border border-slate-800'}`}
+                        >
+                          Ya
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* SEKSI 4: PILIHAN KECEPATAN */}
                   <div className="space-y-2">
                     <label className="text-[11px] text-slate-400 font-semibold">Pilih Layanan Kecepatan:</label>
                     <div className="grid grid-cols-2 gap-2">
@@ -795,7 +910,7 @@ export default function CustomerDashboard() {
                     </div>
                   </div>
 
-                  {/* Estimasi Biaya */}
+                  {/* ESTIMASI TOTAL RINGKASAN */}
                   <div className="bg-slate-900/90 border border-cyan-500/30 p-3.5 rounded-2xl space-y-2 text-xs">
                     <div className="flex justify-between text-slate-300">
                       <span>Estimasi Pengerjaan:</span>
@@ -839,7 +954,7 @@ export default function CustomerDashboard() {
 
         </div>
 
-        {/* BOTTOM NAV BAR PREMIUM */}
+        {/* BOTTOM NAV BAR */}
         <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-slate-900/90 border-t border-slate-800 backdrop-blur-xl flex justify-around p-3 z-50">
           <button 
             onClick={() => setActiveTab('home')} 
