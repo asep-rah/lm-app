@@ -344,12 +344,16 @@ export default function CustomerDashboard() {
       // 2. Gabungkan seluruh informasi ke kolom standar service_type
       const fullServiceString = `${speedOptions[speed].label.toUpperCase()} | ${details.join(' + ')} | Est: ${maxEstimateDays} (Rp ${totalEstimasiLayanan.toLocaleString('id-ID')})`;
 
-      // 3. Payload murni kolom standar Supabase
+      // 3. Waktu penjemputan otomatis (sekarang)
+      const nowIso = new Date().toISOString();
+
+      // 4. Payload murni kolom standar Supabase (Termasuk pickup_date)
       const orderData = {
         order_number: 'ONL-' + Math.floor(100000 + Math.random() * 900000),
         customer_phone: customerPhone,
         address_id: selectedAddressId || null,
         outlet_id: calculatedNearestOutlet?.id || null,
+        pickup_date: nowIso, // FIX: Mengisi kolom pickup_date yang wajib di Supabase
         distance_km: estimatedDistanceKm,
         delivery_fee: estimatedFee,
         status: 'Menunggu Driver',
@@ -359,7 +363,7 @@ export default function CustomerDashboard() {
         is_separated: isSeparated,
         has_fading_risk: hasFading,
         has_valuables: hasValuables,
-        created_at: new Date().toISOString()
+        created_at: nowIso
       };
 
       const { error } = await supabase.from('pickup_orders').insert([orderData]);
