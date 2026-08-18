@@ -73,7 +73,7 @@ export default function CustomerDashboard() {
 
   // 3. Detail Kondisi Cucian
   const [bagCount, setBagCount] = useState<number>(1);
-  const [isSeparated, setIsSeparated] = useState<boolean>(false); // false = Gabung, true = Pisah Per Kantong
+  const [isSeparated, setIsSeparated] = useState<boolean>(false);
   const [hasFading, setHasFading] = useState<boolean>(false);
   const [hasValuables, setHasValuables] = useState<boolean>(false);
 
@@ -333,7 +333,6 @@ export default function CustomerDashboard() {
     try {
       const addr = addresses.find((a) => a.id === selectedAddressId);
       
-      // Susun Detail Rincian Layanan
       let details: string[] = [];
       if (useKiloan) {
         details.push(`[KILOAN]: ${kiloanPackage} (~${estimatedKg} kg)`);
@@ -343,11 +342,9 @@ export default function CustomerDashboard() {
         details.push(`[SATUAN]: ${satuanStr}`);
       }
 
-      // Gabungkan rincian kecepatan, pengerjaan, dan kondisi cucian
       const mainServiceTitle = `ORDER ONLINE - ${speedOptions[speed].label.toUpperCase()}`;
       const fullServiceDetails = `${details.join(' | ')} | Est. Pengerjaan: ${maxEstimateDays} | Est. Subtotal: Rp ${totalEstimasiLayanan.toLocaleString()} | Kondisi: ${bagCount} Kantong, Cuci: ${isSeparated ? 'Pisah' : 'Gabung'}, Luntur: ${hasFading ? 'YA' : 'TIDAK'}, Berharga: ${hasValuables ? 'YA' : 'TIDAK'}`;
 
-      // Payload hanya menggunakan kolom-kolom standar Supabase yang sudah ada
       const orderData = {
         order_number: 'ONL-' + Math.floor(100000 + Math.random() * 900000),
         customer_phone: customerPhone,
@@ -371,47 +368,6 @@ export default function CustomerDashboard() {
       if (error) throw error;
 
       alert('🚀 Order Online Berhasil Terkirim!');
-      setCustomerName('');
-      setSelectedSatuanItems([]);
-      loadCustomerData();
-      setActiveTab('home');
-    } catch (err: any) {
-      alert('Gagal mengirim order: ' + err.message);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-      // Catatan Kondisi Cucian Tambahan
-      const notesStr = `[Kondisi]: ${bagCount} Kantong | Cuci: ${isSeparated ? 'Pisah Per Kantong' : 'Gabung'} | Luntur: ${hasFading ? 'ADA' : 'TIDAK'} | Berharga: ${hasValuables ? 'ADA' : 'TIDAK'}`;
-
-      const orderData = {
-        order_type: 'ONLINE',
-        customer_name: customerName || 'Customer PWA',
-        phone_number: customerPhone,
-        customer_phone: customerPhone,
-        pickup_address: addr ? addr.full_address : fullAddress,
-        category: useKiloan && selectedSatuanItems.length > 0 ? 'GABUNGAN' : useKiloan ? 'KILOAN' : 'SATUAN',
-        service_detail: `${details.join(' | ')} \n${notesStr}`,
-        bag_count: Number(bagCount),
-        is_separated: isSeparated,
-        has_fading_risk: hasFading,
-        has_valuables: hasValuables,
-        speed_type: speed,
-        estimated_completion: maxEstimateDays,
-        estimated_subtotal: totalEstimasiLayanan,
-        delivery_fee: estimatedFee,
-        distance_km: estimatedDistanceKm,
-        outlet_id: calculatedNearestOutlet?.id || null,
-        status: 'PENDING_ONLINE_POS',
-        created_at: new Date().toISOString()
-      };
-
-      const { error } = await supabase.from('pickup_orders').insert([orderData]);
-
-      if (error) throw error;
-
-      alert('🚀 Order Online Berhasil Terkirim ke POS!');
       setCustomerName('');
       setSelectedSatuanItems([]);
       loadCustomerData();
