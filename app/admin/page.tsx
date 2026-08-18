@@ -3,10 +3,10 @@
 import React, { useState, useMemo } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://qlgbjvzabnfqmfnjdkmo.supabase.co';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs';
+
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 // Database Layanan Satuan Reguler (3 Hari untuk Pakaian/Bedcover, 7 Hari Sepatu, 14 Hari Karpet/Gordyn)
 const SATUAN_ITEMS = [
