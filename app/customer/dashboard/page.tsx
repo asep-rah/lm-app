@@ -114,8 +114,11 @@ export default function CustomerDashboard() {
     const { data: settingsData } = await supabase.from('app_settings').select('dynamic_services').eq('id', 1).single();
     if (settingsData && settingsData.dynamic_services) {
       const parsedSvcs = typeof settingsData.dynamic_services === 'string' ? JSON.parse(settingsData.dynamic_services) : settingsData.dynamic_services;
-      if (Array.isArray(parsedSvcs) && parsedSvcs.length > 0) setServices(parsedSvcs); // sesuaikan nama state (setServices / setAvailableServices)
-    }
+      if (Array.isArray(parsedSvcs) && parsedSvcs.length > 0) {
+        // Menggunakan fungsi penampung yang sesuai di PWA Customer
+        if (typeof setDynamicServices === 'function') setDynamicServices(parsedSvcs);
+        else if (typeof setAvailableServices === 'function') setAvailableServices(parsedSvcs);
+      }
     const { data: addrData } = await supabase
       .from('customer_addresses')
       .select('*')
