@@ -110,6 +110,12 @@ export default function CustomerDashboard() {
     const { data: outletData } = await supabase.from('outlets').select('*');
     if (outletData) setOutlets(outletData);
 
+    // TAMBAHKAN 5 BARIS INI: LOAD LAYANAN TERPUSAT DARI APP_SETTINGS
+    const { data: settingsData } = await supabase.from('app_settings').select('dynamic_services').eq('id', 1).single();
+    if (settingsData && settingsData.dynamic_services) {
+      const parsedSvcs = typeof settingsData.dynamic_services === 'string' ? JSON.parse(settingsData.dynamic_services) : settingsData.dynamic_services;
+      if (Array.isArray(parsedSvcs) && parsedSvcs.length > 0) setServices(parsedSvcs); // sesuaikan nama state (setServices / setAvailableServices)
+    }
     const { data: addrData } = await supabase
       .from('customer_addresses')
       .select('*')
@@ -347,9 +353,10 @@ export default function CustomerDashboard() {
       // 3. Waktu penjemputan otomatis (sekarang)
       const nowIso = new Date().toISOString();
 
-      // 4. Payload murni kolom standar Supabase (Termasuk pickup_date)
+      // 4. Payload murni kolom standar Supabase (Termasuk customer_name & pickup_date)
       const orderData = {
         order_number: 'ONL-' + Math.floor(100000 + Math.random() * 900000),
+        customer_name: JSON.parse(localStorage.getItem('laundrivery_customer') || '{}').name || customerPhone, // 👈 TAMBAHKAN BARIS INI
         customer_phone: customerPhone,
         address_id: selectedAddressId || null,
         outlet_id: calculatedNearestOutlet?.id || null,
