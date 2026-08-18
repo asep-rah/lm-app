@@ -343,6 +343,45 @@ export default function CustomerDashboard() {
         details.push(`[SATUAN]: ${satuanStr}`);
       }
 
+      // Gabungkan rincian kecepatan, pengerjaan, dan kondisi cucian
+      const mainServiceTitle = `ORDER ONLINE - ${speedOptions[speed].label.toUpperCase()}`;
+      const fullServiceDetails = `${details.join(' | ')} | Est. Pengerjaan: ${maxEstimateDays} | Est. Subtotal: Rp ${totalEstimasiLayanan.toLocaleString()} | Kondisi: ${bagCount} Kantong, Cuci: ${isSeparated ? 'Pisah' : 'Gabung'}, Luntur: ${hasFading ? 'YA' : 'TIDAK'}, Berharga: ${hasValuables ? 'YA' : 'TIDAK'}`;
+
+      // Payload hanya menggunakan kolom-kolom standar Supabase yang sudah ada
+      const orderData = {
+        order_number: 'ONL-' + Math.floor(100000 + Math.random() * 900000),
+        customer_phone: customerPhone,
+        address_id: selectedAddressId || null,
+        outlet_id: calculatedNearestOutlet?.id || null,
+        distance_km: estimatedDistanceKm,
+        delivery_fee: estimatedFee,
+        status: 'Menunggu Driver',
+        service_type: mainServiceTitle,
+        service_detail: fullServiceDetails,
+        estimated_weight: useKiloan ? Number(estimatedKg) : 0,
+        bag_count: Number(bagCount),
+        is_separated: isSeparated,
+        has_fading_risk: hasFading,
+        has_valuables: hasValuables,
+        created_at: new Date().toISOString()
+      };
+
+      const { error } = await supabase.from('pickup_orders').insert([orderData]);
+
+      if (error) throw error;
+
+      alert('🚀 Order Online Berhasil Terkirim!');
+      setCustomerName('');
+      setSelectedSatuanItems([]);
+      loadCustomerData();
+      setActiveTab('home');
+    } catch (err: any) {
+      alert('Gagal mengirim order: ' + err.message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
       // Catatan Kondisi Cucian Tambahan
       const notesStr = `[Kondisi]: ${bagCount} Kantong | Cuci: ${isSeparated ? 'Pisah Per Kantong' : 'Gabung'} | Luntur: ${hasFading ? 'ADA' : 'TIDAK'} | Berharga: ${hasValuables ? 'ADA' : 'TIDAK'}`;
 
