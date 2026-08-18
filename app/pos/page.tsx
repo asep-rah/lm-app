@@ -189,15 +189,23 @@ export default function POSPage() {
     setEditAmount(tx.amount !== undefined && tx.amount !== null ? String(tx.amount) : '0');
   };
 
-  // HITUNG OTOMATIS NOMINAL TAGIHAN EDIT (TERMASUK ONGKIR WA & LAYANAN BARU)
+  // HITUNG OTOMATIS NOMINAL TAGIHAN EDIT (TERMASUK ONGKIR & LAYANAN BARU)
   useEffect(() => {
-    if (!selectedTxDetail || !editServiceType || services.length === 0) return;
-    const activeSvc = services.find((s) => (s.name || '').trim().toLowerCase() === editServiceType.trim().toLowerCase());
+    if (!selectedTxDetail) return;
+
+    const activeSvc = services.find(
+      (s) => (s.name || '').trim().toLowerCase() === editServiceType.trim().toLowerCase()
+    );
+
     let unitPrice = 0;
     if (activeSvc) {
       const localPrice = outletOverrides?.[selectedOutlet]?.[activeSvc.id]?.price;
       unitPrice = localPrice !== undefined ? Number(localPrice) : Number(activeSvc.price || 0);
+    } else {
+      // Fallback jika layanan tidak ada di list master (misal layanan custom Kiloan/Satuan dari PWA)
+      unitPrice = editServiceType.includes('Setrika') ? 5000 : 7000;
     }
+
     let durationMultiplier = 1.0;
     if (editDuration.includes('Oneday') || editDuration.includes('1 Hari')) durationMultiplier = 1.5;
     if (editDuration.includes('Express') || editDuration.includes('6 Jam')) durationMultiplier = 2.0;
@@ -205,10 +213,18 @@ export default function POSPage() {
 
     let qty = activeSvc && activeSvc.type === 'pcs' ? Number(editPcsCount) || 0 : Number(editWeightKg) || 0;
     const ongkir = Number(editDeliveryFee) || 0;
-    const subtotal = Math.round(unitPrice * qty * durationMultiplier) + ongkir;
 
-    setEditAmount(subtotal.toString());
-  }, [editServiceType, editDuration, editWeightKg, editPcsCount, editDeliveryFee]);
+    // Subtotal pengerjaan
+    let subtotalLayanan = Math.round(unitPrice * qty * durationMultiplier);
+
+    // Jika berat/pcs bernilai 0 tapi transaksi awal dari order online sudah membawa estimasi harga
+    if (subtotalLayanan === 0 && selectedTxDetail.amount > 0) {
+      subtotalLayanan = Number(selectedTxDetail.amount) - (Number(selectedTxDetail.delivery_fee) || 0);
+    }
+
+    const grandTotalFinal = Math.max(0, subtotalLayanan + ongkir);
+    setEditAmount(grandTotalFinal.toString());
+  }, [editServiceType, editDuration, editWeightKg, editPcsCount, editDeliveryFee, selectedTxDetail]);
 
   // FETCH RIWAYAT LOG PENGERJAAN SAAT MODAL DETAIL DIBUKA
   useEffect(() => {
@@ -1031,9 +1047,14 @@ export default function POSPage() {
                     className="w-full border rounded-xl p-2 text-xs font-bold text-indigo-900 bg-white"
                   >
                     {services.map((svc, i) => (
-                      <option key={i} value={svc.name}>{svc.name}</option>
-                    ))}
-                  </select>
+                    <option key={i} value={svc.name}>{svc.name}</option>
+                  ))}
+                  {/* TAMBAHKAN 4 BARIS INI: */}
+                  <option value="Laundry Satuan - Bedcover / Sprei">👔 Satuan - Bedcover / Sprei</option>
+                  <option value="Laundry Satuan - Sepatu / Jaket / Jas">👟 Satuan - Sepatu / Jaket / Jas</option>
+                  <option value="Laundry Satuan - Karpet / Gordyn">🏠 Satuan - Karpet / Gordyn</option>
+                  <option value="Laundry Gabungan (Kiloan + Satuan)">📦 Laundry Gabungan (Kiloan + Satuan)</option>
+                </select>
                 </div>
                 <div>
                   <label className="font-bold text-indigo-950 block mb-1">Durasi Pengerjaan</label>
