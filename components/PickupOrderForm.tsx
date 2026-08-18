@@ -1,276 +1,310 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs'
+  'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
+  'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs'
 );
 
-interface Outlet {
-  id: string;
-  name: string;
-}
+// Database Layanan Satuan Reguler
+const SATUAN_ITEMS = [
+  { id: '1', name: 'Bedcover Double', price: 40000, estimateDays: 3, unit: 'pcs' },
+  { id: '2', name: 'Bedcover Single', price: 25000, estimateDays: 3, unit: 'pcs' },
+  { id: '3', name: 'Jaket / Hoodie', price: 30000, estimateDays: 3, unit: 'pcs' },
+  { id: '4', name: 'Jas / Blazer', price: 30000, estimateDays: 3, unit: 'pcs' },
+  { id: '5', name: 'Sepatu', price: 45000, estimateDays: 7, unit: 'pasang' },
+  { id: '6', name: 'Karpet', price: 25000, estimateDays: 14, unit: 'm²' },
+  { id: '7', name: 'Gordyn', price: 15000, estimateDays: 14, unit: 'm²' },
+];
 
 export default function PickupOrderForm() {
-  const [outlets, setOutlets] = useState<Outlet[]>([]);
+  const [customerName, setCustomerName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [address, setAddress] = useState('');
+  
+  const [category, setCategory] = useState<'KILOAN' | 'SATUAN'>('KILOAN');
+  const [kiloanPackage, setKiloanPackage] = useState('Cuci Komplit (Rp 7.000/kg)');
+  const [kiloanPricePerKg, setKiloanPricePerKg] = useState(7000);
+  const [estimatedKg, setEstimatedKg] = useState<number>(3);
+  
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedSatuanItems, setSelectedSatuanItems] = useState<{ id: string; name: string; price: number; qty: number; estimateDays: number; unit: string }[]>([]);
+
+  // Opsi Kecepatan: Reguler (1x), One Day (+50% = 1.5x), Express (+100% = 2x), Quick (+200% = 3x)
+  const [speed, setSpeed] = useState<'REGULER' | 'ONEDAY' | 'EXPRESS' | 'QUICK'>('REGULER');
+
+  const speedOptions = {
+    REGULER: { label: 'Reguler (Standar)', multiplier: 1.0 },
+    ONEDAY: { label: 'One Day (+50%)', multiplier: 1.5 },
+    EXPRESS: { label: 'Express (+100%)', multiplier: 2.0 },
+    QUICK: { label: 'Quick (+200%)', multiplier: 3.0 },
+  };
+
+  const [agreeOngkir, setAgreeOngkir] = useState(true);
   const [loading, setLoading] = useState(false);
-  const [successMsg, setSuccessMsg] = useState('');
 
-  const [form, setForm] = useState({
-    outlet_id: '',
-    customer_name: '',
-    customer_phone: '',
-    pickup_address: '',
-    kiloan_package: 'Cuci Kering Gosok',
-    satuan_package: '-',
-    qty: '1 kantong',
-    wash_process: 'gabung',
-    has_valuables: false,
-    laundry_bag: false,
-    has_fading: false,
-    service_type: 'reguler',
-    notes: '',
-    on_completion: 'tunggu konfirmasi',
-  });
+  const filteredSatuan = useMemo(() => {
+    if (!searchQuery) return [];
+    return SATUAN_ITEMS.filter(item => item.name.toLowerCase().includes(searchQuery.toLowerCase()));
+  }, [searchQuery]);
 
-  useEffect(() => {
-    async function fetchOutlets() {
-      const { data, error } = await supabase.from('outlets').select('id, name');
-      if (error) {
-        console.error('Gagal mengambil data outlet:', error.message);
+  const addSatuanItem = (item: typeof SATUAN_ITEMS[0]) => {
+    setSelectedSatuanItems(prev => {
+      const exist = prev.find(i => i.id === item.id);
+      if (exist) {
+        return prev.map(i => i.id === item.id ? { ...i, qty: i.qty + 1 } : i);
       }
-      if (data && data.length > 0) {
-        setOutlets(data);
-        setForm((prev) => ({ ...prev, outlet_id: data[0].id }));
-      }
+      return [...prev, { ...item, qty: 1 }];
+    });
+    setSearchQuery('');
+  };
+
+  // Subtotal dasar
+  const subtotalBase = useMemo(() => {
+    if (category === 'KILOAN') {
+      return kiloanPricePerKg * estimatedKg;
+    } else {
+      return selectedSatuanItems.reduce((acc, curr) => acc + (curr.price * curr.qty), 0);
     }
-    fetchOutlets();
-  }, []);
+  }, [category, kiloanPricePerKg, estimatedKg, selectedSatuanItems]);
 
-  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    // 1. TAHAN EVENT REFRESH BROWSER
+  // Subtotal pengali kecepatan
+  const totalEstimasiLayanan = Math.round(subtotalBase * speedOptions[speed].multiplier);
+
+  // Logic estimasi pengerjaan di dalam komponen
+  const maxEstimateDays = useMemo(() => {
+    if (category === 'KILOAN') {
+      return speed === 'QUICK' ? '3 Jam' : speed === 'EXPRESS' ? '6 Jam' : speed === 'ONEDAY' ? '24 Jam' : '3 Hari';
+    }
+    if (selectedSatuanItems.length === 0) return '-';
+    
+    const baseDays = Math.max(...selectedSatuanItems.map(i => i.estimateDays));
+
+    if (speed === 'QUICK') return '3 Jam (Kilat)';
+    if (speed === 'EXPRESS') return '6 Jam';
+    if (speed === 'ONEDAY') return '24 Jam (1 Hari)';
+    
+    return `${baseDays} Hari`;
+  }, [category, selectedSatuanItems, speed]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    e.stopPropagation();
-
+    if (!agreeOngkir) {
+      alert('Mohon setujui persetujuan ongkos kirim.');
+      return;
+    }
     setLoading(true);
-    setSuccessMsg('');
-
-    const orderNumber = `ORD-${Date.now().toString().slice(-6)}`;
 
     try {
-      // 2. INSERT DATA KE SUPABASE
-      const { data, error } = await supabase.from('pickup_orders').insert([
-        {
-          order_number: orderNumber,
-          customer_name: form.customer_name,
-          customer_phone: form.customer_phone,
-          pickup_address: form.pickup_address,
-          kiloan_package: form.kiloan_package,
-          satuan_package: form.satuan_package,
-          qty: form.qty,
-          wash_process: form.wash_process,
-          has_valuables: form.has_valuables,
-          laundry_bag: form.laundry_bag,
-          has_fading: form.has_fading,
-          service_type: form.service_type,
-          notes: form.notes,
-          on_completion: form.on_completion,
-          outlet_id: form.outlet_id || null,
-          status: 'PENDING_DRIVER',
-          pickup_date: new Date().toISOString(),
-        },
-      ]);
+      const orderData = {
+        order_type: 'ONLINE',
+        customer_name: customerName,
+        phone_number: phone,
+        pickup_address: address,
+        category: category,
+        service_detail: category === 'KILOAN' 
+          ? `${kiloanPackage} (~${estimatedKg} kg)`
+          : JSON.stringify(selectedSatuanItems),
+        speed_type: speed,
+        estimated_completion: maxEstimateDays,
+        estimated_subtotal: totalEstimasiLayanan,
+        status: 'PENDING_ONLINE_POS',
+        created_at: new Date().toISOString()
+      };
 
-      if (error) {
-        // Tampilkan error RLS atau koneksi jika ada
-        alert(`❌ Gagal Simpan ke Supabase: ${error.message}`);
-        console.error('Supabase Error:', error);
-      } else {
-        setSuccessMsg('🎉 Order berhasil dibuat! Notifikasi otomatis terkirim ke Telegram outlet.');
-        setForm((prev) => ({
-          ...prev,
-          notes: '',
-        }));
-      }
+      const { error } = await supabase.from('pickup_orders').insert([orderData]);
+
+      if (error) throw error;
+
+      alert('🚀 Order Online Berhasil Terkirim ke POS Order Online!');
+      setCustomerName('');
+      setPhone('');
+      setAddress('');
+      setSelectedSatuanItems([]);
     } catch (err: any) {
-      alert(`⚠️ Terjadi kesalahan sistem: ${err.message || err}`);
-      console.error('System Error:', err);
+      alert('Gagal mengirim order: ' + err.message);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-2xl text-slate-100">
-      <div className="border-b border-slate-800 pb-3 mb-4">
-        <h2 className="text-base font-black text-white flex items-center gap-2">
-          <span>🧺</span> Buat Order Pickup Baru
-        </h2>
-        <p className="text-[11px] text-slate-400 mt-0.5">Lengkapi rincian cucian Anda untuk penjemputan driver.</p>
-      </div>
-
-      {successMsg && (
-        <div className="p-3 mb-4 text-xs font-bold text-emerald-300 bg-emerald-950/80 border border-emerald-500/30 rounded-2xl animate-in zoom-in-95">
-          {successMsg}
-        </div>
-      )}
+    <div className="w-full text-slate-100 font-sans">
+      <h3 className="text-base font-bold text-center mb-1 text-cyan-400">Order Laundry Online POS</h3>
+      <p className="text-[11px] text-center text-slate-400 mb-5">Penjemputan Terkoneksi ke POS Order Online</p>
 
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className="block text-[11px] font-extrabold text-slate-300 uppercase tracking-wider mb-1">Pilih Outlet</label>
-          <select
-            className="w-full bg-slate-950 border border-slate-700/80 rounded-xl p-3 text-xs font-bold text-white focus:outline-none focus:border-blue-500"
-            value={form.outlet_id}
-            onChange={(e) => setForm({ ...form, outlet_id: e.target.value })}
+        <div className="space-y-2.5">
+          <input
+            type="text"
+            placeholder="Nama Lengkap"
             required
+            value={customerName}
+            onChange={(e) => setCustomerName(e.target.value)}
+            className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-xs focus:outline-none focus:border-cyan-500"
+          />
+          <input
+            type="tel"
+            placeholder="Nomor WhatsApp"
+            required
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-xs focus:outline-none focus:border-cyan-500"
+          />
+          <textarea
+            placeholder="Alamat Lengkap Penjemputan"
+            required
+            rows={2}
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-xs focus:outline-none focus:border-cyan-500"
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 bg-slate-900 p-1 rounded-xl">
+          <button
+            type="button"
+            onClick={() => setCategory('KILOAN')}
+            className={`py-2 text-xs font-bold rounded-lg transition ${category === 'KILOAN' ? 'bg-cyan-600 text-white' : 'text-slate-400'}`}
           >
-            {outlets.map((o) => (
-              <option key={o.id} value={o.id} className="bg-slate-900 text-white">{o.name}</option>
+            📦 LAUNDRY KILOAN
+          </button>
+          <button
+            type="button"
+            onClick={() => setCategory('SATUAN')}
+            className={`py-2 text-xs font-bold rounded-lg transition ${category === 'SATUAN' ? 'bg-cyan-600 text-white' : 'text-slate-400'}`}
+          >
+            👔 LAUNDRY SATUAN
+          </button>
+        </div>
+
+        {category === 'KILOAN' && (
+          <div className="space-y-3 bg-slate-900/60 p-3 rounded-xl border border-slate-800">
+            <label className="text-[11px] text-slate-400">Pilih Paket Kiloan</label>
+            <select
+              value={kiloanPackage}
+              onChange={(e) => {
+                setKiloanPackage(e.target.value);
+                setKiloanPricePerKg(e.target.value.includes('Setrika') ? 5000 : 7000);
+              }}
+              className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-white"
+            >
+              <option value="Cuci Komplit (Rp 7.000/kg)">Cuci Komplit (Rp 7.000/kg)</option>
+              <option value="Cuci Lipat (Rp 5.500/kg)">Cuci Lipat (Rp 5.500/kg)</option>
+              <option value="Setrika Saja (Rp 5.000/kg)">Setrika Saja (Rp 5.000/kg)</option>
+            </select>
+
+            <div className="flex justify-between items-center text-xs text-slate-300">
+              <span>Estimasi Berat (Kg):</span>
+              <input
+                type="number"
+                min="1"
+                value={estimatedKg}
+                onChange={(e) => setEstimatedKg(Number(e.target.value))}
+                className="w-16 bg-slate-900 border border-slate-700 text-center rounded-lg p-1 text-xs font-bold text-cyan-400"
+              />
+            </div>
+          </div>
+        )}
+
+        {category === 'SATUAN' && (
+          <div className="space-y-3 bg-slate-900/60 p-3 rounded-xl border border-slate-800">
+            <label className="text-[11px] text-slate-400">Cari Item Satuan</label>
+            <input
+              type="text"
+              placeholder="🔍 Cari: Bedcover, Jaket, Karpet, Gordyn..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-white"
+            />
+
+            {searchQuery && (
+              <div className="bg-slate-900 border border-slate-700 rounded-xl max-h-40 overflow-y-auto divide-y divide-slate-800">
+                {filteredSatuan.map((item) => (
+                  <div
+                    key={item.id}
+                    onClick={() => addSatuanItem(item)}
+                    className="p-2 text-xs flex justify-between cursor-pointer hover:bg-slate-800"
+                  >
+                    <div>
+                      <div className="font-semibold text-slate-200">{item.name}</div>
+                      <div className="text-[10px] text-slate-400">Est. Reguler: {item.estimateDays} Hari</div>
+                    </div>
+                    <span className="text-cyan-400 font-bold">Rp {item.price.toLocaleString()}/{item.unit}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="space-y-1">
+              {selectedSatuanItems.map(item => (
+                <div key={item.id} className="flex justify-between text-xs bg-slate-900 p-2 rounded-lg items-center border border-slate-800">
+                  <div>
+                    <div className="font-medium text-slate-200">{item.name} (x{item.qty})</div>
+                    <div className="text-[10px] text-slate-400">Reguler: {item.estimateDays} Hari</div>
+                  </div>
+                  <span className="font-bold text-cyan-400">Rp {(item.price * item.qty).toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-2">
+          <label className="text-[11px] text-slate-400 font-semibold">Pilih Layanan Kecepatan:</label>
+          <div className="grid grid-cols-2 gap-2">
+            {(Object.keys(speedOptions) as Array<keyof typeof speedOptions>).map((key) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setSpeed(key)}
+                className={`p-2.5 rounded-xl text-left border text-xs transition ${
+                  speed === key ? 'border-cyan-400 bg-cyan-950/60 text-cyan-300' : 'border-slate-800 bg-slate-900/40 text-slate-400'
+                }`}
+              >
+                <div className="font-bold">{speedOptions[key].label}</div>
+              </button>
             ))}
-          </select>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div>
-            <label className="block text-[11px] font-extrabold text-slate-300 uppercase tracking-wider mb-1">Nama Lengkap</label>
-            <input
-              type="text"
-              required
-              className="w-full bg-slate-950 border border-slate-700/80 rounded-xl p-3 text-xs font-medium text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
-              value={form.customer_name}
-              onChange={(e) => setForm({ ...form, customer_name: e.target.value })}
-              placeholder="Masukkan nama Anda"
-            />
-          </div>
-          <div>
-            <label className="block text-[11px] font-extrabold text-slate-300 uppercase tracking-wider mb-1">No. WhatsApp</label>
-            <input
-              type="tel"
-              required
-              className="w-full bg-slate-950 border border-slate-700/80 rounded-xl p-3 text-xs font-medium text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
-              value={form.customer_phone}
-              onChange={(e) => setForm({ ...form, customer_phone: e.target.value })}
-              placeholder="0812xxxxxxx"
-            />
           </div>
         </div>
 
-        <div>
-          <label className="block text-[11px] font-extrabold text-slate-300 uppercase tracking-wider mb-1">Alamat Penjemputan / Shareloc</label>
-          <textarea
-            required
-            rows={2}
-            className="w-full bg-slate-950 border border-slate-700/80 rounded-xl p-3 text-xs font-medium text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
-            value={form.pickup_address}
-            onChange={(e) => setForm({ ...form, pickup_address: e.target.value })}
-            placeholder="Tuliskan alamat lengkap atau link Google Maps..."
-          />
-        </div>
+        <div className="bg-slate-900/90 border border-cyan-500/30 p-3.5 rounded-2xl space-y-2 text-xs">
+          <div className="flex justify-between text-slate-300">
+            <span>Estimasi Waktu Pengerjaan:</span>
+            <span className="font-bold text-yellow-400">{maxEstimateDays}</span>
+          </div>
+          <div className="flex justify-between text-slate-300">
+            <span>Subtotal Layanan:</span>
+            <span className="font-bold">Rp {totalEstimasiLayanan.toLocaleString()}</span>
+          </div>
+          <div className="flex justify-between text-slate-400">
+            <span>Ongkos Kirim:</span>
+            <span className="italic text-cyan-400">Divalidasi saat penjemputan</span>
+          </div>
+          <div className="border-t border-slate-800 pt-2 flex justify-between text-sm font-bold text-cyan-400">
+            <span>Total Estimasi:</span>
+            <span>Rp {totalEstimasiLayanan.toLocaleString()} + Ongkir</span>
+          </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div>
-            <label className="block text-[11px] font-extrabold text-slate-300 uppercase tracking-wider mb-1">Paket Kiloan</label>
-            <input
-              type="text"
-              className="w-full bg-slate-950 border border-slate-700/80 rounded-xl p-3 text-xs font-medium text-white focus:outline-none focus:border-blue-500"
-              value={form.kiloan_package}
-              onChange={(e) => setForm({ ...form, kiloan_package: e.target.value })}
-            />
-          </div>
-          <div>
-            <label className="block text-[11px] font-extrabold text-slate-300 uppercase tracking-wider mb-1">Cuci Satuan</label>
-            <input
-              type="text"
-              className="w-full bg-slate-950 border border-slate-700/80 rounded-xl p-3 text-xs font-medium text-white focus:outline-none focus:border-blue-500"
-              value={form.satuan_package}
-              onChange={(e) => setForm({ ...form, satuan_package: e.target.value })}
-            />
-          </div>
-          <div>
-            <label className="block text-[11px] font-extrabold text-slate-300 uppercase tracking-wider mb-1">Jumlah Estimasi</label>
-            <input
-              type="text"
-              className="w-full bg-slate-950 border border-slate-700/80 rounded-xl p-3 text-xs font-medium text-white focus:outline-none focus:border-blue-500"
-              value={form.qty}
-              onChange={(e) => setForm({ ...form, qty: e.target.value })}
-            />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div>
-            <label className="block text-[11px] font-extrabold text-slate-300 uppercase tracking-wider mb-1">Proses Cuci</label>
-            <select
-              className="w-full bg-slate-950 border border-slate-700/80 rounded-xl p-3 text-xs font-bold text-white focus:outline-none focus:border-blue-500"
-              value={form.wash_process}
-              onChange={(e) => setForm({ ...form, wash_process: e.target.value })}
-            >
-              <option value="gabung" className="bg-slate-900 text-white">Gabung</option>
-              <option value="pisah" className="bg-slate-900 text-white">Pisah</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-[11px] font-extrabold text-slate-300 uppercase tracking-wider mb-1">Layanan</label>
-            <select
-              className="w-full bg-slate-950 border border-slate-700/80 rounded-xl p-3 text-xs font-bold text-white focus:outline-none focus:border-blue-500"
-              value={form.service_type}
-              onChange={(e) => setForm({ ...form, service_type: e.target.value })}
-            >
-              <option value="reguler" className="bg-slate-900 text-white">Reguler</option>
-              <option value="express" className="bg-slate-900 text-white">Express</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="bg-slate-950/80 border border-slate-800 p-3.5 rounded-2xl space-y-2.5 my-2">
-          <label className="flex items-center space-x-2.5 cursor-pointer">
+          <label className="flex items-start gap-2 pt-2 text-[11px] text-slate-400 cursor-pointer">
             <input
               type="checkbox"
-              className="w-4 h-4 rounded border-slate-700 text-blue-600 focus:ring-0 bg-slate-900"
-              checked={form.has_valuables}
-              onChange={(e) => setForm({ ...form, has_valuables: e.target.checked })}
+              checked={agreeOngkir}
+              onChange={(e) => setAgreeOngkir(e.target.checked)}
+              className="mt-0.5 rounded border-slate-700 text-cyan-500 focus:ring-0"
             />
-            <span className="text-xs font-semibold text-slate-300">Ada barang berharga di dalam pakaian?</span>
+            <span>Saya menyetujui estimasi pengerjaan dan ongkir yang divalidasi oleh driver/admin.</span>
           </label>
-          <label className="flex items-center space-x-2.5 cursor-pointer">
-            <input
-              type="checkbox"
-              className="w-4 h-4 rounded border-slate-700 text-blue-600 focus:ring-0 bg-slate-900"
-              checked={form.laundry_bag}
-              onChange={(e) => setForm({ ...form, laundry_bag: e.target.checked })}
-            />
-            <span className="text-xs font-semibold text-slate-300">Menggunakan Tas Cucian khusus?</span>
-          </label>
-          <label className="flex items-center space-x-2.5 cursor-pointer">
-            <input
-              type="checkbox"
-              className="w-4 h-4 rounded border-slate-700 text-blue-600 focus:ring-0 bg-slate-900"
-              checked={form.has_fading}
-              onChange={(e) => setForm({ ...form, has_fading: e.target.checked })}
-            />
-            <span className="text-xs font-semibold text-slate-300">Ada pakaian yang mudah luntur?</span>
-          </label>
-        </div>
-
-        <div>
-          <label className="block text-[11px] font-extrabold text-slate-300 uppercase tracking-wider mb-1">Catatan Khusus</label>
-          <textarea
-            rows={2}
-            className="w-full bg-slate-950 border border-slate-700/80 rounded-xl p-3 text-xs font-medium text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
-            placeholder="Contoh: Tanpa parfum, dilipat rapi..."
-            value={form.notes}
-            onChange={(e) => setForm({ ...form, notes: e.target.value })}
-          />
         </div>
 
         <button
           type="submit"
           disabled={loading}
-          className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-3.5 rounded-2xl text-xs shadow-lg shadow-blue-900/40 transition active:scale-95 disabled:opacity-50"
+          className="w-full py-3.5 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-xs rounded-xl shadow-lg transition duration-200"
         >
-          {loading ? 'Mengirim Order...' : '🚀 KIRIM ORDER PICKUP'}
+          {loading ? 'MEMPROSES ORDER...' : '🚀 SETUJU & KIRIM ORDER ONLINE'}
         </button>
       </form>
     </div>
