@@ -247,6 +247,65 @@ export default function POSPage() {
     setEditAmount(grandTotal.toString());
   }, [editServiceType, editDuration, editWeightKg, editPcsCount, editDeliveryFee, editSatuanFee]);
 
+  // KALKULASI OTOMATIS FORM POS UTAMA (FORM BARU)
+useEffect(() => {
+  // 1. Cari Layanan yang Dipilih
+  const activeSvc = services.find(
+    (s) => (s.name || '').trim().toLowerCase() === (serviceType || '').trim().toLowerCase()
+  );
+
+  // 2. Tentukan Harga Satuan Dasar
+  let baseUnitPrice = 0;
+  if (activeSvc) {
+    const localPrice = outletOverrides?.[selectedOutlet]?.[activeSvc.id]?.price;
+    baseUnitPrice = localPrice !== undefined ? Number(localPrice) : Number(activeSvc.price || 0);
+  } else {
+    const sName = (serviceType || '').toLowerCase();
+    if (sName.includes('bedcover double')) baseUnitPrice = 35000;
+    else if (sName.includes('bedcover single')) baseUnitPrice = 25000;
+    else if (sName.includes('setrika')) baseUnitPrice = 5000;
+    else baseUnitPrice = 7000;
+  }
+
+  // 3. Tentukan Pengali Durasi
+  let durationMultiplier = 1.0;
+  if (duration.includes('Oneday') || duration.includes('1 Hari')) durationMultiplier = 1.5;
+  if (duration.includes('Express') || duration.includes('6 Jam')) durationMultiplier = 2.0;
+  if (duration.includes('Quick') || duration.includes('3 Jam')) durationMultiplier = 3.0;
+
+  // 4. Hitung Quantity (Gunakan Pcs jika tipe pcs / kg jika kiloan)
+  const qtyPcs = Number(pcsCount) || 0;
+  const qtyKg = Number(weightKg) || 0;
+  let qty = 0;
+
+  if (activeSvc && activeSvc.type === 'pcs') {
+    qty = qtyPcs;
+  } else if (qtyPcs > 0 && qtyKg === 0) {
+    qty = qtyPcs;
+  } else {
+    qty = qtyKg;
+  }
+
+  // 5. Subtotal sebelum diskon & ongkir
+  let subtotal = Math.round(baseUnitPrice * qty * durationMultiplier);
+
+  // 6. Hitung Diskon
+  let discVal = Number(discountValue) || 0;
+  let computedDiscount = 0;
+  if (discountType === 'percent') {
+    computedDiscount = Math.round((subtotal * discVal) / 100);
+  } else {
+    computedDiscount = discVal;
+  }
+  setCalculatedDiscount(computedDiscount);
+
+  // 7. Hitung Biaya Ongkir
+  const feeOngkir = Number(deliveryFee) || 0;
+
+  // 8. Total Tagihan Akhir
+  const grandTotal = Math.max(0, subtotal - computedDiscount + feeOngkir);
+  setAmount(grandTotal > 0 ? grandTotal.toString() : '');
+}, [serviceType, duration, weightKg, pcsCount, discountType, discountValue, deliveryFee, selectedOutlet, services]);
   // FETCH RIWAYAT LOG PENGERJAAN
   useEffect(() => {
     if (selectedTxDetail?.id) {
