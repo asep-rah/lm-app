@@ -93,11 +93,19 @@ export default function POSPage() {
   const [customerDeposit, setCustomerDeposit] = useState<number | null>(null);
   const [customerHistory, setCustomerHistory] = useState<any[]>([]);
   
+  // STATE SINGLE ITEM (LEGACY COMPATIBILITY)
   const [serviceType, setServiceType] = useState('');
   const [duration, setDuration] = useState('Reguler (3 Hari)');
   const [weightKg, setWeightKg] = useState('');
   const [pcsCount, setPcsCount] = useState('');
-  
+
+  // STATE KERANJANG MULTI-ITEM BARU (BISA INPUT BEBERAPA ITEM)
+  const [cartItems, setCartItems] = useState<Array<{ id: string; name: string; type: 'kg' | 'pcs'; price: number; qty: number; note: string }>>([]);
+  const [selectedServiceInput, setSelectedServiceInput] = useState('');
+  const [inputQtyKg, setInputQtyKg] = useState('');
+  const [inputQtyPcs, setInputQtyPcs] = useState('');
+  const [inputItemNote, setInputItemNote] = useState('');
+
   const [discountType, setDiscountType] = useState<'nominal' | 'percent'>('nominal');
   const [discountValue, setDiscountValue] = useState('');
   const [calculatedDiscount, setCalculatedDiscount] = useState(0);
@@ -143,7 +151,7 @@ export default function POSPage() {
   const [editWeightKg, setEditWeightKg] = useState('');
   const [editPcsCount, setEditPcsCount] = useState('');
   const [editDeliveryFee, setEditDeliveryFee] = useState('');
-  const [editSatuanFee, setEditSatuanFee] = useState('0'); // STATE TAMBAHAN UNTUK ITEM SATUAN
+  const [editSatuanFee, setEditSatuanFee] = useState('0');
   const [editNotes, setEditNotes] = useState('');
   const [editAmount, setEditAmount] = useState('');
 
@@ -176,7 +184,55 @@ export default function POSPage() {
   const [onlineRevenue, setOnlineRevenue] = useState(0);
   const [offlineRevenue, setOfflineRevenue] = useState(0);
 
-  // BUKA MODAL DETAIL & EDIT (DENGAN LOOKUP NAMA ASLI DARI TABLE CUSTOMERS)
+  // TAMBAH ITEM KE KERANJANG MULTI-ITEM
+  const handleAddToCart = () => {
+    const targetService = selectedServiceInput || serviceType;
+    if (!targetService) return alert('⚠️ Pilih jenis layanan terlebih dahulu!');
+
+    const activeSvc = services.find(
+      (s) => (s.name || '').trim().toLowerCase() === targetService.trim().toLowerCase()
+    );
+
+    let price = 0;
+    if (activeSvc) {
+      const localPrice = outletOverrides?.[selectedOutlet]?.[activeSvc.id]?.price;
+      price = localPrice !== undefined ? Number(localPrice) : Number(activeSvc.price || 0);
+    } else {
+      const sName = targetService.toLowerCase();
+      if (sName.includes('bedcover double')) price = 35000;
+      else if (sName.includes('bedcover single')) price = 25000;
+      else if (sName.includes('sprei')) price = 15000;
+      else if (sName.includes('setrika')) price = 5000;
+      else price = 7000;
+    }
+
+    const isPcs = activeSvc ? activeSvc.type === 'pcs' : (Number(inputQtyPcs) > 0 || Number(pcsCount) > 0);
+    const qty = isPcs 
+      ? (Number(inputQtyPcs) || Number(pcsCount) || 1) 
+      : (Number(inputQtyKg) || Number(weightKg) || 1);
+
+    const newItem = {
+      id: Math.random().toString(),
+      name: targetService,
+      type: isPcs ? ('pcs' as const) : ('kg' as const),
+      price: price,
+      qty: qty,
+      note: inputItemNote
+    };
+
+    setCartItems(prev => [...prev, newItem]);
+    setInputQtyKg('');
+    setInputQtyPcs('');
+    setWeightKg('');
+    setPcsCount('');
+    setInputItemNote('');
+  };
+
+  const handleRemoveFromCart = (id: string) => {
+    setCartItems(cartItems.filter(item => item.id !== id));
+  };
+
+  // LOOKUP NAMA ASLI DARI DATABASE CUSTOMERS UNTUK MODAL DETAIL
   const handleOpenDetailModal = async (tx: any) => {
     setSelectedTxDetail(tx);
     setOrderType('Online');
@@ -184,7 +240,6 @@ export default function POSPage() {
     const phoneVal = tx.customer_phone || tx.phone_number || '';
     let realName = tx.customer_name;
 
-    // Jika customer_name masih berupa nomor HP atau bernilai 'Pelanggan'
     if (phoneVal && (!realName || realName === 'Pelanggan' || realName === phoneVal)) {
       const { data: custData } = await supabase
         .from('customers')
@@ -215,7 +270,7 @@ export default function POSPage() {
     setEditAmount(tx.amount && Number(tx.amount) > 0 ? String(tx.amount) : String(computedAmt));
   };
 
-  // HITUNG OTOMATIS NOMINAL TAGIHAN FINAL (KILOAN + BIAYA SATUAN + ONGKIR)
+  // KALKULASI MODAL EDIT
   useEffect(() => {
     if (!selectedTxDetail) return;
 
@@ -242,70 +297,66 @@ export default function POSPage() {
     const ongkir = Number(editDeliveryFee) || 0;
     const biayaSatuan = Number(editSatuanFee) || 0;
 
-    // Total Tagihan Final
     const grandTotal = kiloanSubtotal + ongkir + biayaSatuan;
     setEditAmount(grandTotal.toString());
   }, [editServiceType, editDuration, editWeightKg, editPcsCount, editDeliveryFee, editSatuanFee]);
 
-  // KALKULASI OTOMATIS FORM POS UTAMA (FORM BARU)
-useEffect(() => {
-  // 1. Cari Layanan yang Dipilih
-  const activeSvc = services.find(
-    (s) => (s.name || '').trim().toLowerCase() === (serviceType || '').trim().toLowerCase()
-  );
+  // KALKULASI OTOMATIS REALTIME FORM UTAMA POS (SINGLE ATAL MULTI-ITEM)
+  useEffect(() => {
+    let durationMultiplier = 1.0;
+    if (duration.includes('Oneday') || duration.includes('1 Hari')) durationMultiplier = 1.5;
+    if (duration.includes('Express') || duration.includes('6 Jam')) durationMultiplier = 2.0;
+    if (duration.includes('Quick') || duration.includes('3 Jam')) durationMultiplier = 3.0;
 
-  // 2. Tentukan Harga Satuan Dasar
-  let baseUnitPrice = 0;
-  if (activeSvc) {
-    const localPrice = outletOverrides?.[selectedOutlet]?.[activeSvc.id]?.price;
-    baseUnitPrice = localPrice !== undefined ? Number(localPrice) : Number(activeSvc.price || 0);
-  } else {
-    const sName = (serviceType || '').toLowerCase();
-    if (sName.includes('bedcover double')) baseUnitPrice = 35000;
-    else if (sName.includes('bedcover single')) baseUnitPrice = 25000;
-    else if (sName.includes('setrika')) baseUnitPrice = 5000;
-    else baseUnitPrice = 7000;
-  }
+    let totalSubtotal = 0;
 
-  // 3. Tentukan Pengali Durasi
-  let durationMultiplier = 1.0;
-  if (duration.includes('Oneday') || duration.includes('1 Hari')) durationMultiplier = 1.5;
-  if (duration.includes('Express') || duration.includes('6 Jam')) durationMultiplier = 2.0;
-  if (duration.includes('Quick') || duration.includes('3 Jam')) durationMultiplier = 3.0;
+    // A. Hitung dari Keranjang Multi-Item (jika ada item di cart)
+    if (cartItems.length > 0) {
+      cartItems.forEach(item => {
+        totalSubtotal += Math.round(item.price * item.qty * durationMultiplier);
+      });
+    } else {
+      // B. Hitung dari Form Single Input Langsung (Direct Input)
+      const targetSvcName = selectedServiceInput || serviceType;
+      const activeSvc = services.find(
+        (s) => (s.name || '').trim().toLowerCase() === (targetSvcName || '').trim().toLowerCase()
+      );
 
-  // 4. Hitung Quantity (Gunakan Pcs jika tipe pcs / kg jika kiloan)
-  const qtyPcs = Number(pcsCount) || 0;
-  const qtyKg = Number(weightKg) || 0;
-  let qty = 0;
+      let baseUnitPrice = 0;
+      if (activeSvc) {
+        const localPrice = outletOverrides?.[selectedOutlet]?.[activeSvc.id]?.price;
+        baseUnitPrice = localPrice !== undefined ? Number(localPrice) : Number(activeSvc.price || 0);
+      } else {
+        const sName = (targetSvcName || '').toLowerCase();
+        if (sName.includes('bedcover double')) baseUnitPrice = 35000;
+        else if (sName.includes('bedcover single')) baseUnitPrice = 25000;
+        else if (sName.includes('setrika')) baseUnitPrice = 5000;
+        else baseUnitPrice = 7000;
+      }
 
-  if (activeSvc && activeSvc.type === 'pcs') {
-    qty = qtyPcs;
-  } else if (qtyPcs > 0 && qtyKg === 0) {
-    qty = qtyPcs;
-  } else {
-    qty = qtyKg;
-  }
+      const qtyPcs = Number(pcsCount) || Number(inputQtyPcs) || 0;
+      const qtyKg = Number(weightKg) || Number(inputQtyKg) || 0;
+      let qty = (activeSvc && activeSvc.type === 'pcs') ? qtyPcs : (qtyPcs > 0 && qtyKg === 0 ? qtyPcs : qtyKg);
 
-  // 5. Subtotal sebelum diskon & ongkir
-  let subtotal = Math.round(baseUnitPrice * qty * durationMultiplier);
+      totalSubtotal = Math.round(baseUnitPrice * qty * durationMultiplier);
+    }
 
-  // 6. Hitung Diskon
-  let discVal = Number(discountValue) || 0;
-  let computedDiscount = 0;
-  if (discountType === 'percent') {
-    computedDiscount = Math.round((subtotal * discVal) / 100);
-  } else {
-    computedDiscount = discVal;
-  }
-  setCalculatedDiscount(computedDiscount);
+    // Hitung Diskon & Ongkir
+    let discVal = Number(discountValue) || 0;
+    let computedDiscount = 0;
+    if (discountType === 'percent') {
+      computedDiscount = Math.round((totalSubtotal * discVal) / 100);
+    } else {
+      computedDiscount = discVal;
+    }
+    setCalculatedDiscount(computedDiscount);
 
-  // 7. Hitung Biaya Ongkir
-  const feeOngkir = Number(deliveryFee) || 0;
+    const feeOngkir = Number(deliveryFee) || 0;
+    const grandTotal = Math.max(0, totalSubtotal - computedDiscount + feeOngkir);
 
-  // 8. Total Tagihan Akhir
-  const grandTotal = Math.max(0, subtotal - computedDiscount + feeOngkir);
-  setAmount(grandTotal > 0 ? grandTotal.toString() : '');
-}, [serviceType, duration, weightKg, pcsCount, discountType, discountValue, deliveryFee, selectedOutlet, services]);
+    setAmount(grandTotal > 0 ? grandTotal.toString() : '');
+  }, [cartItems, serviceType, selectedServiceInput, duration, weightKg, pcsCount, inputQtyKg, inputQtyPcs, discountType, discountValue, deliveryFee, selectedOutlet, services]);
+
   // FETCH RIWAYAT LOG PENGERJAAN
   useEffect(() => {
     if (selectedTxDetail?.id) {
@@ -364,7 +415,11 @@ useEffect(() => {
       const { data: dbSettings } = await supabase.from('app_settings').select('*').eq('id', 1).single();
       if (dbSettings) {
         const svcs = safeParse(dbSettings.dynamic_services, []);
-        setServices(svcs); if (svcs.length > 0) setServiceType(svcs[0].name);
+        setServices(svcs); 
+        if (svcs.length > 0) {
+          setServiceType(svcs[0].name);
+          setSelectedServiceInput(svcs[0].name);
+        }
         setOutletOverrides(safeParse(dbSettings.outlet_overrides, {}));
         setReceiptTerms(dbSettings.receipt_terms || 'Komplain maksimal 1x24 jam.');
         const coas = safeParse(dbSettings.coa_categories, ['Lain-lain']); setSettings({ coas }); if (coas.length > 0) setExpCategory(coas[0]);
@@ -373,7 +428,7 @@ useEffect(() => {
     loadInit();
   }, []);
 
-  // REALTIME ORDER LISTENER (NOTIFICATION & RED BADGE)
+  // REALTIME ORDER LISTENER
   useEffect(() => {
     if (!selectedOutlet) return;
     const subscription = supabase
@@ -625,9 +680,11 @@ useEffect(() => {
     setIsSubmitting(false);
   };
 
+  // SUBMIT TRANSAKSI BARU POS (MENDUKUNG SINGLE DAN MULTI-ITEM CART)
   const handleTransactionSubmit = async (e: React.FormEvent) => {
     e.preventDefault(); 
     if (!selectedOutlet || !amount) return;
+
     const totalPay = Number(amount) || 0;
     const normalizedPhone = cleanPhone(customerPhone);
 
@@ -688,20 +745,45 @@ useEffect(() => {
     }
 
     const generatedResi = 'TRX-' + Math.floor(100000 + Math.random() * 900000);
+
+    // KELOLA APABILA MENGGUNAKAN MULTI-ITEM KERANJANG ATAU SINGLE INPUT DIRECT
+    let primaryServiceLabel = selectedServiceInput || serviceType || 'Cuci Kering Gosok';
+    let totalKgSum = Number(weightKg) || Number(inputQtyKg) || 0;
+    let totalPcsSum = Number(pcsCount) || Number(inputQtyPcs) || 0;
+    let combinedNotes = notes || '';
+
+    if (cartItems.length > 0) {
+      primaryServiceLabel = cartItems.length === 1 
+        ? cartItems[0].name 
+        : `Multi-Item (${cartItems.length} Layanan)`;
+
+      totalKgSum = 0;
+      totalPcsSum = 0;
+      const cartSummaryArr: string[] = [];
+
+      cartItems.forEach(item => {
+        if (item.type === 'kg') totalKgSum += item.qty;
+        else totalPcsSum += item.qty;
+        cartSummaryArr.push(`${item.name} x${item.qty} ${item.type.toUpperCase()}${item.note ? ` (${item.note})` : ''}`);
+      });
+
+      combinedNotes = `[Rincian Items]: ${cartSummaryArr.join(' | ')}${notes ? ` | Note: ${notes}` : ''}`;
+    }
+
     const orderData = {
       receipt_number: generatedResi, 
       outlet_id: selectedOutlet, 
       customer_name: customerName || 'Pelanggan', 
       order_type: orderType,
       delivery_fee: Number(deliveryFee) || 0, 
-      service_type: serviceType, 
+      service_type: primaryServiceLabel, 
       duration: duration, 
-      weight_kg: Number(weightKg) || 0,
-      pcs_count: Number(pcsCount) || 0, 
+      weight_kg: totalKgSum,
+      pcs_count: totalPcsSum, 
       discount_type: discountType, 
       discount_value: Number(discountValue) || 0, 
       discount_amount: calculatedDiscount,
-      notes: notes || '', 
+      notes: combinedNotes, 
       amount: totalPay, 
       payment_method: finalPaymentMethodLabel, 
       status: 'Diterima',
@@ -713,6 +795,7 @@ useEffect(() => {
       const curOutletPhone = newTx.outlets?.whatsapp_number || outletPhone || '';
       setLastOrderInfo({ 
         ...orderData, 
+        cartItems: cartItems.length > 0 ? cartItems : null,
         customer_phone: customerPhone || null,
         outletName: outletName, 
         outletPhone: curOutletPhone,
@@ -726,7 +809,7 @@ useEffect(() => {
         outletPhone: curOutletPhone
       });
 
-      setAmount(''); setCustomerName(''); setCustomerPhone(''); setWeightKg(''); setPcsCount(''); setNotes(''); setDiscountValue(''); setDeliveryFee(orderType === 'Online' ? '20000' : '');
+      setAmount(''); setCustomerName(''); setCustomerPhone(''); setWeightKg(''); setPcsCount(''); setNotes(''); setDiscountValue(''); setCartItems([]); setDeliveryFee(orderType === 'Online' ? '20000' : '');
       refreshData();
     } else alert('❌ Gagal: ' + error?.message);
     setIsSubmitting(false);
@@ -968,12 +1051,30 @@ useEffect(() => {
             
             <div className="border-b border-black border-dashed mb-2"></div>
             
-            <div className="mb-1 font-bold">{lastOrderInfo.service_type}</div>
-            <div className="mb-1">{lastOrderInfo.duration}</div>
-            <div className="mb-2 flex justify-between">
-              <span>{lastOrderInfo.weight_kg > 0 ? `${lastOrderInfo.weight_kg} Kg` : ''} {lastOrderInfo.pcs_count > 0 ? `${lastOrderInfo.pcs_count} Pcs` : ''}</span>
-              <span>Rp {(Number(lastOrderInfo.amount) + Number(lastOrderInfo.discount_amount || 0) - Number(lastOrderInfo.delivery_fee || 0)).toLocaleString('id-ID')}</span>
-            </div>
+            {/* RINCIAN CART ATAU SINGLE ITEM STRUK */}
+            {lastOrderInfo.cartItems && lastOrderInfo.cartItems.length > 0 ? (
+              <div className="mb-2 space-y-1">
+                {lastOrderInfo.cartItems.map((item: any, idx: number) => (
+                  <div key={idx} className="flex justify-between items-start">
+                    <div>
+                      <span className="font-bold block">{item.name}</span>
+                      <span className="text-[8px]">{item.qty} {item.type.toUpperCase()} x Rp {Number(item.price).toLocaleString('id-ID')}</span>
+                      {item.note && <span className="block text-[8px] italic">({item.note})</span>}
+                    </div>
+                    <span className="font-bold">Rp {(item.price * item.qty).toLocaleString('id-ID')}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="mb-2">
+                <div className="font-bold">{lastOrderInfo.service_type}</div>
+                <div className="mb-1">{lastOrderInfo.duration}</div>
+                <div className="mb-2 flex justify-between">
+                  <span>{lastOrderInfo.weight_kg > 0 ? `${lastOrderInfo.weight_kg} Kg` : ''} {lastOrderInfo.pcs_count > 0 ? `${lastOrderInfo.pcs_count} Pcs` : ''}</span>
+                  <span>Rp {(Number(lastOrderInfo.amount) + Number(lastOrderInfo.discount_amount || 0) - Number(lastOrderInfo.delivery_fee || 0)).toLocaleString('id-ID')}</span>
+                </div>
+              </div>
+            )}
             
             {lastOrderInfo.discount_amount > 0 && <div className="mb-1 flex justify-between text-rose-700 font-bold"><span>Diskon</span><span>- Rp {Number(lastOrderInfo.discount_amount).toLocaleString('id-ID')}</span></div>}
             {lastOrderInfo.delivery_fee > 0 && <div className="mb-2 flex justify-between"><span>Ongkir</span><span>Rp {Number(lastOrderInfo.delivery_fee).toLocaleString('id-ID')}</span></div>}
@@ -1277,7 +1378,7 @@ useEffect(() => {
       <div className="print:hidden min-h-screen bg-slate-50 text-slate-800 p-4 md:p-8 flex flex-col items-center pb-24 md:pb-8">
         
         <div className="w-full max-w-xl text-center mb-4 md:mb-6">
-          <h1 className="text-xl md:text-2xl font-black text-emerald-600">📱 Portal Kasir</h1>
+          <h1 className="text-xl md:text-2xl font-black text-emerald-600">📱 Portal Kasir POS</h1>
           <p className="text-[10px] md:text-xs text-slate-500 font-bold mt-1 uppercase">📍 {outletName}</p>
         </div>
 
@@ -1395,17 +1496,76 @@ useEffect(() => {
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-2">
-                <select value={serviceType} onChange={(e) => setServiceType(e.target.value)} className="w-full border rounded-xl px-2 py-3 text-[10px] md:text-[11px] font-bold">{services.map((s, i) => <option key={i} value={s.name}>{s.name}</option>)}</select>
-                <select value={duration} onChange={(e) => setDuration(e.target.value)} className="w-full border rounded-xl px-2 py-3 text-[10px] md:text-[11px] text-amber-600 font-bold"><option value="Reguler (3 Hari)">Reguler (3 Hari)</option><option value="Oneday (1 Hari / 24 Jam)">Oneday 1 Hari (+50%)</option><option value="Express (6 Jam)">Express 6 Jam (+100%)</option><option value="Quick (3 Jam)">Quick 3 Jam (+200%)</option></select>
+              {/* DURAASI PENGERJAAN NOTA */}
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 mb-1 uppercase">Durasi Pengerjaan Nota Ini</label>
+                <select value={duration} onChange={(e) => setDuration(e.target.value)} className="w-full border rounded-xl px-3 py-2.5 text-xs font-bold text-amber-700 bg-amber-50/50">
+                  <option value="Reguler (3 Hari)">Reguler (3 Hari)</option>
+                  <option value="Oneday (1 Hari / 24 Jam)">Oneday 1 Hari (+50%)</option>
+                  <option value="Express (6 Jam)">Express 6 Jam (+100%)</option>
+                  <option value="Quick (3 Jam)">Quick 3 Jam (+200%)</option>
+                </select>
+              </div>
+
+              {/* KERANJANG LAYANAN MULTI-ITEM (DAPAT DIPAKAI ATAU SINGLE DIRECT INPUT) */}
+              <div className="bg-slate-50 border border-slate-200 p-3 rounded-2xl space-y-2.5">
+                <div className="flex justify-between items-center border-b pb-2">
+                  <span className="text-xs font-bold text-slate-800">🛒 Input Layanan & Items</span>
+                  <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-100">Bisa Multi-Item / Direct Input</span>
+                </div>
+
+                <div className="space-y-2">
+                  <select 
+                    value={selectedServiceInput || serviceType} 
+                    onChange={(e) => {
+                      setSelectedServiceInput(e.target.value);
+                      setServiceType(e.target.value);
+                    }} 
+                    className="w-full border rounded-xl p-2.5 text-xs font-bold bg-white"
+                  >
+                    {services.map((s, i) => <option key={i} value={s.name}>{s.name} ({s.type === 'pcs' ? 'Satuan/Pcs' : 'Kiloan/Kg'})</option>)}
+                    <option value="Bedcover Double">Bedcover Double (Satuan/Pcs)</option>
+                    <option value="Bedcover Single">Bedcover Single (Satuan/Pcs)</option>
+                    <option value="Sprei Single">Sprei Single (Satuan/Pcs)</option>
+                    <option value="Jaket / Jas / Sepatu">Jaket / Jas / Sepatu (Satuan/Pcs)</option>
+                  </select>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <input type="number" step="0.1" placeholder="Berat (Kg)" value={inputQtyKg || weightKg} onChange={(e) => { setInputQtyKg(e.target.value); setWeightKg(e.target.value); }} className="w-full border rounded-xl p-2 text-xs bg-white font-bold" />
+                    <input type="number" placeholder="Jumlah (Pcs)" value={inputQtyPcs || pcsCount} onChange={(e) => { setInputQtyPcs(e.target.value); setPcsCount(e.target.value); }} className="w-full border rounded-xl p-2 text-xs bg-white font-bold" />
+                  </div>
+
+                  <input type="text" placeholder="Catatan khusus item ini (misal: Kantong A / Kemeja Putih)" value={inputItemNote} onChange={(e) => setInputItemNote(e.target.value)} className="w-full border rounded-xl p-2 text-xs bg-white" />
+
+                  <button type="button" onClick={handleAddToCart} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl text-xs shadow transition flex items-center justify-center gap-1">
+                    ➕ TAMBAHKAN KE DAFTAR KERANJANG NOTA
+                  </button>
+                </div>
+
+                {/* ITEM KERANJANG TERINPUT */}
+                {cartItems.length > 0 && (
+                  <div className="space-y-1.5 pt-2 border-t">
+                    <p className="text-[10px] font-bold text-slate-500 uppercase">Daftar Item Dalam Nota Ini ({cartItems.length}):</p>
+                    {cartItems.map((item) => (
+                      <div key={item.id} className="bg-white p-2 rounded-xl border flex justify-between items-center text-xs shadow-sm">
+                        <div>
+                          <p className="font-bold text-slate-800">{item.name}</p>
+                          <p className="text-[10px] text-slate-500 font-mono">
+                            {item.qty} {item.type.toUpperCase()} x Rp {item.price.toLocaleString('id-ID')}
+                            {item.note && <span className="text-indigo-600 font-sans italic block">Note: {item.note}</span>}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-black text-emerald-600 font-mono">Rp {(item.price * item.qty).toLocaleString('id-ID')}</span>
+                          <button type="button" onClick={() => handleRemoveFromCart(item.id)} className="text-rose-500 hover:bg-rose-50 p-1 rounded-lg font-bold text-xs">✕</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {orderType === 'Online' && <input type="number" placeholder="Biaya Ongkir (Rp)" value={deliveryFee} onChange={(e) => setDeliveryFee(e.target.value)} className="w-full border-indigo-200 bg-indigo-50 rounded-xl px-4 py-3 text-sm font-bold" />}
-
-              <div className="grid grid-cols-2 gap-2">
-                <input type="number" placeholder="Berat (Kg)" value={weightKg} onChange={(e) => setWeightKg(e.target.value)} className="w-full border rounded-xl px-3 py-3 text-xs md:text-sm" />
-                <input type="number" placeholder="Jumlah (Pcs)" value={pcsCount} onChange={(e) => setPcsCount(e.target.value)} className="w-full border rounded-xl px-3 py-3 text-xs md:text-sm" />
-              </div>
 
               <div className="bg-rose-50/60 border border-rose-200 p-2.5 rounded-xl flex gap-2 items-center">
                 <span className="text-xs font-bold text-rose-700 whitespace-nowrap">🏷️ Diskon:</span>
@@ -1413,9 +1573,9 @@ useEffect(() => {
                 <input type="number" placeholder={discountType === 'percent' ? '10 (%)' : '5000 (Rp)'} value={discountValue} onChange={(e) => setDiscountValue(e.target.value)} className="w-full border border-rose-300 rounded-lg px-3 py-2 text-xs font-bold text-rose-700" />
               </div>
 
-              <input type="text" placeholder="Catatan Khusus (Noda, dll)" value={notes} onChange={(e) => setNotes(e.target.value)} className="w-full border rounded-xl px-4 py-3 text-xs" />
+              <input type="text" placeholder="Catatan Umum Nota Ini (Noda, dll)" value={notes} onChange={(e) => setNotes(e.target.value)} className="w-full border rounded-xl px-4 py-3 text-xs" />
               
-              <div><label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">Total Bayar Final (Rp)</label><input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} className="w-full bg-slate-50 border rounded-xl px-4 py-3.5 text-2xl font-black text-emerald-600 text-center" required /></div>
+              <div><label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">Total Bayar Final (Rp) (Terhitung Otomatis)</label><input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} className="w-full bg-slate-50 border rounded-xl px-4 py-3.5 text-2xl font-black text-emerald-600 text-center" required /></div>
 
               <div>
                 <label className="block text-[10px] font-bold text-slate-500 mb-1 uppercase">Metode Pembayaran</label>
