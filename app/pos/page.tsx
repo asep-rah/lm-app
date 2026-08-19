@@ -333,7 +333,6 @@ export default function POSPage() {
         const currentUnitPrice = Math.round(itemBasePrice * durationMultiplier);
         totalSubtotal += currentUnitPrice * item.qty;
       });
-    }
     } else {
       // B. Hitung dari Form Single Input Langsung (Direct Input)
       const targetSvcName = selectedServiceInput || serviceType;
