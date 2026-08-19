@@ -93,14 +93,13 @@ export default function POSPage() {
   const [customerDeposit, setCustomerDeposit] = useState<number | null>(null);
   const [customerHistory, setCustomerHistory] = useState<any[]>([]);
   
-  // STATE SINGLE ITEM (LEGACY COMPATIBILITY)
   const [serviceType, setServiceType] = useState('');
   const [duration, setDuration] = useState('Reguler (3 Hari)');
   const [weightKg, setWeightKg] = useState('');
   const [pcsCount, setPcsCount] = useState('');
 
-  // STATE KERANJANG MULTI-ITEM BARU (BISA INPUT BEBERAPA ITEM)
-  const [cartItems, setCartItems] = useState<Array<{ id: string; name: string; type: 'kg' | 'pcs'; price: number; qty: number; note: string }>>([]);
+  // STATE KERANJANG MULTI-ITEM BARU
+  const [cartItems, setCartItems] = useState<Array<{ id: string; name: string; type: 'kg' | 'pcs'; basePrice: number; price: number; qty: number; note: string }>>([]);
   const [selectedServiceInput, setSelectedServiceInput] = useState('');
   const [inputQtyKg, setInputQtyKg] = useState('');
   const [inputQtyPcs, setInputQtyPcs] = useState('');
@@ -181,10 +180,8 @@ export default function POSPage() {
   });
 
   const [monthlyRevenue, setMonthlyRevenue] = useState(0);
-  const [onlineRevenue, setOnlineRevenue] = useState(0);
-  const [offlineRevenue, setOfflineRevenue] = useState(0);
 
-  // TAMBAH ITEM KE KERANJANG MULTI-ITEM (DENGAN KALKULASI DURASI)
+  // TAMBAH ITEM KE KERANJANG
   const handleAddToCart = () => {
     const targetService = selectedServiceInput || serviceType;
     if (!targetService) return alert('⚠️ Pilih jenis layanan terlebih dahulu!');
@@ -206,7 +203,6 @@ export default function POSPage() {
       else basePrice = 7000;
     }
 
-    // Tentukan pengali durasi harian/jam
     let durationMultiplier = 1.0;
     if (duration.includes('Oneday') || duration.includes('1 Hari')) durationMultiplier = 1.5;
     if (duration.includes('Express') || duration.includes('6 Jam')) durationMultiplier = 2.0;
@@ -236,19 +232,11 @@ export default function POSPage() {
     setPcsCount('');
     setInputItemNote('');
   };
-    setCartItems(prev => [...prev, newItem]);
-    setInputQtyKg('');
-    setInputQtyPcs('');
-    setWeightKg('');
-    setPcsCount('');
-    setInputItemNote('');
-  };
 
   const handleRemoveFromCart = (id: string) => {
     setCartItems(cartItems.filter(item => item.id !== id));
   };
 
-  // LOOKUP NAMA ASLI DARI DATABASE CUSTOMERS UNTUK MODAL DETAIL
   const handleOpenDetailModal = async (tx: any) => {
     setSelectedTxDetail(tx);
     setOrderType('Online');
@@ -286,7 +274,6 @@ export default function POSPage() {
     setEditAmount(tx.amount && Number(tx.amount) > 0 ? String(tx.amount) : String(computedAmt));
   };
 
-  // KALKULASI MODAL EDIT
   useEffect(() => {
     if (!selectedTxDetail) return;
 
@@ -317,7 +304,7 @@ export default function POSPage() {
     setEditAmount(grandTotal.toString());
   }, [editServiceType, editDuration, editWeightKg, editPcsCount, editDeliveryFee, editSatuanFee]);
 
-  // KALKULASI OTOMATIS REALTIME FORM UTAMA POS (SINGLE ATAL MULTI-ITEM)
+  // KALKULASI OTOMATIS REALTIME FORM UTAMA POS
   useEffect(() => {
     let durationMultiplier = 1.0;
     if (duration.includes('Oneday') || duration.includes('1 Hari')) durationMultiplier = 1.5;
@@ -326,7 +313,6 @@ export default function POSPage() {
 
     let totalSubtotal = 0;
 
-    // A. Hitung dari Keranjang Multi-Item
     if (cartItems.length > 0) {
       cartItems.forEach(item => {
         const itemBasePrice = item.basePrice || item.price;
@@ -334,7 +320,6 @@ export default function POSPage() {
         totalSubtotal += currentUnitPrice * item.qty;
       });
     } else {
-      // B. Hitung dari Form Single Input Langsung (Direct Input)
       const targetSvcName = selectedServiceInput || serviceType;
       const activeSvc = services.find(
         (s) => (s.name || '').trim().toLowerCase() === (targetSvcName || '').trim().toLowerCase()
@@ -359,7 +344,6 @@ export default function POSPage() {
       totalSubtotal = Math.round(baseUnitPrice * qty * durationMultiplier);
     }
 
-    // Hitung Diskon & Ongkir
     let discVal = Number(discountValue) || 0;
     let computedDiscount = 0;
     if (discountType === 'percent') {
@@ -375,7 +359,6 @@ export default function POSPage() {
     setAmount(grandTotal > 0 ? grandTotal.toString() : '');
   }, [cartItems, duration, serviceType, selectedServiceInput, weightKg, pcsCount, inputQtyKg, inputQtyPcs, discountType, discountValue, deliveryFee, selectedOutlet, services]);
 
-  // FETCH RIWAYAT LOG PENGERJAAN
   useEffect(() => {
     if (selectedTxDetail?.id) {
       supabase.from('work_logs')
@@ -446,7 +429,6 @@ export default function POSPage() {
     loadInit();
   }, []);
 
-  // REALTIME ORDER LISTENER
   useEffect(() => {
     if (!selectedOutlet) return;
     const subscription = supabase
@@ -543,20 +525,17 @@ export default function POSPage() {
     const { data: txData } = await supabase.from('transactions').select('amount, order_type, created_at').eq('outlet_id', selectedOutlet);
     const { data: memLogsAll } = await supabase.from('membership_logs').select('price, order_type, created_at').eq('outlet_id', selectedOutlet);
 
-    let totalRev = 0; let onlineRev = 0; let offlineRev = 0;
+    let totalRev = 0;
     txData?.forEach((tx) => {
       const d = new Date(tx.created_at);
-      if (d.getMonth() === currentMonth && d.getFullYear() === currentYear) { const amt = Number(tx.amount) || 0; totalRev += amt; if (tx.order_type === 'Online') onlineRev += amt; else offlineRev += amt; }
+      if (d.getMonth() === currentMonth && d.getFullYear() === currentYear) { totalRev += Number(tx.amount) || 0; }
     });
 
     memLogsAll?.forEach((ml) => {
       const d = new Date(ml.created_at);
-      if (d.getMonth() === currentMonth && d.getFullYear() === currentYear) { 
-        const prc = Number(ml.price) || 0; totalRev += prc; 
-        if (ml.order_type === 'Online') onlineRev += prc; else offlineRev += prc;
-      }
+      if (d.getMonth() === currentMonth && d.getFullYear() === currentYear) { totalRev += Number(ml.price) || 0; }
     });
-    setMonthlyRevenue(totalRev); setOnlineRevenue(onlineRev); setOfflineRevenue(offlineRev);
+    setMonthlyRevenue(totalRev);
 
     const { data: invData } = await supabase.from('inventory').select('*').eq('outlet_id', selectedOutlet); setInventory(invData || []);
     const { data: logs } = await supabase.from('work_logs').select('*').eq('employee_name', employeeName);
@@ -639,12 +618,12 @@ export default function POSPage() {
           if (distanceMeters <= maxRadius) {
             resolve(true);
           } else {
-            alert(`❌ Absen Ditolak!\n\nPosisi Anda terlalu jauh dari lokasi Outlet.\nJarak Anda saat ini: ${Math.round(distanceMeters)} meter (Maksimal: ${maxRadius} meter).`);
+            alert(`❌ Absen Ditolak!\nJarak Anda saat ini: ${Math.round(distanceMeters)} meter (Maksimal: ${maxRadius} meter).`);
             resolve(false);
           }
         },
         (error) => {
-          alert('⚠️ Gagal mengambil lokasi GPS! Pastikan GPS / Lokasi di HP Anda sudah dinyalakan.');
+          alert('⚠️ Gagal mengambil lokasi GPS! Pastikan GPS HP Anda aktif.');
           resolve(false);
         },
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
@@ -655,10 +634,7 @@ export default function POSPage() {
   const handleClockIn = async () => {
     setIsSubmitting(true);
     const isValidGPS = await verifyOutletGPS();
-    if (!isValidGPS) {
-      setIsSubmitting(false);
-      return;
-    }
+    if (!isValidGPS) { setIsSubmitting(false); return; }
 
     const todayStr = new Date().toLocaleDateString('en-CA');
     const { error } = await supabase.from('attendance_logs').insert([{
@@ -668,37 +644,23 @@ export default function POSPage() {
       check_in: new Date().toISOString()
     }]);
 
-    if (!error) {
-      alert('✅ Absen Masuk Berhasil! Selamat Bekerja.');
-      refreshData();
-    } else {
-      alert('❌ Gagal: ' + error.message);
-    }
+    if (!error) { alert('✅ Absen Masuk Berhasil!'); refreshData(); } else alert('❌ Gagal: ' + error.message);
     setIsSubmitting(false);
   };
 
   const handleClockOut = async () => {
     setIsSubmitting(true);
     const isValidGPS = await verifyOutletGPS();
-    if (!isValidGPS) {
-      setIsSubmitting(false);
-      return;
-    }
+    if (!isValidGPS) { setIsSubmitting(false); return; }
 
     const { error } = await supabase.from('attendance_logs').update({
       check_out: new Date().toISOString()
     }).eq('id', todayAttendance.id);
 
-    if (!error) {
-      alert('✅ Absen Pulang Berhasil! Terima kasih.');
-      refreshData();
-    } else {
-      alert('❌ Gagal: ' + error.message);
-    }
+    if (!error) { alert('✅ Absen Pulang Berhasil!'); refreshData(); } else alert('❌ Gagal: ' + error.message);
     setIsSubmitting(false);
   };
 
-  // SUBMIT TRANSAKSI BARU POS (MENDUKUNG SINGLE DAN MULTI-ITEM CART)
   const handleTransactionSubmit = async (e: React.FormEvent) => {
     e.preventDefault(); 
     if (!selectedOutlet || !amount) return;
@@ -710,14 +672,12 @@ export default function POSPage() {
     let depositDeductionAmount = 0;
 
     if (paymentMethod === 'Deposit Saldo') {
-      if (!normalizedPhone) return alert('⚠️ Nomor WA Pelanggan wajib diisi untuk transaksi deposit!');
+      if (!normalizedPhone) return alert('⚠️ Nomor WA Pelanggan wajib diisi!');
       const { data: custData } = await supabase.from('customers').select('deposit_balance').eq('phone', normalizedPhone).limit(1);
-      if (!custData || custData.length === 0) return alert('❌ Pelanggan belum terdaftar sebagai Member!');
+      if (!custData || custData.length === 0) return alert('❌ Pelanggan belum terdaftar!');
       const currentBal = Number(custData[0].deposit_balance) || 0;
 
-      if (currentBal < totalPay) {
-        return alert(`❌ Saldo Deposit Kurang! (Sisa: Rp ${currentBal.toLocaleString('id-ID')}).\n\n💡 Silakan gunakan metode '🔀 Split Payment (Kombinasi 2 Metode)' untuk membayar sisa tagihannya dengan Tunai/QRIS!`);
-      }
+      if (currentBal < totalPay) return alert(`❌ Saldo Deposit Kurang! (Sisa: Rp ${currentBal.toLocaleString('id-ID')}).`);
       
       depositDeductionAmount = totalPay;
       finalPaymentMethodLabel = 'Deposit Member';
@@ -727,20 +687,16 @@ export default function POSPage() {
       const amt1 = Number(splitAmount1) || 0;
       const amt2 = Math.max(0, totalPay - amt1);
 
-      if (amt1 <= 0 || amt1 >= totalPay) {
-        return alert('⚠️ Nominal Pembayaran Metode 1 harus lebih besar dari 0 dan kurang dari total tagihan!');
-      }
+      if (amt1 <= 0 || amt1 >= totalPay) return alert('⚠️ Nominal Metode 1 tidak valid!');
 
       if (splitMethod1 === 'Deposit Saldo' || splitMethod2 === 'Deposit Saldo') {
-        if (!normalizedPhone) return alert('⚠️ Nomor WA Pelanggan wajib diisi untuk transaksi yang menggunakan Deposit Member!');
+        if (!normalizedPhone) return alert('⚠️ Nomor WA Pelanggan wajib diisi!');
         const { data: custData } = await supabase.from('customers').select('deposit_balance').eq('phone', normalizedPhone).limit(1);
-        if (!custData || custData.length === 0) return alert('❌ Pelanggan belum terdaftar sebagai Member!');
+        if (!custData || custData.length === 0) return alert('❌ Pelanggan belum terdaftar!');
         const currentBal = Number(custData[0].deposit_balance) || 0;
 
         const neededDeposit = splitMethod1 === 'Deposit Saldo' ? amt1 : amt2;
-        if (currentBal < neededDeposit) {
-          return alert(`❌ Saldo Deposit Kurang! Sisa Saldo: Rp ${currentBal.toLocaleString('id-ID')}, namun Anda mencoba memotong Rp ${neededDeposit.toLocaleString('id-ID')}.`);
-        }
+        if (currentBal < neededDeposit) return alert(`❌ Saldo Deposit Kurang! Sisa: Rp ${currentBal.toLocaleString('id-ID')}`);
         depositDeductionAmount = neededDeposit;
       }
 
@@ -754,17 +710,12 @@ export default function POSPage() {
       const currentBal = Number(custData?.[0]?.deposit_balance) || 0;
       const updatedBalance = currentBal - depositDeductionAmount;
 
-      const { error: updateErr } = await supabase.from('customers').update({ deposit_balance: updatedBalance }).eq('phone', normalizedPhone);
-      if (updateErr) {
-        setIsSubmitting(false);
-        return alert('❌ Gagal memotong saldo deposit: ' + updateErr.message);
-      }
+      await supabase.from('customers').update({ deposit_balance: updatedBalance }).eq('phone', normalizedPhone);
       setCustomerDeposit(updatedBalance);
     }
 
     const generatedResi = 'TRX-' + Math.floor(100000 + Math.random() * 900000);
 
-    // KELOLA APABILA MENGGUNAKAN MULTI-ITEM KERANJANG ATAU SINGLE INPUT DIRECT
     let primaryServiceLabel = selectedServiceInput || serviceType || 'Cuci Kering Gosok';
     let totalKgSum = Number(weightKg) || Number(inputQtyKg) || 0;
     let totalPcsSum = Number(pcsCount) || Number(inputQtyPcs) || 0;
@@ -833,7 +784,6 @@ export default function POSPage() {
     setIsSubmitting(false);
   };
 
-  // SYNC PERUBAHAN DATA TRANSAKSI POS
   const handleSaveTxChanges = async (needsCustomerApproval: boolean) => {
     if (!selectedTxDetail) return;
     setIsSubmitting(true);
@@ -861,20 +811,14 @@ export default function POSPage() {
     if (!error) {
       const updatedTx = { ...selectedTxDetail, ...payload };
       setSelectedTxDetail(updatedTx);
-      if (needsCustomerApproval) {
-        alert('⚠️ Perubahan berhasil disimpan & dikirim ke CS untuk dikonfirmasi ke Customer!');
-      } else {
-        alert('✅ Data transaksi berhasil diperbarui!');
-      }
+      alert(needsCustomerApproval ? '⚠️ Disimpan & dikirim ke CS!' : '✅ Transaksi diperbarui!');
       refreshData();
-    } else {
-      alert('❌ Gagal memperbarui transaksi: ' + error.message);
-    }
+    } else alert('❌ Gagal memperbarui: ' + error.message);
     setIsSubmitting(false);
   };
 
   const handleAddMembership = async (e: React.FormEvent) => {
-    e.preventDefault(); if (!selectedOutlet || !memberPhone || !memberName) return alert('Lengkapi data member!'); setIsSubmitting(true);
+    e.preventDefault(); if (!selectedOutlet || !memberPhone || !memberName) return alert('Lengkapi data!'); setIsSubmitting(true);
     const normalizedPhone = cleanPhone(memberPhone);
     let price = 0; let balanceAdded = 0; let commission = 0;
     if (memberPackage === 'Silver') { price = 300000; balanceAdded = 320000; commission = 5000; }
@@ -887,17 +831,15 @@ export default function POSPage() {
     if (existingCust && existingCust.length > 0) {
       commissionOwner = existingCust[0].registered_by || employeeName;
       newBalance = (Number(existingCust[0].deposit_balance) || 0) + balanceAdded;
-      const { error: custErr } = await supabase.from('customers').update({ deposit_balance: newBalance, name: memberName.trim() }).eq('phone', normalizedPhone);
-      if (custErr) { alert('❌ Gagal update member: ' + custErr.message); setIsSubmitting(false); return; }
+      await supabase.from('customers').update({ deposit_balance: newBalance, name: memberName.trim() }).eq('phone', normalizedPhone);
     } else {
-      const { error: custErr } = await supabase.from('customers').insert([{ phone: normalizedPhone, name: memberName.trim(), deposit_balance: newBalance, registered_by: employeeName }]);
-      if (custErr) { alert('❌ Gagal buat member baru: ' + custErr.message); setIsSubmitting(false); return; }
+      await supabase.from('customers').insert([{ phone: normalizedPhone, name: memberName.trim(), deposit_balance: newBalance, registered_by: employeeName }]);
     }
 
     const { error: logErr } = await supabase.from('membership_logs').insert([{ outlet_id: selectedOutlet, processed_by: employeeName, commission_owner: commissionOwner, customer_phone: normalizedPhone, package_name: memberPackage, price: price, balance_added: balanceAdded, commission: commission, order_type: memberOrderType }]);
     if (!logErr) {
-      setMemberPhone(''); setMemberName(''); setSuccessMsg(`✅ Member Top-Up (${memberOrderType}) Berhasil! Total Saldo: Rp ${newBalance.toLocaleString('id-ID')}`); refreshData(); setTimeout(() => setSuccessMsg(''), 5000); 
-    } else alert('❌ Gagal catat log member: ' + logErr.message);
+      setMemberPhone(''); setMemberName(''); setSuccessMsg(`✅ Top-Up Berhasil! Saldo: Rp ${newBalance.toLocaleString('id-ID')}`); refreshData(); setTimeout(() => setSuccessMsg(''), 5000); 
+    } else alert('❌ Gagal: ' + logErr.message);
     setIsSubmitting(false);
   };
 
@@ -916,26 +858,16 @@ export default function POSPage() {
 
   const handleUpdateStatus = async (order: any, nextStatus: string) => {
     setIsSubmitting(true);
-
     const updateObj: any = { status: nextStatus };
     const s = (nextStatus || '').toLowerCase();
 
     if (s.includes('sortir')) updateObj.by_sortir = employeeName;
-    else if (s.includes('cuci') || s.includes('mencuci')) updateObj.by_cuci = employeeName;
-    else if (s.includes('kering') || s.includes('pengeringan')) updateObj.by_kering = employeeName;
-    else if (s.includes('setrika') || s.includes('gosok')) updateObj.by_setrika = employeeName;
-    else if (s.includes('pack') || s.includes('packing')) updateObj.by_packing = employeeName;
+    else if (s.includes('cuci')) updateObj.by_cuci = employeeName;
+    else if (s.includes('kering')) updateObj.by_kering = employeeName;
+    else if (s.includes('setrika')) updateObj.by_setrika = employeeName;
+    else if (s.includes('pack')) updateObj.by_packing = employeeName;
 
-    let { error: txErr } = await supabase.from('transactions').update(updateObj).eq('id', order.id);
-
-    if (txErr) {
-      const res = await supabase.from('transactions').update({ status: nextStatus }).eq('id', order.id);
-      if (res.error) {
-        alert('❌ Gagal update status: ' + res.error.message);
-        setIsSubmitting(false);
-        return;
-      }
-    }
+    await supabase.from('transactions').update(updateObj).eq('id', order.id);
 
     if (nextStatus !== 'Siap Diambil' && nextStatus !== 'Selesai') {
       await supabase.from('work_logs').insert([{
@@ -948,24 +880,8 @@ export default function POSPage() {
       }]);
     }
 
-    if (nextStatus === 'Mencuci' && order.weight_kg > 0) {
-      const { data: invData } = await supabase.from('inventory').select('id, stock_ml_gram').eq('outlet_id', order.outlet_id).eq('item_name', 'Detergen Premium (ml)').single();
-      if (invData) await supabase.from('inventory').update({ stock_ml_gram: Number(invData.stock_ml_gram) - order.weight_kg * 50 }).eq('id', invData.id);
-    }
-
     setSuccessMsg(`✅ Update ke: ${nextStatus}`);
     await refreshData();
-
-    if (selectedTxDetail && selectedTxDetail.id === order.id) {
-      setSelectedTxDetail((prev: any) => ({ ...prev, ...updateObj, status: nextStatus }));
-
-      const { data: logsData } = await supabase.from('work_logs')
-        .select('*')
-        .eq('transaction_id', order.id)
-        .order('created_at', { ascending: true });
-      if (logsData) setTxWorkLogs(logsData);
-    }
-
     setTimeout(() => setSuccessMsg(''), 2000);
     setIsSubmitting(false);
   };
@@ -977,18 +893,17 @@ export default function POSPage() {
   };
 
   const handlePickupFinish = async (order: any) => {
-    if (!confirm(`Maksimal komplain 1x24 jam dengan nota resmi.\nYakin serahkan cucian ${order.customer_name}?`)) return;
+    if (!confirm(`Serahkan cucian ${order.customer_name}?`)) return;
     setIsSubmitting(true); await supabase.from('transactions').update({ status: 'Selesai' }).eq('id', order.id);
-    setSuccessMsg('✅ Diserahkan ke pelanggan!'); refreshData(); setTimeout(() => setSuccessMsg(''), 3000); setIsSubmitting(false);
+    setSuccessMsg('✅ Diserahkan!'); refreshData(); setTimeout(() => setSuccessMsg(''), 3000); setIsSubmitting(false);
   };
 
   const handleRequestDelete = async (order: any) => {
     const reason = prompt(`Alasan hapus resi ${order.receipt_number}:`);
-    if (reason === null) return; if (!reason.trim()) return alert('⚠️ Mohon tulis alasan!');
+    if (!reason?.trim()) return alert('⚠️ Mohon tulis alasan!');
     setIsSubmitting(true);
-    const { error } = await supabase.from('transactions').update({ delete_requested: true, delete_reason: reason }).eq('id', order.id);
-    if (!error) { alert('✅ Permintaan hapus dikirim!'); refreshData(); } else alert('❌ Gagal: ' + error.message);
-    setIsSubmitting(false);
+    await supabase.from('transactions').update({ delete_requested: true, delete_reason: reason }).eq('id', order.id);
+    alert('✅ Permintaan hapus dikirim!'); refreshData(); setIsSubmitting(false);
   };
 
   const renderNextStepButton = (order: any) => {
@@ -1009,7 +924,7 @@ export default function POSPage() {
     }
     if (order.status === 'Pengeringan') {
       if (hasSetrika) return <button onClick={() => handleUpdateStatus(order, 'Setrika')} className="w-full bg-orange-500 text-xs font-bold py-3 rounded-lg text-white shadow">👔 Setrika</button>;
-      return <button onClick={() => handleUpdateStatus(order, 'Packing')} className="w-full bg-emerald-500 text-xs font-bold py-3 rounded-lg text-white shadow">📦 Packing (Tanpa Setrika)</button>;
+      return <button onClick={() => handleUpdateStatus(order, 'Packing')} className="w-full bg-emerald-500 text-xs font-bold py-3 rounded-lg text-white shadow">📦 Packing</button>;
     }
     if (order.status === 'Setrika') return <button onClick={() => handleUpdateStatus(order, 'Packing')} className="w-full bg-emerald-500 text-xs font-bold py-3 rounded-lg text-white shadow">📦 Packing</button>;
     if (order.status === 'Packing') return <button onClick={() => { setSelectedOrderForRack(order); setShowRackModal(true); }} className="w-full bg-blue-600 text-xs font-bold py-3 rounded-lg text-white shadow">🗄️ Simpan ke Rak</button>;
@@ -1020,8 +935,6 @@ export default function POSPage() {
   let tenureBonusRate = 0; let tenureBonusLabel = '0%';
   if (calcStats.productionPay >= 1000000) { if (tenureMonths >= 13) { tenureBonusRate = 0.20; tenureBonusLabel = '20%'; } else if (tenureMonths >= 7) { tenureBonusRate = 0.10; tenureBonusLabel = '10%'; } else if (tenureMonths >= 4) { tenureBonusRate = 0.05; tenureBonusLabel = '5%'; } }
   const tenureBonusAmount = Math.round(calcStats.productionPay * tenureBonusRate);
-  const bonusInfo = monthlyRevenue > 50000000 ? { rate: 0.08, label: '8%' } : monthlyRevenue > 40000000 ? { rate: 0.05, label: '5%' } : monthlyRevenue > 30000000 ? { rate: 0.03, label: '3%' } : monthlyRevenue > 20000000 ? { rate: 0.02, label: '2%' } : { rate: 0.00, label: '0%' };
-  const bonusOmsetAmount = Math.round(monthlyRevenue * bonusInfo.rate);
   const totalTakeHomePay = Math.max(0, baseSalaryUsed + tenureBonusAmount + calcStats.membershipBonus - empLoansDeduction - empPenaltiesDeduction);
 
   const handlePrintReceiptAuto = () => { setPrintMode('receipt'); setTimeout(() => window.print(), 100); };
@@ -1224,7 +1137,6 @@ export default function POSPage() {
               </button>
             </div>
 
-            {/* EDIT NAMA & HP PELANGGAN */}
             <div className="grid grid-cols-2 gap-3 text-xs">
               <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100">
                 <span className="text-[9px] text-slate-400 font-bold block uppercase mb-1">Nama Pelanggan</span>
@@ -1247,7 +1159,6 @@ export default function POSPage() {
               </div>
             </div>
 
-            {/* FORM EDIT CULIAN & BIAYA */}
             <div className="bg-indigo-50/60 p-3.5 rounded-2xl border border-indigo-100 space-y-3 text-xs">
               <div className="grid grid-cols-2 gap-2">
                 <div>
@@ -1281,7 +1192,6 @@ export default function POSPage() {
                 </div>
               </div>
 
-              {/* INPUT BERAT, PCS, ONGKIR, DAN BIAYA SATUAN */}
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="font-bold text-indigo-950 block mb-1">Berat (Kg)</label>
@@ -1352,7 +1262,6 @@ export default function POSPage() {
               </div>
             </div>
 
-            {/* TIM CREW PENGERJAAN */}
             <div className="space-y-1.5">
               <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-wider">👥 Staf Pengerjaan</h4>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[10px]">
@@ -1364,7 +1273,6 @@ export default function POSPage() {
               </div>
             </div>
 
-            {/* TOMBOL AKSI MODAL */}
             <div className="space-y-2 pt-2 border-t">
               <button
                 onClick={() => handleSaveTxChanges(true)}
@@ -1514,7 +1422,6 @@ export default function POSPage() {
                 </div>
               )}
 
-              {/* DURAASI PENGERJAAN NOTA */}
               <div>
                 <label className="block text-[10px] font-bold text-slate-500 mb-1 uppercase">Durasi Pengerjaan Nota Ini</label>
                 <select value={duration} onChange={(e) => setDuration(e.target.value)} className="w-full border rounded-xl px-3 py-2.5 text-xs font-bold text-amber-700 bg-amber-50/50">
@@ -1525,7 +1432,6 @@ export default function POSPage() {
                 </select>
               </div>
 
-              {/* KERANJANG LAYANAN MULTI-ITEM (DAPAT DIPAKAI ATAU SINGLE DIRECT INPUT) */}
               <div className="bg-slate-50 border border-slate-200 p-3 rounded-2xl space-y-2.5">
                 <div className="flex justify-between items-center border-b pb-2">
                   <span className="text-xs font-bold text-slate-800">🛒 Input Layanan & Items</span>
@@ -1560,7 +1466,6 @@ export default function POSPage() {
                   </button>
                 </div>
 
-                {/* ITEM KERANJANG TERINPUT DENGAN HARGA DURASI AUTOMATIS */}
                 {cartItems.length > 0 && (
                   <div className="space-y-1.5 pt-2 border-t">
                     <p className="text-[10px] font-bold text-slate-500 uppercase">Daftar Item Dalam Nota Ini ({cartItems.length}):</p>
