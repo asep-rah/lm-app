@@ -239,15 +239,15 @@ export default function CustomerDashboardPage() {
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 p-4 md:p-6 pb-28 max-w-md mx-auto relative font-sans">
       
-      {/* HEADER TOP BAR - GRAB STYLE */}
+      {/* HEADER TOP BAR */}
       <div className="bg-white rounded-2xl p-3.5 shadow-sm border border-slate-200/80 flex justify-between items-center mb-4">
         <div className="flex items-center gap-2.5">
           <div className="w-10 h-10 bg-blue-600 text-white rounded-xl flex items-center justify-center font-black text-xl shadow-md shadow-blue-200">
             🧺
           </div>
           <div>
-            <h1 className="text-base font-extrabold text-slate-900 tracking-tight leading-none">GrabExpress</h1>
-            <p className="text-[10px] text-blue-600 font-bold tracking-wide uppercase mt-0.5">Laundry Delivery</p>
+            <h1 className="text-base font-extrabold text-slate-900 tracking-tight leading-none">Laundrivery</h1>
+            <p className="text-[10px] text-blue-600 font-bold tracking-wide uppercase mt-0.5">Express Laundry Delivery</p>
           </div>
         </div>
         {customerData && (
@@ -281,15 +281,15 @@ export default function CustomerDashboardPage() {
         </form>
       ) : (
         <>
-          {/* TAB 1: HOME BERANDA ALAN GRABPAY WALLET */}
+          {/* TAB 1: HOME BERANDA */}
           {activeTab === 'home' && (
             <div className="space-y-4">
               
-              {/* WALLET CARD ALA GRABPAY / OVO */}
+              {/* WALLET CARD */}
               <div className="bg-gradient-to-r from-blue-600 via-blue-700 to-indigo-800 rounded-3xl p-5 text-white shadow-xl shadow-blue-200/50 space-y-4 relative overflow-hidden">
                 <div className="flex justify-between items-start relative z-10">
                   <div>
-                    <span className="text-[10px] uppercase font-bold tracking-widest text-blue-200 block">GrabExpress Wallet</span>
+                    <span className="text-[10px] uppercase font-bold tracking-widest text-blue-200 block">Laundrivery Wallet</span>
                     <h2 className="text-lg font-extrabold text-white mt-0.5">{customerData.name || 'Pelanggan Setia'}</h2>
                     <p className="text-[11px] font-mono text-blue-100 opacity-90">{customerPhone}</p>
                   </div>
@@ -309,7 +309,7 @@ export default function CustomerDashboardPage() {
                 </div>
               </div>
 
-              {/* ACTION BUTTON GRID - GRAB STYLE */}
+              {/* ACTION BUTTON GRID */}
               <div className="grid grid-cols-2 gap-3">
                 <button onClick={() => setActiveTab('order')} className="bg-white border border-slate-200 p-4 rounded-3xl flex items-center gap-3 hover:border-blue-500 transition shadow-sm text-left">
                   <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center text-2xl font-black">
@@ -366,7 +366,7 @@ export default function CustomerDashboardPage() {
             </div>
           )}
 
-          {/* TAB 2: ORDER LAUNDRY FORM GRAB DELIVERY */}
+          {/* TAB 2: ORDER LAUNDRY FORM */}
           {activeTab === 'order' && (
             <form onSubmit={handleOrderSubmit} className="space-y-4">
               <div className="bg-white border border-slate-200 p-5 rounded-3xl space-y-4 shadow-sm">
@@ -526,7 +526,7 @@ export default function CustomerDashboardPage() {
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-1.5 text-xs">
                   <div className="flex justify-between text-slate-500 font-medium"><span>Subtotal Kiloan:</span><span>Rp {kiloanSubtotal.toLocaleString('id-ID')}</span></div>
                   <div className="flex justify-between text-slate-500 font-medium"><span>Subtotal Satuan:</span><span>Rp {satuanSubtotal.toLocaleString('id-ID')}</span></div>
-                  <div className="flex justify-between text-slate-500 font-medium"><span>Ongkir GrabExpress:</span><span>Rp {deliveryFee.toLocaleString('id-ID')}</span></div>
+                  <div className="flex justify-between text-slate-500 font-medium"><span>Ongkir Penjemputan:</span><span>Rp {deliveryFee.toLocaleString('id-ID')}</span></div>
                   <div className="flex justify-between font-black text-blue-600 text-sm border-t border-slate-200 pt-2.5 mt-1">
                     <span>ESTIMASI TOTAL:</span>
                     <span>Rp {grandTotalEstimate.toLocaleString('id-ID')}</span>
@@ -658,7 +658,7 @@ export default function CustomerDashboardPage() {
         </>
       )}
 
-      {/* BOTTOM NAVIGATION BAR ALA GRAB */}
+      {/* BOTTOM NAVIGATION BAR */}
       <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/95 backdrop-blur-md border-t border-slate-200 flex justify-around p-2.5 z-50 shadow-lg">
         <button onClick={() => setActiveTab('home')} className={`flex flex-col items-center flex-1 ${activeTab === 'home' ? 'text-blue-600' : 'text-slate-400'}`}>
           <span className="text-lg">🏠</span>
