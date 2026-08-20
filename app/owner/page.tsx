@@ -39,6 +39,59 @@ export default function Dashboard() {
   const [deleteRequests, setDeleteRequests] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  // STATE & FUNGSI MODUL PROMO OWNER
+  const [promos, setPromos] = useState<any[]>([]);
+  const [showPromoModal, setShowPromoModal] = useState(false);
+  const [promoForm, setPromoForm] = useState({
+    code: '',
+    discount_type: 'nominal',
+    discount_value: '',
+    max_quota: ''
+  });
+
+  const fetchPromos = async () => {
+    const { data } = await supabase.from('promos').select('*').order('created_at', { ascending: false });
+    if (data) setPromos(data);
+  };
+
+  useEffect(() => {
+    fetchPromos();
+  }, []);
+
+  const handleSavePromo = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const { error } = await supabase.from('promos').insert([
+      {
+        code: promoForm.code.toUpperCase(),
+        discount_type: promoForm.discount_type,
+        discount_value: Number(promoForm.discount_value) || 0,
+        max_quota: Number(promoForm.max_quota) || 100,
+        used_count: 0,
+        is_active: true
+      }
+    ]);
+
+    if (!error) {
+      alert('✅ Promo berhasil dibuat!');
+      setShowPromoModal(false);
+      setPromoForm({ code: '', discount_type: 'nominal', discount_value: '', max_quota: '' });
+      fetchPromos();
+    } else {
+      alert('Gagal membuat promo: ' + error.message);
+    }
+  };
+
+  const togglePromoStatus = async (id: string, currentStatus: boolean) => {
+    await supabase.from('promos').update({ is_active: !currentStatus }).eq('id', id);
+    fetchPromos();
+  };
+
+  const handleDeletePromo = async (id: string) => {
+    if (confirm('Yakin ingin menghapus promo ini?')) {
+      await supabase.from('promos').delete().eq('id', id);
+      fetchPromos();
+    }
+  };
 
   // States Settings & Dynamic Services
   const [basicSalary, setBasicSalary] = useState('1500000');
@@ -823,6 +876,186 @@ export default function Dashboard() {
             <p className="text-[10px] text-slate-400 font-medium mt-4">Estimasi Laba Bersih Setelah Pengeluaran</p>
           </div>
         </div>
+        {/* MODUL MANAJEMEN & ANALITIK PROMO OWNER */}
+        <div className="bg-slate-900 border border-slate-800 p-6 rounded-3xl space-y-6 shadow-2xl my-6">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-800 pb-4">
+              <div>
+                <h3 className="text-lg font-black text-amber-400 flex items-center gap-2">
+                  🎟️ Kelola Promo & Analisis Performa
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">Atur voucher promo aplikasi customer dan pantau performa konversi omzetnya.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPromoModal(true)}
+                className="bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-slate-950 font-black px-4 py-2.5 rounded-2xl text-xs shadow-lg shadow-amber-500/20 transition-all active:scale-95"
+              >
+                ➕ Buat Promo Baru
+              </button>
+            </div>
+
+            {/* KARTU RINGKASAN PERFORMA PROMO */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="bg-slate-800/60 border border-slate-700/80 p-4 rounded-2xl">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Promo Aktif Tampil</p>
+                <p className="text-2xl font-black text-emerald-400 mt-1">
+                  {promos.filter(p => p.is_active).length} Kode Promo
+                </p>
+              </div>
+              <div className="bg-slate-800/60 border border-slate-700/80 p-4 rounded-2xl">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Penggunaan Voucher</p>
+                <p className="text-2xl font-black text-amber-400 mt-1">
+                  {promos.reduce((acc, p) => acc + (p.used_count || 0), 0)} Transaksi
+                </p>
+              </div>
+              <div className="bg-slate-800/60 border border-slate-700/80 p-4 rounded-2xl">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Estimasi Subsidi Dikeluarkan</p>
+                <p className="text-2xl font-black text-rose-400 mt-1">
+                  Rp {promos.reduce((acc, p) => acc + ((p.used_count || 0) * (p.discount_value || 0)), 0).toLocaleString('id-ID')}
+                </p>
+              </div>
+            </div>
+
+            {/* TABEL ANALITIS PROMO */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-800/80 text-slate-400 font-bold uppercase text-[10px] border-b border-slate-800">
+                  <tr>
+                    <th className="p-3">Kode Promo</th>
+                    <th className="p-3">Nilai Diskon</th>
+                    <th className="p-3">Kuota Terpakai</th>
+                    <th className="p-3">Est. Subsidi</th>
+                    <th className="p-3">Status</th>
+                    <th className="p-3 text-right">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800 text-slate-200">
+                  {promos.map((item) => (
+                    <tr key={item.id} className="hover:bg-slate-800/40 transition">
+                      <td className="p-3 font-extrabold text-amber-400">{item.code}</td>
+                      <td className="p-3 font-semibold">
+                        {item.discount_type === 'percent' ? `${item.discount_value}%` : `Rp ${Number(item.discount_value).toLocaleString('id-ID')}`}
+                      </td>
+                      <td className="p-3 font-bold">{item.used_count || 0} / {item.max_quota || '∞'} Digunakan</td>
+                      <td className="p-3 font-bold text-rose-400">
+                        Rp {((item.used_count || 0) * (item.discount_value || 0)).toLocaleString('id-ID')}
+                      </td>
+                      <td className="p-3">
+                        <button
+                          type="button"
+                          onClick={() => togglePromoStatus(item.id, item.is_active)}
+                          className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border transition ${
+                            item.is_active 
+                              ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20' 
+                              : 'bg-slate-700/30 text-slate-400 border-slate-700 hover:bg-slate-700/50'
+                          }`}
+                        >
+                          {item.is_active ? '● Aktif' : '○ Nonaktif'}
+                        </button>
+                      </td>
+                      <td className="p-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => handleDeletePromo(item.id)}
+                          className="text-rose-400 hover:text-rose-300 font-bold px-2 py-1 rounded-lg hover:bg-rose-500/10 transition"
+                        >
+                          Hapus
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+
+                  {promos.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="text-center py-8 text-slate-500 text-xs font-semibold">
+                        Belum ada kode promo yang dibuat.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* MODAL BUAT PROMO BARU */}
+          {showPromoModal && (
+            <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 w-full max-w-md space-y-4 shadow-2xl">
+                <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+                  <h3 className="text-sm font-black text-amber-400">➕ Buat Kode Promo Baru</h3>
+                  <button type="button" onClick={() => setShowPromoModal(false)} className="text-slate-400 hover:text-white font-bold text-sm">✕</button>
+                </div>
+
+                <form onSubmit={handleSavePromo} className="space-y-3 text-xs">
+                  <div>
+                    <label className="block text-slate-400 font-bold mb-1">Kode Promo (KAPITAL)</label>
+                    <input
+                      type="text"
+                      placeholder="Contoh: HEMAT50"
+                      value={promoForm.code}
+                      onChange={(e) => setPromoForm({ ...promoForm, code: e.target.value })}
+                      required
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white font-bold uppercase focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-slate-400 font-bold mb-1">Tipe Diskon</label>
+                      <select
+                        value={promoForm.discount_type}
+                        onChange={(e) => setPromoForm({ ...promoForm, discount_type: e.target.value })}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white font-bold focus:outline-none"
+                      >
+                        <option value="nominal">Nominal (Rp)</option>
+                        <option value="percent">Persentase (%)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-400 font-bold mb-1">Nilai Diskon</label>
+                      <input
+                        type="number"
+                        placeholder="Contoh: 5000"
+                        value={promoForm.discount_value}
+                        onChange={(e) => setPromoForm({ ...promoForm, discount_value: e.target.value })}
+                        required
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white font-bold focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-400 font-bold mb-1">Batas Kuota Pemakaian</label>
+                    <input
+                      type="number"
+                      placeholder="Contoh: 100"
+                      value={promoForm.max_quota}
+                      onChange={(e) => setPromoForm({ ...promoForm, max_quota: e.target.value })}
+                      required
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white font-bold focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+
+                  <div className="pt-3 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowPromoModal(false)}
+                      className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 rounded-xl transition"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      type="submit"
+                      className="flex-1 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-slate-950 font-black py-2.5 rounded-xl transition shadow-lg shadow-amber-500/20"
+                    >
+                      Simpan Promo
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
 
             {/* TABEL RANKING OUTLET & SUPERVISOR */}
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 md:gap-6 pt-2">
