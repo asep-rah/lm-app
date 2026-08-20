@@ -38,12 +38,30 @@ const getDurationMultiplier = (durStr: string) => {
   return 1.0;
 };
 
+// HAVERSINE DISTANCE IN KM
+const calculateDistanceKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * (Math.PI / 180);
+  const dLon = (lon2 - lon1) * (Math.PI / 180);
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+};
+
+// LIST DAFTAR PROMO AKTIF BISA DIKLAIM
+const AVAILABLE_PROMOS = [
+  { id: 'ONGKIRFREE', title: '🚚 Gratis Ongkir Antar-Jemput', desc: 'Potongan ongkir hingga Rp 15.000', type: 'ongkir', value: 15000, minTx: 30000 },
+  { id: 'DISC10', title: '🏷️ Diskon 10% Spesial Online', desc: 'Potongan 10% untuk transaksi penjemputan', type: 'percent', value: 10, minTx: 40000 },
+  { id: 'HEMAT10K', title: '💰 Voucher Hemat Rp 10.000', desc: 'Potongan Rp 10.000 untuk paket Kiloan & Satuan', type: 'nominal', value: 10000, minTx: 50000 }
+];
+
 export default function CustomerDashboardPage() {
   const [activeTab, setActiveTab] = useState<'home' | 'order' | 'deposit' | 'history' | 'profile'>('home');
 
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerData, setCustomerData] = useState<any>(null);
   const [outletsList, setOutletsList] = useState<any[]>([]);
+  const [filteredOutlets, setFilteredOutlets] = useState<any[]>([]);
   const [selectedOutlet, setSelectedOutlet] = useState('');
 
   const [dynamicServices, setDynamicServices] = useState<any[]>([]);
@@ -52,7 +70,9 @@ export default function CustomerDashboardPage() {
   const [customerName, setCustomerName] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
   const [isEditingAddress, setIsEditingAddress] = useState(false);
-  
+  const [userCoords, setUserCoords] = useState<{ lat: number; lon: number } | null>(null);
+
+  // STATE KILOAN & SATUAN
   const [isKiloanChecked, setIsKiloanChecked] = useState(true);
   const [selectedKiloanSvc, setSelectedKiloanSvc] = useState('');
   const [kiloanEstKg, setKiloanEstKg] = useState('3');
@@ -64,7 +84,12 @@ export default function CustomerDashboardPage() {
   const [inputSatuanQty, setInputSatuanQty] = useState('1');
   const [satuanInputDuration, setSatuanInputDuration] = useState('Reguler (3 Hari)');
 
-  const [deliveryFee, setDeliveryFee] = useState(15000);
+  // ONGKIR & PROMO
+  const [deliveryFee, setDeliveryFee] = useState<number | null>(null);
+  const [distanceKm, setDistanceKm] = useState<number | null>(null);
+  const [claimedPromo, setClaimedPromo] = useState<any>(null);
+  const [showPromoModal, setShowPromoModal] = useState(false);
+
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -77,6 +102,7 @@ export default function CustomerDashboardPage() {
       const { data: dbOutlets } = await supabase.from('outlets').select('*');
       if (dbOutlets && dbOutlets.length > 0) {
         setOutletsList(dbOutlets);
+        setFilteredOutlets(dbOutlets);
         setSelectedOutlet(dbOutlets[0].id);
       }
 
@@ -101,9 +127,60 @@ export default function CustomerDashboardPage() {
         setCustomerPhone(savedPhone);
         fetchCustomerProfile(savedPhone);
       }
+
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition((pos) => {
+          const lat = pos.coords.latitude;
+          const lon = pos.coords.longitude;
+          setUserCoords({ lat, lon });
+
+          if (dbOutlets && dbOutlets.length > 0) {
+            const nearby = dbOutlets.filter(o => {
+              if (!o.latitude || !o.longitude) return true;
+              const dist = calculateDistanceKm(lat, lon, Number(o.latitude), Number(o.longitude));
+              return dist <= 30;
+            });
+
+            if (nearby.length > 0) {
+              setFilteredOutlets(nearby);
+              setSelectedOutlet(nearby[0].id);
+            }
+          }
+        }, () => {});
+      }
     }
     initPWA();
   }, []);
+
+  // KALKULASI ONGKIR BERBASIS LALAMOVE MOTOR (1-WAY RATE * 2 UNTUK PP / ANTAR-JEMPUT)
+  useEffect(() => {
+    if (!customerAddress || customerAddress.trim().length < 5) {
+      setDeliveryFee(null);
+      setDistanceKm(null);
+      return;
+    }
+
+    const curOutlet = outletsList.find(o => o.id === selectedOutlet);
+    if (curOutlet && userCoords && curOutlet.latitude && curOutlet.longitude) {
+      const dist = calculateDistanceKm(userCoords.lat, userCoords.lon, Number(curOutlet.latitude), Number(curOutlet.longitude));
+      const roundedDist = Math.round(dist * 10) / 10;
+      setDistanceKm(roundedDist);
+
+      // TARIF LALAMOVE MOTOR: Rp 9.000 (1-3 KM), +Rp 2.000 PER KM SELANJUTNYA
+      let lalamoveOneWay = 9000;
+      if (roundedDist > 3) {
+        lalamoveOneWay += Math.ceil(roundedDist - 3) * 2000;
+      }
+
+      // DIKALI 2 KARENA PP (ANTAR & JEMPUT)
+      const roundTripFee = lalamoveOneWay * 2;
+      setDeliveryFee(roundTripFee);
+    } else {
+      // ESTIMASI DENGAN RATA-RATA PP JIKA GPS TIDAK AKTIF
+      setDistanceKm(null);
+      setDeliveryFee(18000);
+    }
+  }, [customerAddress, selectedOutlet, userCoords, outletsList]);
 
   const fetchCustomerProfile = async (phone: string) => {
     const norm = cleanPhone(phone);
@@ -213,12 +290,12 @@ export default function CustomerDashboardPage() {
     setCartSatuan(cartSatuan.filter((_, i) => i !== idx));
   };
 
-  // KALKULASI REALTIME SUB-TOTAL KILOAN
+  // KALKULASI SUB-TOTAL KILOAN
   const kiloanBaseUnitPrice = getServiceUnitPrice(selectedKiloanSvc);
   const kiloanActiveUnitPrice = Math.round(kiloanBaseUnitPrice * getDurationMultiplier(kiloanDuration));
   const kiloanSubtotal = isKiloanChecked ? Math.round((Number(kiloanEstKg) || 0) * kiloanActiveUnitPrice) : 0;
 
-  // KALKULASI REALTIME SUB-TOTAL SATUAN
+  // KALKULASI SUB-TOTAL SATUAN
   let satuanSubtotal = 0;
   if (isSatuanChecked) {
     cartSatuan.forEach(item => { 
@@ -226,11 +303,38 @@ export default function CustomerDashboardPage() {
     });
   }
 
-  const grandTotalEstimate = kiloanSubtotal + satuanSubtotal + deliveryFee;
+  const rawOngkir = deliveryFee || 0;
+  const rawSubtotal = kiloanSubtotal + satuanSubtotal;
+
+  // PROSES DISKON PROMO KLAIM
+  let promoDiscountVal = 0;
+  if (claimedPromo) {
+    if (claimedPromo.type === 'ongkir') {
+      promoDiscountVal = Math.min(rawOngkir, claimedPromo.value);
+    } else if (claimedPromo.type === 'percent') {
+      promoDiscountVal = Math.round((rawSubtotal * claimedPromo.value) / 100);
+    } else if (claimedPromo.type === 'nominal') {
+      promoDiscountVal = claimedPromo.value;
+    }
+  }
+
+  const finalOngkir = Math.max(0, rawOngkir - (claimedPromo?.type === 'ongkir' ? promoDiscountVal : 0));
+  const grandTotalEstimate = Math.max(0, rawSubtotal + rawOngkir - promoDiscountVal);
+
+  const handleClaimPromo = (promo: any) => {
+    if (rawSubtotal + rawOngkir < promo.minTx) {
+      return alert(`⚠️ Minimal transaksi untuk promo ini adalah Rp ${promo.minTx.toLocaleString('id-ID')}`);
+    }
+    setClaimedPromo(promo);
+    setShowPromoModal(false);
+  };
 
   const handleOrderSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!customerPhone) return alert('Login terlebih dahulu!');
+    if (!customerAddress || customerAddress.trim().length < 5) {
+      return alert('⚠️ Isi Alamat Penjemputan terlebih dahulu!');
+    }
     if (!isKiloanChecked && (!isSatuanChecked || cartSatuan.length === 0)) {
       return alert('⚠️ Pilih minimal 1 paket Kiloan atau Satuan!');
     }
@@ -240,6 +344,7 @@ export default function CustomerDashboardPage() {
 
     const rincianArr: string[] = [];
     if (customerAddress) rincianArr.push(`Alamat: ${customerAddress}`);
+    if (claimedPromo) rincianArr.push(`Promo: ${claimedPromo.title}`);
 
     if (isKiloanChecked) {
       rincianArr.push(`${selectedKiloanSvc} (${kiloanDuration}, Est. ${kiloanEstKg} Kg)`);
@@ -259,7 +364,7 @@ export default function CustomerDashboardPage() {
       service_type: primaryServiceLabel,
       service_detail: serviceDetailLabel,
       estimated_weight: isKiloanChecked ? Number(kiloanEstKg) || 3 : 0,
-      delivery_fee: deliveryFee,
+      delivery_fee: finalOngkir,
       estimated_price: grandTotalEstimate,
       notes: notes || customerAddress,
       status: 'Menunggu Penjemputan'
@@ -271,6 +376,7 @@ export default function CustomerDashboardPage() {
       alert('✅ PESANAN BERHASIL TERKIRIM KE KASIR POS!\nDriver/Kasir kami akan segera memproses penjemputan.');
       setCartSatuan([]);
       setNotes('');
+      setClaimedPromo(null);
       setActiveTab('home');
       fetchCustomerProfile(normPhone);
     } else {
@@ -299,11 +405,16 @@ export default function CustomerDashboardPage() {
             <p className="text-[10px] text-blue-600 font-bold tracking-wide uppercase mt-0.5">Express Laundry Delivery</p>
           </div>
         </div>
-        {customerData && (
-          <button onClick={handleLogout} className="bg-rose-50 border border-rose-200 text-rose-600 text-[10px] font-bold px-3 py-1.5 rounded-xl hover:bg-rose-100 transition">
-            Keluar
+        <div className="flex items-center gap-2">
+          <button onClick={() => setShowPromoModal(true)} className="bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-extrabold px-2.5 py-1.5 rounded-xl hover:bg-amber-100 transition shadow-sm">
+            🎁 Promo & Vouchers
           </button>
-        )}
+          {customerData && (
+            <button onClick={handleLogout} className="bg-rose-50 border border-rose-200 text-rose-600 text-[10px] font-bold px-2.5 py-1.5 rounded-xl hover:bg-rose-100 transition">
+              Keluar
+            </button>
+          )}
+        </div>
       </div>
 
       {!customerData ? (
@@ -414,13 +525,13 @@ export default function CustomerDashboardPage() {
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Outlet Cabang Terdekat</label>
+                  <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Outlet Terdekat di Kota Anda</label>
                   <select
                     value={selectedOutlet}
                     onChange={(e) => setSelectedOutlet(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-300 rounded-2xl px-3.5 py-3 text-xs font-bold text-slate-800"
                   >
-                    {outletsList.map((o) => (
+                    {filteredOutlets.map((o) => (
                       <option key={o.id} value={o.id}>📍 {o.name}</option>
                     ))}
                   </select>
@@ -441,7 +552,7 @@ export default function CustomerDashboardPage() {
                 <div>
                   <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Alamat Penjemputan</label>
                   <textarea
-                    placeholder="Jl. Supriyadi No. 123 (Samping Indomaret)"
+                    placeholder="Ketik alamat lengkap lokasi penjemputan..."
                     value={customerAddress}
                     onChange={(e) => setCustomerAddress(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3.5 text-xs text-slate-800 font-medium"
@@ -450,6 +561,26 @@ export default function CustomerDashboardPage() {
                   />
                 </div>
 
+                {/* PROMO BANNER FORM ORDER */}
+                <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200/80 p-3.5 rounded-2xl flex justify-between items-center text-xs">
+                  <div>
+                    <p className="font-extrabold text-amber-900 text-[11px]">
+                      {claimedPromo ? `🎉 ${claimedPromo.title}` : '🎁 Gunakan Voucher Promo'}
+                    </p>
+                    <p className="text-[9px] text-amber-700">
+                      {claimedPromo ? `Diskon Terpasang: -Rp ${promoDiscountVal.toLocaleString('id-ID')}` : 'Hemat ongkir dan cuci kiloan'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowPromoModal(true)}
+                    className="bg-amber-500 hover:bg-amber-600 text-white font-extrabold px-3 py-1.5 rounded-xl text-[10px] shadow-sm transition"
+                  >
+                    {claimedPromo ? 'Ganti' : 'Pilih Promo'}
+                  </button>
+                </div>
+
+                {/* SINKRONISASI PAKET KILOAN POS */}
                 <div className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100 space-y-3">
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
@@ -508,6 +639,7 @@ export default function CustomerDashboardPage() {
                   )}
                 </div>
 
+                {/* SINKRONISASI PAKET SATUAN POS */}
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
@@ -599,11 +731,28 @@ export default function CustomerDashboardPage() {
                   className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3.5 text-xs text-slate-800 font-medium"
                 />
 
+                {/* RINCIAN SUB-TOTAL, ONGKIR LALAMOVE MOTOR PP, DISKON PROMO & TOTAL */}
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-1.5 text-xs">
                   <div className="flex justify-between text-slate-500 font-medium"><span>Subtotal Kiloan:</span><span>Rp {kiloanSubtotal.toLocaleString('id-ID')}</span></div>
                   <div className="flex justify-between text-slate-500 font-medium"><span>Subtotal Satuan:</span><span>Rp {satuanSubtotal.toLocaleString('id-ID')}</span></div>
-                  <div className="flex justify-between text-slate-500 font-medium"><span>Ongkir Penjemputan:</span><span>Rp {deliveryFee.toLocaleString('id-ID')}</span></div>
-                  <div className="flex justify-between font-black text-blue-600 text-sm border-t border-slate-200 pt-2.5 mt-1">
+                  
+                  <div className="flex justify-between text-slate-700 font-bold border-t border-slate-200/80 pt-1.5">
+                    <span>
+                      Ongkir Antar-Jemput Motor {distanceKm ? `(${distanceKm} Km PP)` : 'PP'}:
+                    </span>
+                    <span>
+                      {deliveryFee !== null ? `Rp ${rawOngkir.toLocaleString('id-ID')}` : 'Isi alamat dahulu'}
+                    </span>
+                  </div>
+
+                  {promoDiscountVal > 0 && (
+                    <div className="flex justify-between text-emerald-600 font-extrabold bg-emerald-50 p-1.5 rounded-lg border border-emerald-100">
+                      <span>Potongan Promo ({claimedPromo?.title}):</span>
+                      <span>- Rp {promoDiscountVal.toLocaleString('id-ID')}</span>
+                    </div>
+                  )}
+
+                  <div className="flex justify-between font-black text-blue-600 text-sm border-t border-slate-200 pt-2 mt-1">
                     <span>ESTIMASI TOTAL:</span>
                     <span>Rp {grandTotalEstimate.toLocaleString('id-ID')}</span>
                   </div>
@@ -763,6 +912,56 @@ export default function CustomerDashboardPage() {
             </div>
           )}
         </>
+      )}
+
+      {/* MODAL KLAIM VOUCHER PROMO & DAFTAR CABANG */}
+      {showPromoModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-5 max-w-sm w-full space-y-4 shadow-2xl max-h-[85vh] overflow-y-auto">
+            <div className="flex justify-between items-center border-b pb-2">
+              <h3 className="text-sm font-extrabold text-slate-900">🎁 Klaim Voucher Promo Active</h3>
+              <button onClick={() => setShowPromoModal(false)} className="text-slate-400 hover:text-slate-600 font-bold">✕</button>
+            </div>
+
+            <div className="space-y-2.5">
+              <p className="text-[10px] font-extrabold text-slate-400 uppercase">Pilih Promo Untuk Pesanan Ini:</p>
+              {AVAILABLE_PROMOS.map((promo) => {
+                const isClaimed = claimedPromo?.id === promo.id;
+                return (
+                  <div key={promo.id} className={`p-3.5 rounded-2xl border transition space-y-2 ${isClaimed ? 'bg-amber-50 border-amber-400' : 'bg-slate-50 border-slate-200'}`}>
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <h4 className="font-extrabold text-slate-900 text-xs">{promo.title}</h4>
+                        <p className="text-[10px] text-slate-500 mt-0.5">{promo.desc}</p>
+                        <p className="text-[9px] text-amber-700 font-bold mt-1">Min. Transaksi: Rp {promo.minTx.toLocaleString('id-ID')}</p>
+                      </div>
+                      <button
+                        onClick={() => handleClaimPromo(promo)}
+                        className={`text-[10px] font-extrabold px-3 py-1.5 rounded-xl shadow-sm transition ${isClaimed ? 'bg-emerald-600 text-white' : 'bg-amber-500 hover:bg-amber-600 text-white'}`}
+                      >
+                        {isClaimed ? 'Terpasang ✓' : 'Klaim Promo'}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="space-y-2 pt-2 border-t border-slate-100">
+              <p className="text-[10px] font-extrabold text-slate-400 uppercase">Daftar Cabang Outlet Resmi ({outletsList.length}):</p>
+              {outletsList.map((o, idx) => (
+                <div key={idx} className="bg-slate-50 border border-slate-200 p-3 rounded-2xl text-xs space-y-1">
+                  <p className="font-extrabold text-slate-900">📍 {o.name}</p>
+                  <p className="text-[10px] text-slate-500">{o.address || 'Alamat cabang resmi'}</p>
+                </div>
+              ))}
+            </div>
+
+            <button onClick={() => setShowPromoModal(false)} className="w-full bg-slate-900 text-white font-extrabold py-3 rounded-2xl text-xs">
+              Tutup Modal
+            </button>
+          </div>
+        </div>
       )}
 
       {/* BOTTOM NAVIGATION BAR */}
