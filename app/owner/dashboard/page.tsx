@@ -534,44 +534,34 @@ export default function Dashboard() {
               Management <span className="font-bold text-indigo-600">({currentUserRole.toUpperCase()})</span>
             </p>
           </div>
-          <div className="flex w-full md:w-auto overflow-x-auto pb-2 md:pb-0 gap-2 hide-scrollbar">
-            <button onClick={() => setActiveTab('pnl')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'pnl' ? 'bg-emerald-600 text-white shadow' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>📊 Laporan PnL & Ranking</button>
-            <button onClick={() => setActiveTab('history')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'history' ? 'bg-indigo-600 text-white shadow' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>📜 History 1 Tahun</button>
-            <button onClick={() => setActiveTab('loans')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'loans' ? 'bg-amber-600 text-white shadow' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>💸 Kasbon & Potongan</button>
-            
-            {currentUserRole === 'owner' && (
-              <>
-                <button onClick={() => setActiveTab('settings')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'settings' ? 'bg-indigo-600 text-white shadow' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>⚙️ Pengaturan</button>
-                <button onClick={() => setActiveTab('employees')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'employees' ? 'bg-purple-600 text-white shadow' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>👥 Karyawan & Absen</button>
-                <button onClick={() => setActiveTab('delete_requests')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition relative ${activeTab === 'delete_requests' ? 'bg-rose-600 text-white shadow' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
-                  🗑️ Request Hapus {deleteRequests.length > 0 && <span className="ml-1 bg-white text-rose-600 text-[10px] px-1.5 py-0.5 rounded-full font-black">{deleteRequests.length}</span>}
-                </button>
-              </>
-            )}
-            <Link href="/pos" className="whitespace-nowrap bg-slate-800 hover:bg-slate-900 text-white text-xs px-4 py-2 rounded-xl font-bold transition">🛒 Portal Kasir</Link>
-            <button onClick={handleLogout} className="whitespace-nowrap bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold text-xs px-3 py-2 rounded-xl transition">Keluar</button>
-          </div>
-        </div>
+          <div className="flex w-full md:w-auto overflow-x-auto pb-2 md:pb-0 gap-2 hide-scrollbar items-center">
+          <button onClick={() => setActiveTab('pnl')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'pnl' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>📊 Laporan PnL</button>
+          <button onClick={() => setActiveTab('history')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'history' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>📦 History 1 Thn</button>
+          <button onClick={() => setActiveTab('loans')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'loans' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>💸 Kasbon Crew</button>
 
-        {/* TAB 1: PNL & LEADERBOARD RANKING */}
-        {activeTab === 'pnl' && (
-          <div className="space-y-4 md:space-y-6">
-            <div className="bg-white border border-slate-200 rounded-2xl p-4 md:p-6 shadow-sm flex flex-col md:flex-row gap-3 md:gap-4 items-end">
-              <div className="w-full md:w-1/3">
-                <label className="block text-xs font-bold text-slate-500 mb-1">Filter Outlet</label>
-                <select value={selectedOutlet} onChange={(e) => setSelectedOutlet(e.target.value)} className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-bold focus:outline-none focus:border-emerald-500">
-                  <option value="ALL">Semua Cabang (Pusat)</option>
-                  {outlets.map((o) => (<option key={o.id} value={o.id}>{o.name}</option>))}
-                </select>
-              </div>
-              <div className="w-full md:w-1/3">
-                <label className="block text-xs font-bold text-slate-500 mb-1">Periode Transaksi</label>
-                <select value={period} onChange={(e) => setPeriod(e.target.value)} className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-bold focus:outline-none focus:border-emerald-500">
-                  <option value="THIS_MONTH">Bulan Ini</option><option value="LAST_MONTH">Bulan Lalu</option><option value="THIS_YEAR">1 Tahun Terakhir (365 Hari)</option><option value="ALL">Semua Waktu (All Time)</option>
-                </select>
-              </div>
-              <button onClick={exportCSV} className="w-full md:w-auto mt-auto bg-blue-600 text-white font-bold text-xs px-6 py-3 rounded-xl shadow-md">📥 EXPORT CSV</button>
-            </div>
+          {currentUserRole === 'owner' && (
+            <>
+              <button onClick={() => setActiveTab('settings')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'settings' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>⚙️ Settings</button>
+              <button onClick={() => setActiveTab('employees')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'employees' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>👥 Karyawan</button>
+            </>
+          )}
+
+          {/* 🔔 ICON LONCENG NOTIFIKASI REQUEST HAPUS (PENGGANTI PORTAL KASIR) */}
+          <button
+            onClick={() => setActiveTab('delete_requests')}
+            className="relative p-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl transition flex items-center justify-center cursor-pointer border border-slate-700 ml-1"
+            title="Pengajuan Hapus Transaksi"
+          >
+            🔔
+            {deleteRequests.length > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 bg-rose-500 text-white text-[10px] font-black w-5 h-5 rounded-full flex items-center justify-center animate-bounce shadow-md">
+                {deleteRequests.length}
+              </span>
+            )}
+          </button>
+
+          <button onClick={handleLogout} className="whitespace-nowrap bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold text-xs px-3 py-2 rounded-xl transition ml-1">Keluar</button>
+        </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
               <div className="bg-white border border-slate-200 p-4 md:p-6 rounded-2xl shadow-sm">
