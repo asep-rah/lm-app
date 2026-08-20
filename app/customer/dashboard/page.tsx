@@ -21,6 +21,24 @@ const cleanPhone = (phoneStr: string) => {
   return cleaned;
 };
 
+// MAPPING NOMOR WA ADMIN PER BRAND / OUTLET
+const getAdminWaNumber = (outletName: string) => {
+  const lower = (outletName || '').toLowerCase();
+  if (lower.includes('briwash')) return '6281120081011';
+  if (lower.includes('chingu')) return '6281120081012';
+  if (lower.includes('sorcha')) return '6281111112731';
+  if (lower.includes('hari ini')) return '6281111169689';
+  if (lower.includes('mc')) return '6281120055575';
+  return '6281120081011'; // Default Briwash jika tidak terdeteksi
+};
+
+const getDurationMultiplier = (durStr: string) => {
+  if (durStr.includes('Oneday') || durStr.includes('1 Hari')) return 1.5;
+  if (durStr.includes('Express') || durStr.includes('6 Jam')) return 2.0;
+  if (durStr.includes('Quick') || durStr.includes('3 Jam')) return 3.0;
+  return 1.0;
+};
+
 export default function CustomerDashboardPage() {
   const [activeTab, setActiveTab] = useState<'home' | 'order' | 'deposit' | 'history' | 'profile'>('home');
 
@@ -36,18 +54,20 @@ export default function CustomerDashboardPage() {
   // STATE FORM ORDER LAUNDRY CUSTOMER
   const [customerName, setCustomerName] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
+  const [isEditingAddress, setIsEditingAddress] = useState(false);
   
-  // STATE DURASI PENGERJAAN
-  const [duration, setDuration] = useState('Reguler (3 Hari)');
-
+  // STATE KILOAN & DURASINYA
   const [isKiloanChecked, setIsKiloanChecked] = useState(true);
   const [selectedKiloanSvc, setSelectedKiloanSvc] = useState('');
   const [kiloanEstKg, setKiloanEstKg] = useState('3');
+  const [kiloanDuration, setKiloanDuration] = useState('Reguler (3 Hari)');
 
+  // STATE SATUAN & DURASINYA PER ITEM
   const [isSatuanChecked, setIsSatuanChecked] = useState(false);
-  const [cartSatuan, setCartSatuan] = useState<Array<{ name: string; price: number; qty: number }>>([]);
+  const [cartSatuan, setCartSatuan] = useState<Array<{ name: string; basePrice: number; price: number; qty: number; duration: string }>>([]);
   const [selectedSatuanSvc, setSelectedSatuanSvc] = useState('');
   const [inputSatuanQty, setInputSatuanQty] = useState('1');
+  const [satuanInputDuration, setSatuanInputDuration] = useState('Reguler (3 Hari)');
 
   const [deliveryFee, setDeliveryFee] = useState(15000);
   const [notes, setNotes] = useState('');
@@ -150,6 +170,26 @@ export default function CustomerDashboardPage() {
     setCustomerData(null);
   };
 
+  const handleSaveAddress = async () => {
+    const norm = cleanPhone(customerPhone);
+    if (!norm) return;
+
+    setIsSubmitting(true);
+    const { error } = await supabase
+      .from('customers')
+      .update({ address: customerAddress })
+      .eq('phone', norm);
+
+    if (!error) {
+      alert('✅ Alamat penjemputan berhasil diperbarui!');
+      setIsEditingAddress(false);
+      fetchCustomerProfile(norm);
+    } else {
+      alert('❌ Gagal mengupdate alamat: ' + error.message);
+    }
+    setIsSubmitting(false);
+  };
+
   const getServiceUnitPrice = (svcName: string) => {
     const activeSvc = dynamicServices.find(s => (s.name || '').trim().toLowerCase() === (svcName || '').trim().toLowerCase());
     if (activeSvc) {
@@ -166,10 +206,18 @@ export default function CustomerDashboardPage() {
 
   const handleAddSatuanToCart = () => {
     if (!selectedSatuanSvc) return;
-    const price = getServiceUnitPrice(selectedSatuanSvc);
+    const basePrice = getServiceUnitPrice(selectedSatuanSvc);
     const qty = Number(inputSatuanQty) || 1;
+    const mult = getDurationMultiplier(satuanInputDuration);
+    const finalPrice = Math.round(basePrice * mult);
 
-    setCartSatuan([...cartSatuan, { name: selectedSatuanSvc, price, qty }]);
+    setCartSatuan([...cartSatuan, { 
+      name: selectedSatuanSvc, 
+      basePrice, 
+      price: finalPrice, 
+      qty, 
+      duration: satuanInputDuration 
+    }]);
     setInputSatuanQty('1');
   };
 
@@ -177,21 +225,16 @@ export default function CustomerDashboardPage() {
     setCartSatuan(cartSatuan.filter((_, i) => i !== idx));
   };
 
-  // MULTIPLIER DURASI PENGERJAAN
-  let durationMultiplier = 1.0;
-  if (duration.includes('Oneday') || duration.includes('1 Hari')) durationMultiplier = 1.5;
-  if (duration.includes('Express') || duration.includes('6 Jam')) durationMultiplier = 2.0;
-  if (duration.includes('Quick') || duration.includes('3 Jam')) durationMultiplier = 3.0;
-
+  // KALKULASI SUB-TOTAL KILOAN
   const kiloanBaseUnitPrice = getServiceUnitPrice(selectedKiloanSvc);
-  const kiloanActiveUnitPrice = Math.round(kiloanBaseUnitPrice * durationMultiplier);
+  const kiloanActiveUnitPrice = Math.round(kiloanBaseUnitPrice * getDurationMultiplier(kiloanDuration));
   const kiloanSubtotal = isKiloanChecked ? (Number(kiloanEstKg) || 1) * kiloanActiveUnitPrice : 0;
 
+  // KALKULASI SUB-TOTAL SATUAN (MASING-MASING ITEM SESUAI DURASINYA)
   let satuanSubtotal = 0;
   if (isSatuanChecked) {
     cartSatuan.forEach(item => { 
-      const activeUnitPrice = Math.round(item.price * durationMultiplier);
-      satuanSubtotal += activeUnitPrice * item.qty; 
+      satuanSubtotal += item.price * item.qty; 
     });
   }
 
@@ -208,17 +251,16 @@ export default function CustomerDashboardPage() {
     const normPhone = cleanPhone(customerPhone);
 
     const rincianArr: string[] = [];
-    rincianArr.push(`Durasi: ${duration}`);
 
     if (isKiloanChecked) {
-      rincianArr.push(`${selectedKiloanSvc} (Est. ${kiloanEstKg} Kg)`);
+      rincianArr.push(`${selectedKiloanSvc} (${kiloanDuration}, Est. ${kiloanEstKg} Kg)`);
     }
     if (isSatuanChecked && cartSatuan.length > 0) {
-      const satuanItemsStr = cartSatuan.map(i => `${i.name} x${i.qty}`).join(', ');
+      const satuanItemsStr = cartSatuan.map(i => `${i.name} x${i.qty} [${i.duration}]`).join(', ');
       rincianArr.push(`Satuan: [${satuanItemsStr}]`);
     }
 
-    const primaryServiceLabel = isKiloanChecked ? selectedKiloanSvc : `Satuan (${cartSatuan.length} Item)`;
+    const primaryServiceLabel = isKiloanChecked ? `${selectedKiloanSvc} (${kiloanDuration})` : `Satuan (${cartSatuan.length} Item)`;
     const serviceDetailLabel = rincianArr.join(' + ');
 
     const payload = {
@@ -251,6 +293,10 @@ export default function CustomerDashboardPage() {
 
   const kiloanServicesList = dynamicServices.filter(s => s.type !== 'pcs');
   const satuanServicesList = dynamicServices.filter(s => s.type === 'pcs');
+
+  // NOMOR WA ADMIN BRAND SAAT INI
+  const currentOutletObj = outletsList.find(o => o.id === selectedOutlet);
+  const targetAdminWa = getAdminWaNumber(currentOutletObj?.name || '');
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 p-4 md:p-6 pb-28 max-w-md mx-auto relative font-sans">
@@ -428,22 +474,7 @@ export default function CustomerDashboardPage() {
                   />
                 </div>
 
-                {/* PILIHAN DURASI PENGERJAAN */}
-                <div>
-                  <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Durasi Pengerjaan</label>
-                  <select
-                    value={duration}
-                    onChange={(e) => setDuration(e.target.value)}
-                    className="w-full bg-amber-50/60 border border-amber-300 rounded-2xl px-3.5 py-3 text-xs font-extrabold text-amber-800"
-                  >
-                    <option value="Reguler (3 Hari)">Reguler (3 Hari)</option>
-                    <option value="Oneday (1 Hari / 24 Jam)">Oneday 1 Hari (+50%)</option>
-                    <option value="Express (6 Jam)">Express 6 Jam (+100%)</option>
-                    <option value="Quick (3 Jam)">Quick 3 Jam (+200%)</option>
-                  </select>
-                </div>
-
-                {/* SINKRONISASI PAKET KILOAN POS */}
+                {/* SINKRONISASI PAKET KILOAN POS + FLEKSIBEL DURASI */}
                 <div className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100 space-y-3">
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
@@ -457,37 +488,52 @@ export default function CustomerDashboardPage() {
 
                   {isKiloanChecked && (
                     <div className="space-y-2.5 pt-2 border-t border-blue-100">
-                      <select
-                        value={selectedKiloanSvc}
-                        onChange={(e) => setSelectedKiloanSvc(e.target.value)}
-                        className="w-full bg-white border border-blue-200 rounded-xl p-2.5 text-xs font-bold text-slate-800"
-                      >
-                        {kiloanServicesList.map((svc, i) => {
-                          const baseP = getServiceUnitPrice(svc.name);
-                          const activeP = Math.round(baseP * durationMultiplier);
-                          return (
-                            <option key={i} value={svc.name}>
-                              {svc.name} (Rp {activeP.toLocaleString('id-ID')}/Kg)
-                            </option>
-                          );
-                        })}
-                      </select>
-
                       <div>
-                        <label className="block text-[10px] text-slate-500 font-bold mb-1">Estimasi Berat (Kg)</label>
-                        <input
-                          type="number"
-                          step="0.5"
-                          value={kiloanEstKg}
-                          onChange={(e) => setKiloanEstKg(e.target.value)}
-                          className="w-full bg-white border border-blue-200 rounded-xl p-2.5 text-xs font-extrabold text-blue-700"
-                        />
+                        <label className="block text-[10px] text-slate-500 font-bold mb-1">Pilih Jenis Kiloan</label>
+                        <select
+                          value={selectedKiloanSvc}
+                          onChange={(e) => setSelectedKiloanSvc(e.target.value)}
+                          className="w-full bg-white border border-blue-200 rounded-xl p-2.5 text-xs font-bold text-slate-800"
+                        >
+                          {kiloanServicesList.map((svc, i) => (
+                            <option key={i} value={svc.name}>{svc.name}</option>
+                          ))}
+                        </select>
                       </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[10px] text-slate-500 font-bold mb-1">Durasi Kiloan</label>
+                          <select
+                            value={kiloanDuration}
+                            onChange={(e) => setKiloanDuration(e.target.value)}
+                            className="w-full bg-amber-50 border border-amber-300 rounded-xl p-2 text-xs font-extrabold text-amber-800"
+                          >
+                            <option value="Reguler (3 Hari)">Reguler 3 Hari</option>
+                            <option value="Oneday (1 Hari / 24 Jam)">Oneday (+50%)</option>
+                            <option value="Express (6 Jam)">Express 6 Jam (+100%)</option>
+                            <option value="Quick (3 Jam)">Quick 3 Jam (+200%)</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-slate-500 font-bold mb-1">Est. Berat (Kg)</label>
+                          <input
+                            type="number"
+                            step="0.5"
+                            value={kiloanEstKg}
+                            onChange={(e) => setKiloanEstKg(e.target.value)}
+                            className="w-full bg-white border border-blue-200 rounded-xl p-2 text-xs font-extrabold text-blue-700"
+                          />
+                        </div>
+                      </div>
+                      <p className="text-[10px] text-blue-600 font-bold text-right">
+                        Harga: Rp {kiloanActiveUnitPrice.toLocaleString('id-ID')}/Kg
+                      </p>
                     </div>
                   )}
                 </div>
 
-                {/* SINKRONISASI PAKET SATUAN POS */}
+                {/* SINKRONISASI PAKET SATUAN POS + FLEKSIBEL DURASI PER ITEM */}
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
@@ -501,56 +547,70 @@ export default function CustomerDashboardPage() {
 
                   {isSatuanChecked && (
                     <div className="space-y-2.5 pt-2 border-t border-slate-200">
-                      <select
-                        value={selectedSatuanSvc}
-                        onChange={(e) => setSelectedSatuanSvc(e.target.value)}
-                        className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-800"
-                      >
-                        {satuanServicesList.map((svc, i) => {
-                          const baseP = getServiceUnitPrice(svc.name);
-                          const activeP = Math.round(baseP * durationMultiplier);
-                          return (
-                            <option key={i} value={svc.name}>
-                              {svc.name} (Rp {activeP.toLocaleString('id-ID')}/Pcs)
-                            </option>
-                          );
-                        })}
-                        <option value="Bedcover Double">Bedcover Double (Rp {Math.round(35000 * durationMultiplier).toLocaleString('id-ID')}/Pcs)</option>
-                        <option value="Bedcover Single">Bedcover Single (Rp {Math.round(25000 * durationMultiplier).toLocaleString('id-ID')}/Pcs)</option>
-                        <option value="Sprei Single">Sprei Single (Rp {Math.round(15000 * durationMultiplier).toLocaleString('id-ID')}/Pcs)</option>
-                      </select>
-
-                      <div className="flex gap-2">
-                        <input
-                          type="number"
-                          placeholder="Qty"
-                          value={inputSatuanQty}
-                          onChange={(e) => setInputSatuanQty(e.target.value)}
-                          className="w-20 bg-white border border-slate-300 rounded-xl p-2 text-xs font-bold text-slate-800"
-                        />
-                        <button
-                          type="button"
-                          onClick={handleAddSatuanToCart}
-                          className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-sm"
+                      <div>
+                        <label className="block text-[10px] text-slate-500 font-bold mb-1">Pilih Item Satuan</label>
+                        <select
+                          value={selectedSatuanSvc}
+                          onChange={(e) => setSelectedSatuanSvc(e.target.value)}
+                          className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-800"
                         >
-                          ➕ Tambah Item
-                        </button>
+                          {satuanServicesList.map((svc, i) => (
+                            <option key={i} value={svc.name}>{svc.name}</option>
+                          ))}
+                          <option value="Bedcover Double">Bedcover Double</option>
+                          <option value="Bedcover Single">Bedcover Single</option>
+                          <option value="Sprei Single">Sprei Single</option>
+                        </select>
                       </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[10px] text-slate-500 font-bold mb-1">Durasi Item Ini</label>
+                          <select
+                            value={satuanInputDuration}
+                            onChange={(e) => setSatuanInputDuration(e.target.value)}
+                            className="w-full bg-amber-50 border border-amber-300 rounded-xl p-2 text-xs font-extrabold text-amber-800"
+                          >
+                            <option value="Reguler (3 Hari)">Reguler 3 Hari</option>
+                            <option value="Oneday (1 Hari / 24 Jam)">Oneday (+50%)</option>
+                            <option value="Express (6 Jam)">Express 6 Jam (+100%)</option>
+                            <option value="Quick (3 Jam)">Quick 3 Jam (+200%)</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-slate-500 font-bold mb-1">Jumlah (Pcs)</label>
+                          <input
+                            type="number"
+                            placeholder="Qty"
+                            value={inputSatuanQty}
+                            onChange={(e) => setInputSatuanQty(e.target.value)}
+                            className="w-full bg-white border border-slate-300 rounded-xl p-2 text-xs font-bold text-slate-800"
+                          />
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleAddSatuanToCart}
+                        className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-sm"
+                      >
+                        ➕ Tambah Item Satuan Ini
+                      </button>
 
                       {cartSatuan.length > 0 && (
                         <div className="space-y-1.5 pt-2">
-                          {cartSatuan.map((item, idx) => {
-                            const activeUnitPrice = Math.round(item.price * durationMultiplier);
-                            return (
-                              <div key={idx} className="bg-white p-2.5 rounded-xl flex justify-between items-center text-xs border border-slate-200 shadow-sm">
-                                <span className="font-semibold">{item.name} x{item.qty}</span>
-                                <div className="flex items-center gap-2">
-                                  <span className="font-extrabold text-blue-600">Rp {(activeUnitPrice * item.qty).toLocaleString('id-ID')}</span>
-                                  <button type="button" onClick={() => handleRemoveSatuan(idx)} className="text-rose-500 font-bold px-1">✕</button>
-                                </div>
+                          {cartSatuan.map((item, idx) => (
+                            <div key={idx} className="bg-white p-2.5 rounded-xl flex justify-between items-center text-xs border border-slate-200 shadow-sm">
+                              <div>
+                                <span className="font-bold text-slate-800 block">{item.name} x{item.qty}</span>
+                                <span className="text-[9px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-bold">{item.duration}</span>
                               </div>
-                            );
-                          })}
+                              <div className="flex items-center gap-2">
+                                <span className="font-extrabold text-blue-600">Rp {(item.price * item.qty).toLocaleString('id-ID')}</span>
+                                <button type="button" onClick={() => handleRemoveSatuan(idx)} className="text-rose-500 font-bold px-1">✕</button>
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       )}
                     </div>
@@ -625,11 +685,11 @@ export default function CustomerDashboardPage() {
                 </div>
 
                 <a
-                  href={`https://wa.me/6285172141494?text=Halo%20Kasir,%20saya%20pelanggan%20${customerData.name}%20(${customerPhone})%20ingin%20Top-Up%20Deposit%20Member.`}
+                  href={`https://wa.me/${targetAdminWa}?text=Halo%20Admin%20Kasir,%20saya%20pelanggan%20${customerData.name}%20(${customerPhone})%20ingin%20Top-Up%20Deposit%20Member.`}
                   target="_blank"
                   className="block w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-4 rounded-2xl text-xs uppercase shadow-lg shadow-blue-200 transition"
                 >
-                  💬 Hubungi Kasir via WhatsApp
+                  💬 Hubungi Kasir via WhatsApp ({currentOutletObj?.name || 'Admin'})
                 </a>
               </div>
 
@@ -691,9 +751,48 @@ export default function CustomerDashboardPage() {
                 <span className="text-[10px] text-slate-400 uppercase font-extrabold block">Nomor WhatsApp</span>
                 <p className="font-mono text-blue-600 font-extrabold mt-0.5">{customerPhone}</p>
               </div>
-              <div>
-                <span className="text-[10px] text-slate-400 uppercase font-extrabold block">Alamat Penjemputan Utama</span>
-                <p className="text-slate-700 font-medium mt-0.5">{customerData.address || 'Belum diatur'}</p>
+
+              {/* FITUR EDIT ALAMAT PENJEMPUTAN UTAMA */}
+              <div className="pt-2 border-t border-slate-100">
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-[10px] text-slate-400 uppercase font-extrabold">Alamat Penjemputan Utama</span>
+                  {!isEditingAddress && (
+                    <button onClick={() => setIsEditingAddress(true)} className="text-[10px] font-extrabold text-blue-600 hover:underline">
+                      ✏️ Edit Alamat
+                    </button>
+                  )}
+                </div>
+
+                {!isEditingAddress ? (
+                  <p className="text-slate-700 font-medium bg-slate-50 p-3 rounded-2xl border border-slate-200">
+                    {customerAddress || 'Belum diatur'}
+                  </p>
+                ) : (
+                  <div className="space-y-2 mt-2">
+                    <textarea
+                      value={customerAddress}
+                      onChange={(e) => setCustomerAddress(e.target.value)}
+                      placeholder="Tulis alamat lengkap penjemputan..."
+                      className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3 text-xs text-slate-800 font-medium"
+                      rows={3}
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleSaveAddress}
+                        disabled={isSubmitting}
+                        className="flex-1 bg-blue-600 text-white font-extrabold py-2.5 rounded-xl text-xs shadow-sm hover:bg-blue-700 transition"
+                      >
+                        💾 Simpan Alamat
+                      </button>
+                      <button
+                        onClick={() => setIsEditingAddress(false)}
+                        className="bg-slate-100 text-slate-600 font-bold px-3 py-2.5 rounded-xl text-xs hover:bg-slate-200 transition"
+                      >
+                        Batal
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
