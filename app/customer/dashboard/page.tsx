@@ -545,7 +545,7 @@ export default function CustomerDashboardPage() {
                       <span className="text-slate-400 font-medium">{new Date(order.created_at).toLocaleDateString('id-ID')}</span>
                       <span className="font-black text-blue-600 text-xs">Ongkir: Rp {Number(order.delivery_fee || 0).toLocaleString('id-ID')}</span>
                     </div>
-                  {/* INDIKATOR LIVE TRACKING DRIVER & FOTO BUKTI */}
+                  {/* INDIKATOR LIVE TRACKING DRIVER */}
           {order.status === 'Driver Menuju Lokasi' && order.driver_lat && (
             <div className="bg-blue-50 border border-blue-200 p-3 rounded-2xl space-y-1.5 text-xs mt-2">
               <div className="flex justify-between items-center">
@@ -563,12 +563,15 @@ export default function CustomerDashboardPage() {
               </div>
               <p className="text-[10px] text-blue-700">Posisi driver diperbarui secara otomatis.</p>
             </div>
+          )}
 
+          {/* FOTO BUKTI PENJEMPUTAN */}
           {order.photo_url && (
             <div className="mt-2 rounded-xl overflow-hidden border border-slate-200">
               <p className="text-[10px] font-bold text-slate-500 p-1.5 bg-slate-50">📸 Foto Bukti Cucian Diterima Driver:</p>
               <img src={order.photo_url} alt="Foto Bukti Cucian" className="w-full h-28 object-cover" />
             </div>
+          )}
         </div>
       ))}
                 {activeOrders.length === 0 && (
