@@ -37,6 +37,9 @@ export default function CustomerDashboardPage() {
   const [customerName, setCustomerName] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
   
+  // STATE DURASI PENGERJAAN
+  const [duration, setDuration] = useState('Reguler (3 Hari)');
+
   const [isKiloanChecked, setIsKiloanChecked] = useState(true);
   const [selectedKiloanSvc, setSelectedKiloanSvc] = useState('');
   const [kiloanEstKg, setKiloanEstKg] = useState('3');
@@ -174,11 +177,22 @@ export default function CustomerDashboardPage() {
     setCartSatuan(cartSatuan.filter((_, i) => i !== idx));
   };
 
-  const kiloanUnitPrice = getServiceUnitPrice(selectedKiloanSvc);
-  const kiloanSubtotal = isKiloanChecked ? (Number(kiloanEstKg) || 1) * kiloanUnitPrice : 0;
+  // MULTIPLIER DURASI PENGERJAAN
+  let durationMultiplier = 1.0;
+  if (duration.includes('Oneday') || duration.includes('1 Hari')) durationMultiplier = 1.5;
+  if (duration.includes('Express') || duration.includes('6 Jam')) durationMultiplier = 2.0;
+  if (duration.includes('Quick') || duration.includes('3 Jam')) durationMultiplier = 3.0;
+
+  const kiloanBaseUnitPrice = getServiceUnitPrice(selectedKiloanSvc);
+  const kiloanActiveUnitPrice = Math.round(kiloanBaseUnitPrice * durationMultiplier);
+  const kiloanSubtotal = isKiloanChecked ? (Number(kiloanEstKg) || 1) * kiloanActiveUnitPrice : 0;
+
   let satuanSubtotal = 0;
   if (isSatuanChecked) {
-    cartSatuan.forEach(item => { satuanSubtotal += item.price * item.qty; });
+    cartSatuan.forEach(item => { 
+      const activeUnitPrice = Math.round(item.price * durationMultiplier);
+      satuanSubtotal += activeUnitPrice * item.qty; 
+    });
   }
 
   const grandTotalEstimate = kiloanSubtotal + satuanSubtotal + deliveryFee;
@@ -194,6 +208,8 @@ export default function CustomerDashboardPage() {
     const normPhone = cleanPhone(customerPhone);
 
     const rincianArr: string[] = [];
+    rincianArr.push(`Durasi: ${duration}`);
+
     if (isKiloanChecked) {
       rincianArr.push(`${selectedKiloanSvc} (Est. ${kiloanEstKg} Kg)`);
     }
@@ -412,6 +428,21 @@ export default function CustomerDashboardPage() {
                   />
                 </div>
 
+                {/* PILIHAN DURASI PENGERJAAN */}
+                <div>
+                  <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Durasi Pengerjaan</label>
+                  <select
+                    value={duration}
+                    onChange={(e) => setDuration(e.target.value)}
+                    className="w-full bg-amber-50/60 border border-amber-300 rounded-2xl px-3.5 py-3 text-xs font-extrabold text-amber-800"
+                  >
+                    <option value="Reguler (3 Hari)">Reguler (3 Hari)</option>
+                    <option value="Oneday (1 Hari / 24 Jam)">Oneday 1 Hari (+50%)</option>
+                    <option value="Express (6 Jam)">Express 6 Jam (+100%)</option>
+                    <option value="Quick (3 Jam)">Quick 3 Jam (+200%)</option>
+                  </select>
+                </div>
+
                 {/* SINKRONISASI PAKET KILOAN POS */}
                 <div className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100 space-y-3">
                   <label className="flex items-center gap-2 cursor-pointer">
@@ -431,11 +462,15 @@ export default function CustomerDashboardPage() {
                         onChange={(e) => setSelectedKiloanSvc(e.target.value)}
                         className="w-full bg-white border border-blue-200 rounded-xl p-2.5 text-xs font-bold text-slate-800"
                       >
-                        {kiloanServicesList.map((svc, i) => (
-                          <option key={i} value={svc.name}>
-                            {svc.name} (Rp {getServiceUnitPrice(svc.name).toLocaleString('id-ID')}/Kg)
-                          </option>
-                        ))}
+                        {kiloanServicesList.map((svc, i) => {
+                          const baseP = getServiceUnitPrice(svc.name);
+                          const activeP = Math.round(baseP * durationMultiplier);
+                          return (
+                            <option key={i} value={svc.name}>
+                              {svc.name} (Rp {activeP.toLocaleString('id-ID')}/Kg)
+                            </option>
+                          );
+                        })}
                       </select>
 
                       <div>
@@ -471,14 +506,18 @@ export default function CustomerDashboardPage() {
                         onChange={(e) => setSelectedSatuanSvc(e.target.value)}
                         className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-800"
                       >
-                        {satuanServicesList.map((svc, i) => (
-                          <option key={i} value={svc.name}>
-                            {svc.name} (Rp {getServiceUnitPrice(svc.name).toLocaleString('id-ID')}/Pcs)
-                          </option>
-                        ))}
-                        <option value="Bedcover Double">Bedcover Double (Rp 35.000/Pcs)</option>
-                        <option value="Bedcover Single">Bedcover Single (Rp 25.000/Pcs)</option>
-                        <option value="Sprei Single">Sprei Single (Rp 15.000/Pcs)</option>
+                        {satuanServicesList.map((svc, i) => {
+                          const baseP = getServiceUnitPrice(svc.name);
+                          const activeP = Math.round(baseP * durationMultiplier);
+                          return (
+                            <option key={i} value={svc.name}>
+                              {svc.name} (Rp {activeP.toLocaleString('id-ID')}/Pcs)
+                            </option>
+                          );
+                        })}
+                        <option value="Bedcover Double">Bedcover Double (Rp {Math.round(35000 * durationMultiplier).toLocaleString('id-ID')}/Pcs)</option>
+                        <option value="Bedcover Single">Bedcover Single (Rp {Math.round(25000 * durationMultiplier).toLocaleString('id-ID')}/Pcs)</option>
+                        <option value="Sprei Single">Sprei Single (Rp {Math.round(15000 * durationMultiplier).toLocaleString('id-ID')}/Pcs)</option>
                       </select>
 
                       <div className="flex gap-2">
@@ -500,15 +539,18 @@ export default function CustomerDashboardPage() {
 
                       {cartSatuan.length > 0 && (
                         <div className="space-y-1.5 pt-2">
-                          {cartSatuan.map((item, idx) => (
-                            <div key={idx} className="bg-white p-2.5 rounded-xl flex justify-between items-center text-xs border border-slate-200 shadow-sm">
-                              <span className="font-semibold">{item.name} x{item.qty}</span>
-                              <div className="flex items-center gap-2">
-                                <span className="font-extrabold text-blue-600">Rp {(item.price * item.qty).toLocaleString('id-ID')}</span>
-                                <button type="button" onClick={() => handleRemoveSatuan(idx)} className="text-rose-500 font-bold px-1">✕</button>
+                          {cartSatuan.map((item, idx) => {
+                            const activeUnitPrice = Math.round(item.price * durationMultiplier);
+                            return (
+                              <div key={idx} className="bg-white p-2.5 rounded-xl flex justify-between items-center text-xs border border-slate-200 shadow-sm">
+                                <span className="font-semibold">{item.name} x{item.qty}</span>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-extrabold text-blue-600">Rp {(activeUnitPrice * item.qty).toLocaleString('id-ID')}</span>
+                                  <button type="button" onClick={() => handleRemoveSatuan(idx)} className="text-rose-500 font-bold px-1">✕</button>
+                                </div>
                               </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       )}
                     </div>
