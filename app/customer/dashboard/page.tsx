@@ -21,7 +21,6 @@ const cleanPhone = (phoneStr: string) => {
   return cleaned;
 };
 
-// MAPPING NOMOR WA ADMIN PER BRAND / OUTLET
 const getAdminWaNumber = (outletName: string) => {
   const lower = (outletName || '').toLowerCase();
   if (lower.includes('briwash')) return '6281120081011';
@@ -29,7 +28,7 @@ const getAdminWaNumber = (outletName: string) => {
   if (lower.includes('sorcha')) return '6281111112731';
   if (lower.includes('hari ini')) return '6281111169689';
   if (lower.includes('mc')) return '6281120055575';
-  return '6281120081011'; // Default Briwash jika tidak terdeteksi
+  return '6281120081011';
 };
 
 const getDurationMultiplier = (durStr: string) => {
@@ -47,22 +46,18 @@ export default function CustomerDashboardPage() {
   const [outletsList, setOutletsList] = useState<any[]>([]);
   const [selectedOutlet, setSelectedOutlet] = useState('');
 
-  // DATA LAYANAN DINAMIS TERINTEGRASI POS (APP_SETTINGS)
   const [dynamicServices, setDynamicServices] = useState<any[]>([]);
   const [outletOverrides, setOutletOverrides] = useState<any>({});
 
-  // STATE FORM ORDER LAUNDRY CUSTOMER
   const [customerName, setCustomerName] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
   const [isEditingAddress, setIsEditingAddress] = useState(false);
   
-  // STATE KILOAN & DURASINYA
   const [isKiloanChecked, setIsKiloanChecked] = useState(true);
   const [selectedKiloanSvc, setSelectedKiloanSvc] = useState('');
   const [kiloanEstKg, setKiloanEstKg] = useState('3');
   const [kiloanDuration, setKiloanDuration] = useState('Reguler (3 Hari)');
 
-  // STATE SATUAN & DURASINYA PER ITEM
   const [isSatuanChecked, setIsSatuanChecked] = useState(false);
   const [cartSatuan, setCartSatuan] = useState<Array<{ name: string; basePrice: number; price: number; qty: number; duration: string }>>([]);
   const [selectedSatuanSvc, setSelectedSatuanSvc] = useState('');
@@ -73,11 +68,9 @@ export default function CustomerDashboardPage() {
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // RIWAYAT ORDER & MUTASI DEPOSIT
   const [activeOrders, setActiveOrders] = useState<any[]>([]);
   const [completedOrders, setCompletedOrders] = useState<any[]>([]);
   const [depositLogs, setDepositLogs] = useState<any[]>([]);
-  const [selectedOrderDetail, setSelectedOrderDetail] = useState<any>(null);
 
   useEffect(() => {
     async function initPWA() {
@@ -101,6 +94,9 @@ export default function CustomerDashboardPage() {
       }
 
       const savedPhone = localStorage.getItem('laundry_customer_phone');
+      const savedAddr = localStorage.getItem('laundry_customer_address');
+      if (savedAddr) setCustomerAddress(savedAddr);
+
       if (savedPhone) {
         setCustomerPhone(savedPhone);
         fetchCustomerProfile(savedPhone);
@@ -113,47 +109,52 @@ export default function CustomerDashboardPage() {
     const norm = cleanPhone(phone);
     if (!norm) return;
 
-    const { data: cust } = await supabase.from('customers').select('*').eq('phone', norm).limit(1);
-    if (cust && cust.length > 0) {
-      setCustomerData(cust[0]);
-      if (cust[0].name) setCustomerName(cust[0].name);
-      if (cust[0].address) setCustomerAddress(cust[0].address);
+    try {
+      const { data: cust } = await supabase.from('customers').select('*').eq('phone', norm).limit(1);
+      if (cust && cust.length > 0) {
+        setCustomerData(cust[0]);
+        if (cust[0].name) setCustomerName(cust[0].name);
+      } else {
+        setCustomerData({ name: customerName || 'Pelanggan', deposit_balance: 0 });
+      }
+
+      const { data: pickupOrders } = await supabase
+        .from('pickup_orders')
+        .select('*')
+        .eq('phone_number', norm)
+        .order('created_at', { ascending: false });
+
+      const { data: posTransactions } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('customer_phone', norm)
+        .order('created_at', { ascending: false });
+
+      if (pickupOrders) {
+        setActiveOrders(pickupOrders.filter(o => o.status !== 'Selesai' && o.status !== 'Batal'));
+      }
+
+      let historyArr: any[] = [];
+      pickupOrders?.filter(o => o.status === 'Selesai' || o.status === 'Batal').forEach(o => {
+        historyArr.push({ id: o.id, type: 'Online Order', title: o.service_type, detail: o.service_detail, price: o.estimated_price, date: o.created_at, status: o.status });
+      });
+      posTransactions?.forEach(t => {
+        historyArr.push({ id: t.id, type: 'Outlet POS', title: `${t.service_type} (${t.receipt_number})`, detail: t.notes, price: t.amount, date: t.created_at, status: t.status });
+      });
+
+      historyArr.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      setCompletedOrders(historyArr);
+
+      const { data: memLogs } = await supabase
+        .from('membership_logs')
+        .select('*')
+        .eq('customer_phone', norm)
+        .order('created_at', { ascending: false });
+
+      if (memLogs) setDepositLogs(memLogs);
+    } catch (e) {
+      setCustomerData({ name: 'Pelanggan', deposit_balance: 0 });
     }
-
-    const { data: pickupOrders } = await supabase
-      .from('pickup_orders')
-      .select('*')
-      .eq('phone_number', norm)
-      .order('created_at', { ascending: false });
-
-    const { data: posTransactions } = await supabase
-      .from('transactions')
-      .select('*')
-      .eq('customer_phone', norm)
-      .order('created_at', { ascending: false });
-
-    if (pickupOrders) {
-      setActiveOrders(pickupOrders.filter(o => o.status !== 'Selesai' && o.status !== 'Batal'));
-    }
-
-    let historyArr: any[] = [];
-    pickupOrders?.filter(o => o.status === 'Selesai' || o.status === 'Batal').forEach(o => {
-      historyArr.push({ id: o.id, type: 'Online Order', title: o.service_type, detail: o.service_detail, price: o.estimated_price, date: o.created_at, status: o.status });
-    });
-    posTransactions?.forEach(t => {
-      historyArr.push({ id: t.id, type: 'Outlet POS', title: `${t.service_type} (${t.receipt_number})`, detail: t.notes, price: t.amount, date: t.created_at, status: t.status });
-    });
-
-    historyArr.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-    setCompletedOrders(historyArr);
-
-    const { data: memLogs } = await supabase
-      .from('membership_logs')
-      .select('*')
-      .eq('customer_phone', norm)
-      .order('created_at', { ascending: false });
-
-    if (memLogs) setDepositLogs(memLogs);
   };
 
   const handleLogin = (e: React.FormEvent) => {
@@ -161,6 +162,7 @@ export default function CustomerDashboardPage() {
     const norm = cleanPhone(customerPhone);
     if (!norm) return alert('Ketik nomor WA aktif!');
     localStorage.setItem('laundry_customer_phone', norm);
+    setCustomerData({ name: 'Pelanggan Setia', deposit_balance: 0 });
     fetchCustomerProfile(norm);
   };
 
@@ -170,24 +172,10 @@ export default function CustomerDashboardPage() {
     setCustomerData(null);
   };
 
-  const handleSaveAddress = async () => {
-    const norm = cleanPhone(customerPhone);
-    if (!norm) return;
-
-    setIsSubmitting(true);
-    const { error } = await supabase
-      .from('customers')
-      .update({ address: customerAddress })
-      .eq('phone', norm);
-
-    if (!error) {
-      alert('✅ Alamat penjemputan berhasil diperbarui!');
-      setIsEditingAddress(false);
-      fetchCustomerProfile(norm);
-    } else {
-      alert('❌ Gagal mengupdate alamat: ' + error.message);
-    }
-    setIsSubmitting(false);
+  const handleSaveAddress = () => {
+    localStorage.setItem('laundry_customer_address', customerAddress);
+    setIsEditingAddress(false);
+    alert('✅ Alamat penjemputan berhasil disimpan!');
   };
 
   const getServiceUnitPrice = (svcName: string) => {
@@ -225,12 +213,12 @@ export default function CustomerDashboardPage() {
     setCartSatuan(cartSatuan.filter((_, i) => i !== idx));
   };
 
-  // KALKULASI SUB-TOTAL KILOAN
+  // KALKULASI REALTIME SUB-TOTAL KILOAN
   const kiloanBaseUnitPrice = getServiceUnitPrice(selectedKiloanSvc);
   const kiloanActiveUnitPrice = Math.round(kiloanBaseUnitPrice * getDurationMultiplier(kiloanDuration));
-  const kiloanSubtotal = isKiloanChecked ? (Number(kiloanEstKg) || 1) * kiloanActiveUnitPrice : 0;
+  const kiloanSubtotal = isKiloanChecked ? Math.round((Number(kiloanEstKg) || 0) * kiloanActiveUnitPrice) : 0;
 
-  // KALKULASI SUB-TOTAL SATUAN (MASING-MASING ITEM SESUAI DURASINYA)
+  // KALKULASI REALTIME SUB-TOTAL SATUAN
   let satuanSubtotal = 0;
   if (isSatuanChecked) {
     cartSatuan.forEach(item => { 
@@ -251,6 +239,7 @@ export default function CustomerDashboardPage() {
     const normPhone = cleanPhone(customerPhone);
 
     const rincianArr: string[] = [];
+    if (customerAddress) rincianArr.push(`Alamat: ${customerAddress}`);
 
     if (isKiloanChecked) {
       rincianArr.push(`${selectedKiloanSvc} (${kiloanDuration}, Est. ${kiloanEstKg} Kg)`);
@@ -267,13 +256,12 @@ export default function CustomerDashboardPage() {
       outlet_id: selectedOutlet,
       customer_name: customerName || 'Pelanggan Online',
       phone_number: normPhone,
-      address: customerAddress || 'Penjemputan di Alamat Pelanggan',
       service_type: primaryServiceLabel,
       service_detail: serviceDetailLabel,
       estimated_weight: isKiloanChecked ? Number(kiloanEstKg) || 3 : 0,
       delivery_fee: deliveryFee,
       estimated_price: grandTotalEstimate,
-      notes: notes,
+      notes: notes || customerAddress,
       status: 'Menunggu Penjemputan'
     };
 
@@ -294,7 +282,6 @@ export default function CustomerDashboardPage() {
   const kiloanServicesList = dynamicServices.filter(s => s.type !== 'pcs');
   const satuanServicesList = dynamicServices.filter(s => s.type === 'pcs');
 
-  // NOMOR WA ADMIN BRAND SAAT INI
   const currentOutletObj = outletsList.find(o => o.id === selectedOutlet);
   const targetAdminWa = getAdminWaNumber(currentOutletObj?.name || '');
 
@@ -319,7 +306,6 @@ export default function CustomerDashboardPage() {
         )}
       </div>
 
-      {/* LOGIN FORM JIKA BELUM LOG IN */}
       {!customerData ? (
         <form onSubmit={handleLogin} className="bg-white border border-slate-200 p-6 rounded-3xl space-y-4 shadow-sm my-6">
           <div className="w-14 h-14 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center text-2xl mx-auto font-black shadow-inner">
@@ -343,11 +329,8 @@ export default function CustomerDashboardPage() {
         </form>
       ) : (
         <>
-          {/* TAB 1: HOME BERANDA */}
           {activeTab === 'home' && (
             <div className="space-y-4">
-              
-              {/* WALLET CARD */}
               <div className="bg-gradient-to-r from-blue-600 via-blue-700 to-indigo-800 rounded-3xl p-5 text-white shadow-xl shadow-blue-200/50 space-y-4 relative overflow-hidden">
                 <div className="flex justify-between items-start relative z-10">
                   <div>
@@ -371,12 +354,9 @@ export default function CustomerDashboardPage() {
                 </div>
               </div>
 
-              {/* ACTION BUTTON GRID */}
               <div className="grid grid-cols-2 gap-3">
                 <button onClick={() => setActiveTab('order')} className="bg-white border border-slate-200 p-4 rounded-3xl flex items-center gap-3 hover:border-blue-500 transition shadow-sm text-left">
-                  <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center text-2xl font-black">
-                    🛵
-                  </div>
+                  <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center text-2xl font-black">🛵</div>
                   <div>
                     <span className="text-xs font-extrabold text-slate-900 block">Pesan Express</span>
                     <span className="text-[10px] text-slate-500 font-medium">Jemput ke Rumah</span>
@@ -384,9 +364,7 @@ export default function CustomerDashboardPage() {
                 </button>
 
                 <button onClick={() => setActiveTab('deposit')} className="bg-white border border-slate-200 p-4 rounded-3xl flex items-center gap-3 hover:border-indigo-500 transition shadow-sm text-left">
-                  <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center text-2xl font-black">
-                    💳
-                  </div>
+                  <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center text-2xl font-black">💳</div>
                   <div>
                     <span className="text-xs font-extrabold text-slate-900 block">Paket Deposit</span>
                     <span className="text-[10px] text-slate-500 font-medium">Bonus Saldo Extra</span>
@@ -394,7 +372,6 @@ export default function CustomerDashboardPage() {
                 </button>
               </div>
 
-              {/* LIST ORDERAN AKTIF */}
               <div className="space-y-2.5 pt-1">
                 <div className="flex justify-between items-center">
                   <h3 className="text-xs font-extrabold text-slate-700 uppercase tracking-wider">⚡ Pesanan Dalam Proses ({activeOrders.length})</h3>
@@ -402,7 +379,7 @@ export default function CustomerDashboardPage() {
                 </div>
 
                 {activeOrders.map((order) => (
-                  <div key={order.id} onClick={() => setSelectedOrderDetail(order)} className="bg-white border border-slate-200 rounded-2xl p-4 text-xs space-y-2.5 shadow-sm hover:border-blue-400 transition cursor-pointer">
+                  <div key={order.id} className="bg-white border border-slate-200 rounded-2xl p-4 text-xs space-y-2.5 shadow-sm">
                     <div className="flex justify-between items-start">
                       <div>
                         <h4 className="font-extrabold text-slate-900 text-sm">{order.service_type}</h4>
@@ -428,7 +405,6 @@ export default function CustomerDashboardPage() {
             </div>
           )}
 
-          {/* TAB 2: ORDER LAUNDRY FORM */}
           {activeTab === 'order' && (
             <form onSubmit={handleOrderSubmit} className="space-y-4">
               <div className="bg-white border border-slate-200 p-5 rounded-3xl space-y-4 shadow-sm">
@@ -474,7 +450,6 @@ export default function CustomerDashboardPage() {
                   />
                 </div>
 
-                {/* SINKRONISASI PAKET KILOAN POS + FLEKSIBEL DURASI */}
                 <div className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100 space-y-3">
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
@@ -533,7 +508,6 @@ export default function CustomerDashboardPage() {
                   )}
                 </div>
 
-                {/* SINKRONISASI PAKET SATUAN POS + FLEKSIBEL DURASI PER ITEM */}
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
@@ -646,13 +620,10 @@ export default function CustomerDashboardPage() {
             </form>
           )}
 
-          {/* TAB 3: TOP UP DEPOSIT */}
           {activeTab === 'deposit' && (
             <div className="space-y-4">
               <div className="bg-white border border-slate-200 p-6 rounded-3xl space-y-4 text-center shadow-sm">
-                <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center text-3xl mx-auto font-black">
-                  💳
-                </div>
+                <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center text-3xl mx-auto font-black">💳</div>
                 <div>
                   <h3 className="text-base font-extrabold text-slate-900">Top Up Saldo Deposit</h3>
                   <p className="text-xs text-slate-500 mt-1">Dapatkan bonus saldo ekstra & bayar cucian instan tanpa uang pas.</p>
@@ -693,7 +664,6 @@ export default function CustomerDashboardPage() {
                 </a>
               </div>
 
-              {/* MUTASI SALDO */}
               <div className="space-y-2">
                 <h4 className="text-xs font-extrabold text-slate-700 uppercase tracking-wider">📜 Riwayat Top Up Saldo</h4>
                 {depositLogs.map((log, i) => (
@@ -709,7 +679,6 @@ export default function CustomerDashboardPage() {
             </div>
           )}
 
-          {/* TAB 4: RIWAYAT PESANAN */}
           {activeTab === 'history' && (
             <div className="space-y-3">
               <h3 className="text-xs font-extrabold text-slate-700 uppercase tracking-wider">📜 Riwayat Pesanan Selesai</h3>
@@ -739,7 +708,6 @@ export default function CustomerDashboardPage() {
             </div>
           )}
 
-          {/* TAB 5: PROFIL */}
           {activeTab === 'profile' && (
             <div className="bg-white border border-slate-200 p-6 rounded-3xl space-y-4 shadow-sm text-xs">
               <h3 className="text-sm font-extrabold text-slate-900 border-b border-slate-100 pb-2">👤 Profil Akun</h3>
@@ -752,7 +720,6 @@ export default function CustomerDashboardPage() {
                 <p className="font-mono text-blue-600 font-extrabold mt-0.5">{customerPhone}</p>
               </div>
 
-              {/* FITUR EDIT ALAMAT PENJEMPUTAN UTAMA */}
               <div className="pt-2 border-t border-slate-100">
                 <div className="flex justify-between items-center mb-1">
                   <span className="text-[10px] text-slate-400 uppercase font-extrabold">Alamat Penjemputan Utama</span>
@@ -779,7 +746,6 @@ export default function CustomerDashboardPage() {
                     <div className="flex gap-2">
                       <button
                         onClick={handleSaveAddress}
-                        disabled={isSubmitting}
                         className="flex-1 bg-blue-600 text-white font-extrabold py-2.5 rounded-xl text-xs shadow-sm hover:bg-blue-700 transition"
                       >
                         💾 Simpan Alamat

@@ -1118,27 +1118,27 @@ export default function POSPage() {
 
       {/* MODAL EDIT & DETAIL TRANSAKSI POS */}
       {selectedTxDetail && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in overflow-y-auto">
-          <div className="bg-white rounded-3xl p-5 md:p-6 max-w-lg w-full space-y-4 shadow-2xl border border-slate-200 my-8">
-            <div className="flex justify-between items-start border-b pb-3">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100] flex items-center justify-center p-3 md:p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl p-5 max-w-lg w-full space-y-4 shadow-2xl border border-slate-200 my-auto max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center border-b pb-3 sticky top-0 bg-white z-10">
               <div>
                 <span className="text-[10px] font-mono font-bold bg-indigo-100 text-indigo-800 px-2.5 py-0.5 rounded-full uppercase">
-                  Edit & Detail Transaksi POS
+                  Detail & Edit Transaksi
                 </span>
-                <h3 className="text-lg font-black text-slate-900 mt-1">
-                  {selectedTxDetail.receipt_number || 'TRX-UNKNOWN'}
+                <h3 className="text-base font-black text-slate-900 mt-1">
+                  {selectedTxDetail.receipt_number || 'TRX-POS'}
                 </h3>
               </div>
               <button
                 onClick={() => setSelectedTxDetail(null)}
-                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold flex items-center justify-center text-xs"
+                className="w-9 h-9 rounded-full bg-rose-100 hover:bg-rose-200 text-rose-700 font-extrabold flex items-center justify-center text-sm shadow-sm"
               >
                 ✕
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+            <div className="grid grid-cols-2 gap-2.5 text-xs">
+              <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200">
                 <span className="text-[9px] text-slate-400 font-bold block uppercase mb-1">Nama Pelanggan</span>
                 <input
                   type="text"
@@ -1147,7 +1147,7 @@ export default function POSPage() {
                   className="w-full border rounded-lg p-1.5 font-bold text-slate-800 bg-white text-xs"
                 />
               </div>
-              <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+              <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200">
                 <span className="text-[9px] text-slate-400 font-bold block uppercase mb-1">No. WhatsApp</span>
                 <input
                   type="text"
@@ -1171,10 +1171,9 @@ export default function POSPage() {
                     {services.map((svc, i) => (
                       <option key={i} value={svc.name}>{svc.name}</option>
                     ))}
-                    <option value="Laundry Satuan - Bedcover / Sprei">👔 Satuan - Bedcover / Sprei</option>
-                    <option value="Laundry Satuan - Sepatu / Jaket / Jas">👟 Satuan - Sepatu / Jaket / Jas</option>
-                    <option value="Laundry Satuan - Karpet / Gordyn">🏠 Satuan - Karpet / Gordyn</option>
-                    <option value="Laundry Gabungan (Kiloan + Satuan)">📦 Laundry Gabungan (Kiloan + Satuan)</option>
+                    <option value="Bedcover Double">Bedcover Double</option>
+                    <option value="Bedcover Single">Bedcover Single</option>
+                    <option value="Sprei Single">Sprei Single</option>
                   </select>
                 </div>
                 <div>
@@ -1185,9 +1184,9 @@ export default function POSPage() {
                     className="w-full border rounded-xl p-2 text-xs font-bold text-amber-700 bg-white"
                   >
                     <option value="Reguler (3 Hari)">Reguler (3 Hari)</option>
-                    <option value="Oneday (1 Hari / 24 Jam)">Oneday 1 Hari (+50%)</option>
-                    <option value="Express (6 Jam)">Express 6 Jam (+100%)</option>
-                    <option value="Quick (3 Jam)">Quick 3 Jam (+200%)</option>
+                    <option value="Oneday (1 Hari / 24 Jam)">Oneday (+50%)</option>
+                    <option value="Express (6 Jam)">Express (+100%)</option>
+                    <option value="Quick (3 Jam)">Quick (+200%)</option>
                   </select>
                 </div>
               </div>
@@ -1228,7 +1227,7 @@ export default function POSPage() {
                   />
                 </div>
                 <div>
-                  <label className="font-bold text-indigo-950 block mb-1">Biaya Satuan Tambahan (Rp)</label>
+                  <label className="font-bold text-indigo-950 block mb-1">Biaya Tambahan (Rp)</label>
                   <input
                     type="number"
                     placeholder="0"
@@ -1240,10 +1239,10 @@ export default function POSPage() {
               </div>
 
               <div>
-                <label className="font-bold text-indigo-950 block mb-1">Catatan Cucian / Tambahan Item Satuan</label>
+                <label className="font-bold text-indigo-950 block mb-1">Catatan Cucian</label>
                 <input
                   type="text"
-                  placeholder="Contoh: Ada luntur, tambah kemeja 1 pcs"
+                  placeholder="Contoh: Ada luntur, kemeja putih 1 pcs"
                   value={editNotes}
                   onChange={(e) => setEditNotes(e.target.value)}
                   className="w-full border rounded-xl p-2 text-xs bg-white"
@@ -1251,7 +1250,7 @@ export default function POSPage() {
               </div>
 
               <div>
-                <label className="font-bold text-indigo-950 block mb-1">Total Tagihan Final Rp (Otomatis Kalkulasi)</label>
+                <label className="font-bold text-indigo-950 block mb-1">Total Tagihan Final (Otomatis Kalkulasi)</label>
                 <input
                   type="number"
                   value={editAmount}
@@ -1262,22 +1261,11 @@ export default function POSPage() {
               </div>
             </div>
 
-            <div className="space-y-1.5">
-              <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-wider">👥 Staf Pengerjaan</h4>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[10px]">
-                <div className="bg-slate-50 p-2 rounded-xl border"><span className="text-slate-400 font-bold block">1. Sortir</span><b className="text-slate-800">{getStaffForStage('sortir')}</b></div>
-                <div className="bg-slate-50 p-2 rounded-xl border"><span className="text-slate-400 font-bold block">2. Cuci</span><b className="text-slate-800">{getStaffForStage('cuci')}</b></div>
-                <div className="bg-slate-50 p-2 rounded-xl border"><span className="text-slate-400 font-bold block">3. Kering</span><b className="text-slate-800">{getStaffForStage('kering')}</b></div>
-                <div className="bg-slate-50 p-2 rounded-xl border"><span className="text-slate-400 font-bold block">4. Setrika</span><b className="text-slate-800">{getStaffForStage('setrika')}</b></div>
-                <div className="bg-slate-50 p-2 rounded-xl border"><span className="text-slate-400 font-bold block">5. Packing</span><b className="text-slate-800">{getStaffForStage('packing')}</b></div>
-              </div>
-            </div>
-
             <div className="space-y-2 pt-2 border-t">
               <button
                 onClick={() => handleSaveTxChanges(true)}
                 disabled={isSubmitting}
-                className="w-full bg-amber-500 hover:bg-amber-600 text-white font-bold py-2.5 rounded-xl text-xs shadow transition flex items-center justify-center gap-1.5"
+                className="w-full bg-amber-500 hover:bg-amber-600 text-white font-bold py-2.5 rounded-xl text-xs shadow transition"
               >
                 ⚠️ Kirim Konfirmasi Perubahan (Ke CS & Customer)
               </button>
@@ -1287,15 +1275,22 @@ export default function POSPage() {
                   disabled={isSubmitting}
                   className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs shadow transition"
                 >
-                  💾 Simpan Perubahan
+                  💾 Simpan
                 </button>
                 <button
                   onClick={() => handlePrintReceiptFromTx({ ...selectedTxDetail, customer_name: editCustomerName, customer_phone: editCustomerPhone, service_type: editServiceType, duration: editDuration, weight_kg: Number(editWeightKg), pcs_count: Number(editPcsCount), delivery_fee: Number(editDeliveryFee), notes: editNotes, amount: Number(editAmount) })}
-                  className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl text-xs shadow transition flex items-center justify-center gap-1"
+                  className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl text-xs shadow transition"
                 >
                   🖨️ Cetak Struk
                 </button>
               </div>
+
+              <button
+                onClick={() => setSelectedTxDetail(null)}
+                className="w-full bg-slate-200 hover:bg-slate-300 text-slate-800 font-black py-2.5 rounded-xl text-xs mt-2 transition"
+              >
+                ✕ TUTUP MODAL
+              </button>
             </div>
           </div>
         </div>
