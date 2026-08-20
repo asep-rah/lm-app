@@ -12,10 +12,10 @@ export default function DriverDashboard() {
   const [pickups, setPickups] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [driverName, setDriverName] = useState('Driver Internal');
+  const [uploadingId, setUploadingId] = useState<string | null>(null);
 
   const loadDriverTasks = async () => {
     setIsLoading(true);
-    // Driver hanya melihat orderan yang statusnya sudah ditugaskan kepadanya ('Driver Menuju Lokasi')
     const { data, error } = await supabase
       .from('pickup_orders')
       .select('*, outlets(name), customer_addresses(*)')
@@ -28,7 +28,6 @@ export default function DriverDashboard() {
   };
 
   useEffect(() => {
-    // Simulasi Login Nama Driver
     const driverStr = localStorage.getItem('laundry_user');
     if (driverStr) {
       try {
@@ -39,7 +38,23 @@ export default function DriverDashboard() {
 
     loadDriverTasks();
 
-    // Listener Realtime Supabase untuk Driver
+    // FITUR 1: BROADCAST LIVE GPS KOORDINAT DRIVER KE DATABASE
+    let watchId: number;
+    if (navigator.geolocation) {
+      watchId = navigator.geolocation.watchPosition(
+        async (pos) => {
+          const { latitude, longitude } = pos.coords;
+          await supabase
+            .from('pickup_orders')
+            .update({ driver_lat: latitude, driver_lon: longitude })
+            .eq('status', 'Driver Menuju Lokasi');
+        },
+        (err) => console.log('GPS tracking inactive:', err.message),
+        { enableHighAccuracy: true }
+      );
+    }
+
+    // Listener Realtime Supabase
     const driverChannel = supabase
       .channel('driver_pickup_sync')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'pickup_orders' }, () => {
@@ -49,37 +64,63 @@ export default function DriverDashboard() {
 
     return () => {
       supabase.removeChannel(driverChannel);
+      if (watchId && navigator.geolocation) navigator.geolocation.clearWatch(watchId);
     };
   }, []);
 
   const handleOpenMaps = (lat: number, lon: number) => {
+    if (!lat || !lon) return alert('Koordinat lokasi pelanggan belum diatur.');
     const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
     window.open(mapsUrl, '_blank');
   };
 
   const handleOpenWA = (phone: string) => {
-    let cleanPhone = phone.trim().replace(/\D/g, '');
+    let cleanPhone = (phone || '').trim().replace(/\D/g, '');
     if (cleanPhone.startsWith('0')) cleanPhone = '62' + cleanPhone.slice(1);
-    const msg = encodeURIComponent(`Halo Kak, saya Driver Laundrivery yang bertugas menjemput cucian Kakak. Saya sedang menuju ke lokasi ya Kak! 🛵💨`);
+    const msg = encodeURIComponent(`Halo Kak, saya Driver Laundrivery (${driverName}) yang bertugas menjemput cucian Kakak. Saya sedang menuju ke lokasi ya Kak! 🛵💨`);
     window.open(`https://wa.me/${cleanPhone}?text=${msg}`, '_blank');
   };
 
-  const handleFinishTask = async (id: string) => {
-    if (!confirm('Apakah barang cucian sudah berhasil dijemput dan dibawa ke Outlet?')) return;
-    
-    // Update status menjadi Selesai (Di tahap penjemputan, Selesai artinya sudah tiba di kasir)
-    const { error } = await supabase.from('pickup_orders').update({ status: 'Selesai' }).eq('id', id);
-    if (!error) {
-      alert('✅ Tugas penjemputan selesai! Cucian masuk ke antrean Kasir.');
+  // FITUR 2: UPLOAD FOTO BUKTI PENJEMPUTAN BARANG
+  const handleFileUploadAndFinish = async (e: React.ChangeEvent<HTMLInputElement>, orderId: string) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!confirm('Apakah foto bukti penjemputan sudah sesuai dan barang dibawa ke Outlet?')) return;
+
+    setUploadingId(orderId);
+    const fileName = `pickup-${orderId}-${Date.now()}.jpg`;
+
+    // Unggah ke Supabase Storage Bucket 'pickup-photos'
+    const { data, error } = await supabase.storage
+      .from('pickup-photos')
+      .upload(fileName, file);
+
+    let photoPublicUrl = '';
+    if (!error && data) {
+      photoPublicUrl = `https://qlgbjvzabnfqmfnjdkmo.supabase.co/storage/v1/object/public/pickup-photos/${fileName}`;
+    }
+
+    // Update Status menjadi 'Telah Tiba di Outlet' agar otomatis masuk antrean POS
+    const updateData: any = { status: 'Telah Tiba di Outlet' };
+    if (photoPublicUrl) updateData.photo_url = photoPublicUrl;
+
+    const { error: dbError } = await supabase
+      .from('pickup_orders')
+      .update(updateData)
+      .eq('id', orderId);
+
+    if (!dbError) {
+      alert('✅ Tugas penjemputan selesai! Cucian dan foto bukti berhasil dikirim ke Kasir POS.');
       loadDriverTasks();
     } else {
-      alert('Gagal menyelesaikan tugas: ' + error.message);
+      alert('Gagal menyelesaikan tugas: ' + dbError.message);
     }
+    setUploadingId(null);
   };
 
   return (
     <div className="min-h-screen bg-slate-100 flex justify-center pb-24 font-sans">
-      {/* Container seukuran HP */}
       <div className="bg-slate-50 w-full max-w-md min-h-screen shadow-2xl flex flex-col relative">
         
         {/* HEADER DRIVER */}
@@ -88,7 +129,7 @@ export default function DriverDashboard() {
             <div>
               <h1 className="text-xl font-black tracking-tight flex items-center gap-1.5">
                 <span>Portal Driver</span>
-                <span className="text-[10px] bg-emerald-900 text-white px-2 py-0.5 rounded-full font-bold">PRO</span>
+                <span className="text-[10px] bg-emerald-900 text-white px-2 py-0.5 rounded-full font-bold">LIVE GPS</span>
               </h1>
               <p className="text-[10px] text-emerald-100 font-medium">🛵 Aplikasi Kurir Internal Laundrivery</p>
             </div>
@@ -114,7 +155,6 @@ export default function DriverDashboard() {
 
         {/* DAFTAR TUGAS */}
         <div className="p-4 flex-1 space-y-4">
-          
           <div className="flex items-center justify-between">
             <h2 className="text-xs font-black text-slate-700 uppercase tracking-wider">
               📋 Daftar Titik Jemput Hari Ini
@@ -132,9 +172,9 @@ export default function DriverDashboard() {
 
                 <div>
                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Data Pelanggan</p>
-                  <h3 className="font-black text-slate-900 text-lg leading-tight mt-0.5">{p.customer_phone}</h3>
+                  <h3 className="font-black text-slate-900 text-lg leading-tight mt-0.5">{p.customer_phone || p.phone_number}</h3>
                   <p className="text-xs font-bold text-slate-700 mt-1 bg-slate-50 p-2 rounded-xl border border-slate-100">
-                    📍 {p.customer_addresses?.full_address || 'Alamat tidak ditemukan'}
+                    📍 {p.customer_addresses?.full_address || p.notes || 'Alamat tidak ditemukan'}
                     {p.customer_addresses?.patokan && p.customer_addresses.patokan !== '-' && (
                       <span className="block mt-1 text-[10px] text-rose-600 italic">
                         *Patokan: "{p.customer_addresses.patokan}"
@@ -146,11 +186,11 @@ export default function DriverDashboard() {
                 <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl space-y-1">
                   <p className="text-[10px] font-bold text-amber-900 uppercase">📦 Rincian Barang yang Dijemput:</p>
                   <p className="text-xs text-amber-950 font-medium">Layanan: <b className="font-black">{p.service_type}</b></p>
-                  <p className="text-xs text-amber-950 font-medium">Estimasi Bawaan: <b className="font-black">{p.estimated_weight} Kg ({p.bag_count} Kantong)</b></p>
-                  <p className="text-xs text-amber-950 font-medium">Ongkir Tagihan: <b className="font-black text-blue-700">Rp {Number(p.delivery_fee).toLocaleString('id-ID')}</b></p>
+                  <p className="text-xs text-amber-950 font-medium">Estimasi Bawaan: <b className="font-black">{p.estimated_weight || '-'} Kg ({p.bag_count || '1'} Kantong)</b></p>
+                  <p className="text-xs text-amber-950 font-medium">Ongkir Tagihan: <b className="font-black text-blue-700">Rp {Number(p.delivery_fee || 0).toLocaleString('id-ID')}</b></p>
                 </div>
 
-                {/* TOMBOL AKSI DRIVER */}
+                {/* TOMBOL AKSI MAPS & CHAT WA */}
                 <div className="grid grid-cols-2 gap-2 pt-2 border-t">
                   <button 
                     onClick={() => handleOpenMaps(p.customer_addresses?.latitude, p.customer_addresses?.longitude)}
@@ -160,7 +200,7 @@ export default function DriverDashboard() {
                     <span className="text-[10px]">Buka Maps</span>
                   </button>
                   <button 
-                    onClick={() => handleOpenWA(p.customer_phone)}
+                    onClick={() => handleOpenWA(p.customer_phone || p.phone_number)}
                     className="flex flex-col items-center justify-center bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 font-bold p-3 rounded-xl transition active:scale-95"
                   >
                     <span className="text-xl mb-1">💬</span>
@@ -168,12 +208,20 @@ export default function DriverDashboard() {
                   </button>
                 </div>
 
-                <button 
-                  onClick={() => handleFinishTask(p.id)}
-                  className="w-full mt-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black py-4 rounded-xl text-xs shadow-lg transition active:scale-95 flex justify-center items-center gap-2"
-                >
-                  ✅ BARANG SUDAH DIAMBIL
-                </button>
+                {/* FITUR TOMBOL FOTO BUKTI & FINISH TASK */}
+                <label className="block w-full mt-2">
+                  <span className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black py-4 rounded-xl text-xs shadow-lg transition active:scale-95 flex justify-center items-center gap-2 cursor-pointer">
+                    📸 {uploadingId === p.id ? 'Mengunggah Foto...' : 'AMBIL FOTO BUKTI & FINISH'}
+                  </span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className="hidden"
+                    onChange={(e) => handleFileUploadAndFinish(e, p.id)}
+                    disabled={uploadingId === p.id}
+                  />
+                </label>
 
               </div>
             ))}
