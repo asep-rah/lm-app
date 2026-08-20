@@ -433,6 +433,8 @@ export default function Dashboard() {
   };
 
   const handleSaveSettings = async () => {
+    setIsSaving(true);
+    const coaArray = coaList.split('\n').map((item) => item.trim()).filter((item) => item !== '');
     const updatePayload: any = {
       basic_salary: Number(basicSalary), receipt_terms: receiptTerms, coa_categories: JSON.stringify(coaArray),
       dynamic_services: JSON.stringify(services), outlet_overrides: JSON.stringify(outletOverrides), supervisor_mapping: JSON.stringify(supervisorMapping),
