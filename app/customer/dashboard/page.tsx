@@ -348,35 +348,38 @@ export default function CustomerDashboardPage() {
 
     const mainServiceLabel = isKiloanChecked ? `${selectedKiloanSvc} (${kiloanDuration})` : `Satuan (${cartSatuan.length} Item)`;
     const notesCombined = `Alamat: ${customerAddress} | Detail: ${detailLines.join(' | ')}${notes ? ` | Catatan: ${notes}` : ''}`;
+    const autoOrderNo = `ORD-${Date.now().toString().slice(-8)}`;
 
-    // GENERATE UNIK ORDER NUMBER UNTUK MEMENUHI CONSTRAINT DATABASE
-    const autoOrderNumber = `ORD-${Date.now().toString().slice(-8)}`;
-
-    let targetPhoneColumn = 'phone_number';
-    try {
-      const { data: sampleData } = await supabase.from('pickup_orders').select('*').limit(1);
-      if (sampleData && sampleData.length > 0) {
-        const sampleKeys = Object.keys(sampleData[0]);
-        if (sampleKeys.includes('phone_number')) targetPhoneColumn = 'phone_number';
-        else if (sampleKeys.includes('customer_phone')) targetPhoneColumn = 'customer_phone';
-        else if (sampleKeys.includes('phone')) targetPhoneColumn = 'phone';
-      }
-    } catch (err) {}
-
-    const payload: any = {
-      order_number: autoOrderNumber,
+    // STRATEGI LENGKAP: MEMBERIKAN SETIAP KEMUNGKINAN NAMA KOLOM UTAMA
+    const basePayload: any = {
+      order_number: autoOrderNo,
+      pickup_number: autoOrderNo,
       outlet_id: selectedOutlet,
       customer_name: customerName || 'Pelanggan Online',
+      phone_number: normPhone,
+      phone: normPhone,
+      customer_phone: normPhone,
       service_type: mainServiceLabel,
+      service_detail: notesCombined,
+      estimated_weight: isKiloanChecked ? Number(kiloanEstKg) || 3 : 0,
+      delivery_fee: finalOngkir,
+      estimated_price: grandTotalEstimate,
+      total_price: grandTotalEstimate,
       notes: notesCombined,
       status: 'Menunggu Penjemputan'
     };
-    
-    payload[targetPhoneColumn] = normPhone;
-    payload.estimated_weight = isKiloanChecked ? Number(kiloanEstKg) || 3 : 0;
-    payload.delivery_fee = finalOngkir;
 
-    const { error } = await supabase.from('pickup_orders').insert([payload]);
+    let { error } = await supabase.from('pickup_orders').insert([basePayload]);
+
+    // HAPUS SECARA BERTAHALAP JIKA ADA PROPERTI KHUSUS YANG DITOLAK
+    if (error && error.message.includes('column')) {
+      delete basePayload.service_detail;
+      delete basePayload.estimated_price;
+      delete basePayload.total_price;
+      delete basePayload.phone;
+      const secondTry = await supabase.from('pickup_orders').insert([basePayload]);
+      error = secondTry.error;
+    }
 
     if (!error) {
       alert('✅ PESANAN BERHASIL TERKIRIM KE KASIR POS!\nDriver/Kasir kami akan segera memproses penjemputan.');
