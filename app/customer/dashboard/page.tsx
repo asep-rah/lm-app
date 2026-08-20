@@ -38,7 +38,6 @@ const getDurationMultiplier = (durStr: string) => {
   return 1.0;
 };
 
-// HAVERSINE DISTANCE IN KM
 const calculateDistanceKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
   const R = 6371;
   const dLat = (lat2 - lat1) * (Math.PI / 180);
@@ -47,13 +46,6 @@ const calculateDistanceKm = (lat1: number, lon1: number, lat2: number, lon2: num
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 };
-
-// LIST DAFTAR PROMO AKTIF BISA DIKLAIM
-const AVAILABLE_PROMOS = [
-  { id: 'ONGKIRFREE', title: '🚚 Gratis Ongkir Antar-Jemput', desc: 'Potongan ongkir hingga Rp 15.000', type: 'ongkir', value: 15000, minTx: 30000 },
-  { id: 'DISC10', title: '🏷️ Diskon 10% Spesial Online', desc: 'Potongan 10% untuk transaksi penjemputan', type: 'percent', value: 10, minTx: 40000 },
-  { id: 'HEMAT10K', title: '💰 Voucher Hemat Rp 10.000', desc: 'Potongan Rp 10.000 untuk paket Kiloan & Satuan', type: 'nominal', value: 10000, minTx: 50000 }
-];
 
 export default function CustomerDashboardPage() {
   const [activeTab, setActiveTab] = useState<'home' | 'order' | 'deposit' | 'history' | 'profile'>('home');
@@ -66,13 +58,13 @@ export default function CustomerDashboardPage() {
 
   const [dynamicServices, setDynamicServices] = useState<any[]>([]);
   const [outletOverrides, setOutletOverrides] = useState<any>({});
+  const [availablePromos, setAvailablePromos] = useState<any[]>([]);
 
   const [customerName, setCustomerName] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
   const [isEditingAddress, setIsEditingAddress] = useState(false);
   const [userCoords, setUserCoords] = useState<{ lat: number; lon: number } | null>(null);
 
-  // STATE KILOAN & SATUAN
   const [isKiloanChecked, setIsKiloanChecked] = useState(true);
   const [selectedKiloanSvc, setSelectedKiloanSvc] = useState('');
   const [kiloanEstKg, setKiloanEstKg] = useState('3');
@@ -84,7 +76,6 @@ export default function CustomerDashboardPage() {
   const [inputSatuanQty, setInputSatuanQty] = useState('1');
   const [satuanInputDuration, setSatuanInputDuration] = useState('Reguler (3 Hari)');
 
-  // ONGKIR & PROMO
   const [deliveryFee, setDeliveryFee] = useState<number | null>(null);
   const [distanceKm, setDistanceKm] = useState<number | null>(null);
   const [claimedPromo, setClaimedPromo] = useState<any>(null);
@@ -106,11 +97,19 @@ export default function CustomerDashboardPage() {
         setSelectedOutlet(dbOutlets[0].id);
       }
 
+      // FETCH APP_SETTINGS UNTUK DYNAMIC SERVICES DAN PROMO DARI OWNER
       const { data: dbSettings } = await supabase.from('app_settings').select('*').eq('id', 1).single();
       if (dbSettings) {
         const svcs = safeParse(dbSettings.dynamic_services, []);
         setDynamicServices(svcs);
         setOutletOverrides(safeParse(dbSettings.outlet_overrides, {}));
+
+        // DINAMIS: BACA PROMO DARI SETTING OWNER
+        const promos = safeParse(dbSettings.promos_data, [
+          { id: 'ONGKIRFREE', title: '🚚 Gratis Ongkir Antar-Jemput', desc: 'Potongan ongkir hingga Rp 15.000', type: 'ongkir', value: 15000, minTx: 30000 },
+          { id: 'DISC10', title: '🏷️ Diskon 10% Spesial Online', desc: 'Potongan 10% untuk transaksi penjemputan', type: 'percent', value: 10, minTx: 40000 }
+        ]);
+        setAvailablePromos(promos);
 
         const defaultKiloan = svcs.find((s: any) => s.type !== 'pcs') || svcs[0];
         const defaultSatuan = svcs.find((s: any) => s.type === 'pcs') || svcs[0];
@@ -152,7 +151,6 @@ export default function CustomerDashboardPage() {
     initPWA();
   }, []);
 
-  // KALKULASI ONGKIR BERBASIS LALAMOVE MOTOR (1-WAY RATE * 2 UNTUK PP / ANTAR-JEMPUT)
   useEffect(() => {
     if (!customerAddress || customerAddress.trim().length < 5) {
       setDeliveryFee(null);
@@ -166,17 +164,14 @@ export default function CustomerDashboardPage() {
       const roundedDist = Math.round(dist * 10) / 10;
       setDistanceKm(roundedDist);
 
-      // TARIF LALAMOVE MOTOR: Rp 9.000 (1-3 KM), +Rp 2.000 PER KM SELANJUTNYA
       let lalamoveOneWay = 9000;
       if (roundedDist > 3) {
         lalamoveOneWay += Math.ceil(roundedDist - 3) * 2000;
       }
 
-      // DIKALI 2 KARENA PP (ANTAR & JEMPUT)
       const roundTripFee = lalamoveOneWay * 2;
       setDeliveryFee(roundTripFee);
     } else {
-      // ESTIMASI DENGAN RATA-RATA PP JIKA GPS TIDAK AKTIF
       setDistanceKm(null);
       setDeliveryFee(18000);
     }
@@ -290,12 +285,10 @@ export default function CustomerDashboardPage() {
     setCartSatuan(cartSatuan.filter((_, i) => i !== idx));
   };
 
-  // KALKULASI SUB-TOTAL KILOAN
   const kiloanBaseUnitPrice = getServiceUnitPrice(selectedKiloanSvc);
   const kiloanActiveUnitPrice = Math.round(kiloanBaseUnitPrice * getDurationMultiplier(kiloanDuration));
   const kiloanSubtotal = isKiloanChecked ? Math.round((Number(kiloanEstKg) || 0) * kiloanActiveUnitPrice) : 0;
 
-  // KALKULASI SUB-TOTAL SATUAN
   let satuanSubtotal = 0;
   if (isSatuanChecked) {
     cartSatuan.forEach(item => { 
@@ -306,15 +299,14 @@ export default function CustomerDashboardPage() {
   const rawOngkir = deliveryFee || 0;
   const rawSubtotal = kiloanSubtotal + satuanSubtotal;
 
-  // PROSES DISKON PROMO KLAIM
   let promoDiscountVal = 0;
   if (claimedPromo) {
     if (claimedPromo.type === 'ongkir') {
-      promoDiscountVal = Math.min(rawOngkir, claimedPromo.value);
+      promoDiscountVal = Math.min(rawOngkir, Number(claimedPromo.value) || 0);
     } else if (claimedPromo.type === 'percent') {
-      promoDiscountVal = Math.round((rawSubtotal * claimedPromo.value) / 100);
+      promoDiscountVal = Math.round((rawSubtotal * (Number(claimedPromo.value) || 0)) / 100);
     } else if (claimedPromo.type === 'nominal') {
-      promoDiscountVal = claimedPromo.value;
+      promoDiscountVal = Number(claimedPromo.value) || 0;
     }
   }
 
@@ -322,8 +314,8 @@ export default function CustomerDashboardPage() {
   const grandTotalEstimate = Math.max(0, rawSubtotal + rawOngkir - promoDiscountVal);
 
   const handleClaimPromo = (promo: any) => {
-    if (rawSubtotal + rawOngkir < promo.minTx) {
-      return alert(`⚠️ Minimal transaksi untuk promo ini adalah Rp ${promo.minTx.toLocaleString('id-ID')}`);
+    if (rawSubtotal + rawOngkir < (Number(promo.minTx) || 0)) {
+      return alert(`⚠️ Minimal transaksi untuk promo ini adalah Rp ${Number(promo.minTx || 0).toLocaleString('id-ID')}`);
     }
     setClaimedPromo(promo);
     setShowPromoModal(false);
@@ -731,7 +723,6 @@ export default function CustomerDashboardPage() {
                   className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3.5 text-xs text-slate-800 font-medium"
                 />
 
-                {/* RINCIAN SUB-TOTAL, ONGKIR LALAMOVE MOTOR PP, DISKON PROMO & TOTAL */}
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-1.5 text-xs">
                   <div className="flex justify-between text-slate-500 font-medium"><span>Subtotal Kiloan:</span><span>Rp {kiloanSubtotal.toLocaleString('id-ID')}</span></div>
                   <div className="flex justify-between text-slate-500 font-medium"><span>Subtotal Satuan:</span><span>Rp {satuanSubtotal.toLocaleString('id-ID')}</span></div>
@@ -914,7 +905,7 @@ export default function CustomerDashboardPage() {
         </>
       )}
 
-      {/* MODAL KLAIM VOUCHER PROMO & DAFTAR CABANG */}
+      {/* MODAL KLAIM VOUCHER PROMO AKTIF BISA DI-MANAGE OWNER */}
       {showPromoModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-5 max-w-sm w-full space-y-4 shadow-2xl max-h-[85vh] overflow-y-auto">
@@ -925,26 +916,30 @@ export default function CustomerDashboardPage() {
 
             <div className="space-y-2.5">
               <p className="text-[10px] font-extrabold text-slate-400 uppercase">Pilih Promo Untuk Pesanan Ini:</p>
-              {AVAILABLE_PROMOS.map((promo) => {
-                const isClaimed = claimedPromo?.id === promo.id;
-                return (
-                  <div key={promo.id} className={`p-3.5 rounded-2xl border transition space-y-2 ${isClaimed ? 'bg-amber-50 border-amber-400' : 'bg-slate-50 border-slate-200'}`}>
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <h4 className="font-extrabold text-slate-900 text-xs">{promo.title}</h4>
-                        <p className="text-[10px] text-slate-500 mt-0.5">{promo.desc}</p>
-                        <p className="text-[9px] text-amber-700 font-bold mt-1">Min. Transaksi: Rp {promo.minTx.toLocaleString('id-ID')}</p>
+              {availablePromos.length > 0 ? (
+                availablePromos.map((promo, idx) => {
+                  const isClaimed = claimedPromo?.id === promo.id;
+                  return (
+                    <div key={idx} className={`p-3.5 rounded-2xl border transition space-y-2 ${isClaimed ? 'bg-amber-50 border-amber-400' : 'bg-slate-50 border-slate-200'}`}>
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <h4 className="font-extrabold text-slate-900 text-xs">{promo.title}</h4>
+                          <p className="text-[10px] text-slate-500 mt-0.5">{promo.desc}</p>
+                          <p className="text-[9px] text-amber-700 font-bold mt-1">Min. Transaksi: Rp {Number(promo.minTx || 0).toLocaleString('id-ID')}</p>
+                        </div>
+                        <button
+                          onClick={() => handleClaimPromo(promo)}
+                          className={`text-[10px] font-extrabold px-3 py-1.5 rounded-xl shadow-sm transition ${isClaimed ? 'bg-emerald-600 text-white' : 'bg-amber-500 hover:bg-amber-600 text-white'}`}
+                        >
+                          {isClaimed ? 'Terpasang ✓' : 'Klaim Promo'}
+                        </button>
                       </div>
-                      <button
-                        onClick={() => handleClaimPromo(promo)}
-                        className={`text-[10px] font-extrabold px-3 py-1.5 rounded-xl shadow-sm transition ${isClaimed ? 'bg-emerald-600 text-white' : 'bg-amber-500 hover:bg-amber-600 text-white'}`}
-                      >
-                        {isClaimed ? 'Terpasang ✓' : 'Klaim Promo'}
-                      </button>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              ) : (
+                <p className="text-xs text-slate-400 text-center py-4">Belum ada promo aktif saat ini.</p>
+              )}
             </div>
 
             <div className="space-y-2 pt-2 border-t border-slate-100">

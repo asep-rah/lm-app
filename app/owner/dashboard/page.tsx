@@ -128,6 +128,7 @@ export default function Dashboard() {
         if (settings.coa_categories) setCoaList(safeParse(settings.coa_categories, []).join('\n'));
         if (settings.dynamic_services) setServices(safeParse(settings.dynamic_services, []));
         if (settings.outlet_overrides) setOutletOverrides(safeParse(settings.outlet_overrides, {}));
+        if (settings.promos_data) setPromosList(safeParse(settings.promos_data, promosList));
         if (settings.supervisor_mapping) {
           loadedSupMap = safeParse(settings.supervisor_mapping, {});
           setSupervisorMapping(loadedSupMap);
@@ -408,12 +409,34 @@ export default function Dashboard() {
     if (!error) { setEmployees(employees.filter((emp) => emp.id !== id)); alert('✅ Karyawan dihapus!'); } else alert('❌ Gagal: ' + error.message);
     setIsSaving(false);
   };
+  const [promosList, setPromosList] = useState<any[]>([
+    { id: 'ONGKIRFREE', title: '🚚 Gratis Ongkir Antar-Jemput', desc: 'Potongan ongkir hingga Rp 15.000', type: 'ongkir', value: 15000, minTx: 30000 },
+    { id: 'DISC10', title: '🏷️ Diskon 10% Spesial Online', desc: 'Potongan 10% untuk transaksi penjemputan', type: 'percent', value: 10, minTx: 40000 },
+    { id: 'HEMAT10K', title: '💰 Voucher Hemat Rp 10.000', desc: 'Potongan Rp 10.000 untuk paket Kiloan & Satuan', type: 'nominal', value: 10000, minTx: 50000 }
+  ]);
+
+  const handleAddPromo = () => {
+    setPromosList([
+      ...promosList,
+      { id: `PROMO_${Date.now()}`, title: '🎁 Promo Baru', desc: 'Deskripsi promo', type: 'nominal', value: 5000, minTx: 20000 }
+    ]);
+  };
+
+  const handleRemovePromo = (id: string) => {
+    if (confirm('Yakin ingin menghapus promo ini?')) {
+      setPromosList(promosList.filter(p => p.id !== id));
+    }
+  };
+
+  const handleUpdatePromo = (id: string, field: string, value: any) => {
+    setPromosList(promosList.map(p => p.id === id ? { ...p, [field]: value } : p));
+  };
 
   const handleSaveSettings = async () => {
-    setIsSaving(true); const coaArray = coaList.split('\n').map((item) => item.trim()).filter((item) => item !== '');
     const updatePayload: any = {
       basic_salary: Number(basicSalary), receipt_terms: receiptTerms, coa_categories: JSON.stringify(coaArray),
-      dynamic_services: JSON.stringify(services), outlet_overrides: JSON.stringify(outletOverrides), supervisor_mapping: JSON.stringify(supervisorMapping)
+      dynamic_services: JSON.stringify(services), outlet_overrides: JSON.stringify(outletOverrides), supervisor_mapping: JSON.stringify(supervisorMapping),
+      promos_data: JSON.stringify(promosList)
     };
     let { error } = await supabase.from('app_settings').update(updatePayload).eq('id', 1);
     if (error && error.message?.includes('supervisor_mapping')) {
