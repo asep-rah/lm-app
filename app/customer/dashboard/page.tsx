@@ -353,39 +353,71 @@ export default function CustomerDashboardPage() {
     const nowIso = new Date().toISOString();
     const todayDateStr = nowIso.split('T')[0];
 
-    const basePayload: any = {
-      order_number: autoOrderNo,
-      pickup_number: autoOrderNo,
-      outlet_id: selectedOutlet,
-      customer_name: customerName || 'Pelanggan Online',
-      phone_number: normPhone,
-      phone: normPhone,
-      customer_phone: normPhone,
-      service_type: mainServiceLabel,
-      service_detail: notesCombined,
-      estimated_weight: isKiloanChecked ? Number(kiloanEstKg) || 3 : 0,
-      delivery_fee: finalOngkir,
-      estimated_price: grandTotalEstimate,
-      total_price: grandTotalEstimate,
-      notes: notesCombined,
-      pickup_date: todayDateStr,
-      pickup_time: nowIso,
-      created_at: nowIso,
-      status: 'Menunggu Penjemputan'
-    };
+    // MENGUJI COBA VARIASI PAYLOAD SECARA BERURUTAN HINGGA TERIMA SUPABASE
+    const candidatePayloads = [
+      // VARIASI 1: Paling umum dengan customer_phone
+      {
+        order_number: autoOrderNo,
+        outlet_id: selectedOutlet,
+        customer_name: customerName || 'Pelanggan Online',
+        customer_phone: normPhone,
+        service_type: mainServiceLabel,
+        estimated_weight: isKiloanChecked ? Number(kiloanEstKg) || 3 : 0,
+        delivery_fee: finalOngkir,
+        notes: notesCombined,
+        pickup_date: todayDateStr,
+        status: 'Menunggu Penjemputan'
+      },
+      // VARIASI 2: Menggunakan phone_number
+      {
+        order_number: autoOrderNo,
+        outlet_id: selectedOutlet,
+        customer_name: customerName || 'Pelanggan Online',
+        phone_number: normPhone,
+        service_type: mainServiceLabel,
+        estimated_weight: isKiloanChecked ? Number(kiloanEstKg) || 3 : 0,
+        delivery_fee: finalOngkir,
+        notes: notesCombined,
+        pickup_date: todayDateStr,
+        status: 'Menunggu Penjemputan'
+      },
+      // VARIASI 3: Menggunakan phone
+      {
+        order_number: autoOrderNo,
+        outlet_id: selectedOutlet,
+        customer_name: customerName || 'Pelanggan Online',
+        phone: normPhone,
+        service_type: mainServiceLabel,
+        estimated_weight: isKiloanChecked ? Number(kiloanEstKg) || 3 : 0,
+        delivery_fee: finalOngkir,
+        notes: notesCombined,
+        pickup_date: todayDateStr,
+        status: 'Menunggu Penjemputan'
+      },
+      // VARIASI 4: Versi paling ringkas dasar
+      {
+        outlet_id: selectedOutlet,
+        customer_name: customerName || 'Pelanggan Online',
+        customer_phone: normPhone,
+        service_type: mainServiceLabel,
+        notes: notesCombined,
+        status: 'Menunggu Penjemputan'
+      }
+    ];
 
-    let { error } = await supabase.from('pickup_orders').insert([basePayload]);
+    let isSuccess = false;
+    let finalErrorMessage = '';
 
-    if (error && error.message.includes('column')) {
-      delete basePayload.service_detail;
-      delete basePayload.estimated_price;
-      delete basePayload.total_price;
-      delete basePayload.phone;
-      const secondTry = await supabase.from('pickup_orders').insert([basePayload]);
-      error = secondTry.error;
+    for (const payload of candidatePayloads) {
+      const { error } = await supabase.from('pickup_orders').insert([payload]);
+      if (!error) {
+        isSuccess = true;
+        break;
+      }
+      finalErrorMessage = error.message;
     }
 
-    if (!error) {
+    if (isSuccess) {
       alert('✅ PESANAN BERHASIL TERKIRIM KE KASIR POS!\nDriver/Kasir kami akan segera memproses penjemputan.');
       setCartSatuan([]);
       setNotes('');
@@ -393,7 +425,7 @@ export default function CustomerDashboardPage() {
       setActiveTab('home');
       fetchCustomerProfile(normPhone);
     } else {
-      alert('❌ Gagal membuat pesanan: ' + error.message);
+      alert('❌ Gagal membuat pesanan: ' + finalErrorMessage);
     }
     setIsSubmitting(false);
   };
@@ -522,7 +554,7 @@ export default function CustomerDashboardPage() {
 
                 {activeOrders.length === 0 && (
                   <div className="bg-white border border-slate-200/80 p-8 rounded-3xl text-center text-xs text-slate-400 shadow-sm">
-                    Belum ada cucian yang sedang dipproses.
+                    Belum ada cucian yang sedang diproses.
                   </div>
                 )}
               </div>
