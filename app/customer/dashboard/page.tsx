@@ -564,16 +564,13 @@ export default function CustomerDashboardPage() {
               <p className="text-[10px] text-blue-700">Posisi driver diperbarui secara otomatis.</p>
             </div>
 
-          {/* TAMPILKAN BUKTI FOTO PENJEMPUTAN JIKA ADA */}
           {order.photo_url && (
             <div className="mt-2 rounded-xl overflow-hidden border border-slate-200">
               <p className="text-[10px] font-bold text-slate-500 p-1.5 bg-slate-50">📸 Foto Bukti Cucian Diterima Driver:</p>
               <img src={order.photo_url} alt="Foto Bukti Cucian" className="w-full h-28 object-cover" />
             </div>
-
         </div>
       ))}
-
                 {activeOrders.length === 0 && (
                   <div className="bg-white border border-slate-200/80 p-8 rounded-3xl text-center text-xs text-slate-400 shadow-sm">
                     Belum ada cucian yang sedang diproses.
