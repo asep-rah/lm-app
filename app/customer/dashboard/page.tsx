@@ -80,6 +80,7 @@ export default function CustomerDashboardPage() {
   const [distanceKm, setDistanceKm] = useState<number | null>(null);
   const [claimedPromo, setClaimedPromo] = useState<any>(null);
   const [showPromoModal, setShowPromoModal] = useState(false);
+  const [showEstimateInfoModal, setShowEstimateInfoModal] = useState(false);
 
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -97,14 +98,12 @@ export default function CustomerDashboardPage() {
         setSelectedOutlet(dbOutlets[0].id);
       }
 
-      // FETCH APP_SETTINGS UNTUK DYNAMIC SERVICES DAN PROMO DARI OWNER
       const { data: dbSettings } = await supabase.from('app_settings').select('*').eq('id', 1).single();
       if (dbSettings) {
         const svcs = safeParse(dbSettings.dynamic_services, []);
         setDynamicServices(svcs);
         setOutletOverrides(safeParse(dbSettings.outlet_overrides, {}));
 
-        // DINAMIS: BACA PROMO DARI SETTING OWNER
         const promos = safeParse(dbSettings.promos_data, [
           { id: 'ONGKIRFREE', title: '🚚 Gratis Ongkir Antar-Jemput', desc: 'Potongan ongkir hingga Rp 15.000', type: 'ongkir', value: 15000, minTx: 30000 },
           { id: 'DISC10', title: '🏷️ Diskon 10% Spesial Online', desc: 'Potongan 10% untuk transaksi penjemputan', type: 'percent', value: 10, minTx: 40000 }
@@ -208,7 +207,7 @@ export default function CustomerDashboardPage() {
 
       let historyArr: any[] = [];
       pickupOrders?.filter(o => o.status === 'Selesai' || o.status === 'Batal').forEach(o => {
-        historyArr.push({ id: o.id, type: 'Online Order', title: o.service_type, detail: o.service_detail, price: o.estimated_price, date: o.created_at, status: o.status });
+        historyArr.push({ id: o.id, type: 'Online Order', title: o.service_type, detail: o.service_detail, price: o.delivery_fee, date: o.created_at, status: o.status });
       });
       posTransactions?.forEach(t => {
         historyArr.push({ id: t.id, type: 'Outlet POS', title: `${t.service_type} (${t.receipt_number})`, detail: t.notes, price: t.amount, date: t.created_at, status: t.status });
@@ -346,6 +345,8 @@ export default function CustomerDashboardPage() {
       rincianArr.push(`Satuan: [${satuanItemsStr}]`);
     }
 
+    rincianArr.push(`Est. Tagihan: Rp ${grandTotalEstimate.toLocaleString('id-ID')}`);
+
     const primaryServiceLabel = isKiloanChecked ? `${selectedKiloanSvc} (${kiloanDuration})` : `Satuan (${cartSatuan.length} Item)`;
     const serviceDetailLabel = rincianArr.join(' + ');
 
@@ -357,8 +358,7 @@ export default function CustomerDashboardPage() {
       service_detail: serviceDetailLabel,
       estimated_weight: isKiloanChecked ? Number(kiloanEstKg) || 3 : 0,
       delivery_fee: finalOngkir,
-      estimated_price: grandTotalEstimate,
-      notes: notes || customerAddress,
+      notes: notes ? `Catatan: ${notes} | Alamat: ${customerAddress}` : `Alamat: ${customerAddress}`,
       status: 'Menunggu Penjemputan'
     };
 
@@ -494,7 +494,7 @@ export default function CustomerDashboardPage() {
                     </div>
                     <div className="flex justify-between items-center pt-2 border-t border-slate-100 text-[10px]">
                       <span className="text-slate-400 font-medium">{new Date(order.created_at).toLocaleDateString('id-ID')}</span>
-                      <span className="font-black text-blue-600 text-xs">Rp {Number(order.estimated_price).toLocaleString('id-ID')}</span>
+                      <span className="font-black text-blue-600 text-xs">Ongkir: Rp {Number(order.delivery_fee || 0).toLocaleString('id-ID')}</span>
                     </div>
                   </div>
                 ))}
@@ -723,6 +723,7 @@ export default function CustomerDashboardPage() {
                   className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3.5 text-xs text-slate-800 font-medium"
                 />
 
+                {/* RINCIAN ESTIMASI & ONGKIR */}
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-1.5 text-xs">
                   <div className="flex justify-between text-slate-500 font-medium"><span>Subtotal Kiloan:</span><span>Rp {kiloanSubtotal.toLocaleString('id-ID')}</span></div>
                   <div className="flex justify-between text-slate-500 font-medium"><span>Subtotal Satuan:</span><span>Rp {satuanSubtotal.toLocaleString('id-ID')}</span></div>
@@ -743,8 +744,18 @@ export default function CustomerDashboardPage() {
                     </div>
                   )}
 
-                  <div className="flex justify-between font-black text-blue-600 text-sm border-t border-slate-200 pt-2 mt-1">
-                    <span>ESTIMASI TOTAL:</span>
+                  <div className="flex justify-between items-center font-black text-blue-600 text-sm border-t border-slate-200 pt-2 mt-1">
+                    <div className="flex items-center gap-1.5">
+                      <span>ESTIMASI TOTAL:</span>
+                      <button
+                        type="button"
+                        onClick={() => setShowEstimateInfoModal(true)}
+                        className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 hover:bg-blue-200 font-bold text-[10px] flex items-center justify-center border border-blue-200"
+                        title="Informasi Estimasi Harga"
+                      >
+                        ℹ️
+                      </button>
+                    </div>
                     <span>Rp {grandTotalEstimate.toLocaleString('id-ID')}</span>
                   </div>
                 </div>
@@ -835,7 +846,7 @@ export default function CustomerDashboardPage() {
                   </div>
                   <div className="flex justify-between items-center pt-2 border-t border-slate-100 text-[10px]">
                     <span className="text-slate-400 font-medium">{new Date(item.date).toLocaleDateString('id-ID')}</span>
-                    <span className="font-black text-blue-600 text-xs">Rp {Number(item.price).toLocaleString('id-ID')}</span>
+                    <span className="font-black text-blue-600 text-xs">Ongkir: Rp {Number(item.price || 0).toLocaleString('id-ID')}</span>
                   </div>
                 </div>
               ))}
@@ -905,7 +916,7 @@ export default function CustomerDashboardPage() {
         </>
       )}
 
-      {/* MODAL KLAIM VOUCHER PROMO AKTIF BISA DI-MANAGE OWNER */}
+      {/* MODAL KLAIM VOUCHER PROMO AKTIF */}
       {showPromoModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-5 max-w-sm w-full space-y-4 shadow-2xl max-h-[85vh] overflow-y-auto">
@@ -954,6 +965,29 @@ export default function CustomerDashboardPage() {
 
             <button onClick={() => setShowPromoModal(false)} className="w-full bg-slate-900 text-white font-extrabold py-3 rounded-2xl text-xs">
               Tutup Modal
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL INFORMASI CREDENTIAL ESTIMASI TOTAL */}
+      {showEstimateInfoModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl text-center">
+            <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center text-2xl mx-auto font-black shadow-inner">
+              ℹ️
+            </div>
+            <div>
+              <h3 className="text-base font-extrabold text-slate-900">Informasi Estimasi Tagihan</h3>
+              <p className="text-xs text-slate-600 mt-2 leading-relaxed font-medium">
+                Perhitungan angka ini adalah **estimasi sementara**. Tagihan final akan dihitung dan dikonfirmasi ulang oleh kasir outlet setelah pakaian ditimbang dan dicek langsung di lokasi.
+              </p>
+            </div>
+            <button
+              onClick={() => setShowEstimateInfoModal(false)}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-3 rounded-2xl text-xs uppercase shadow-md transition"
+            >
+              Saya Mengerti
             </button>
           </div>
         </div>
