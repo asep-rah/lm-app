@@ -349,7 +349,9 @@ export default function CustomerDashboardPage() {
     const mainServiceLabel = isKiloanChecked ? `${selectedKiloanSvc} (${kiloanDuration})` : `Satuan (${cartSatuan.length} Item)`;
     const notesCombined = `Alamat: ${customerAddress} | Detail: ${detailLines.join(' | ')}${notes ? ` | Catatan: ${notes}` : ''}`;
 
-    // DETEKSI OTOMATIS STRUKTUR KOLOM DARI SUPABASE SENSITIF DENGAN FETCH SAMPLE 1 BARIS
+    // GENERATE UNIK ORDER NUMBER UNTUK MEMENUHI CONSTRAINT DATABASE
+    const autoOrderNumber = `ORD-${Date.now().toString().slice(-8)}`;
+
     let targetPhoneColumn = 'phone_number';
     try {
       const { data: sampleData } = await supabase.from('pickup_orders').select('*').limit(1);
@@ -362,6 +364,7 @@ export default function CustomerDashboardPage() {
     } catch (err) {}
 
     const payload: any = {
+      order_number: autoOrderNumber,
       outlet_id: selectedOutlet,
       customer_name: customerName || 'Pelanggan Online',
       service_type: mainServiceLabel,
@@ -369,10 +372,7 @@ export default function CustomerDashboardPage() {
       status: 'Menunggu Penjemputan'
     };
     
-    // ATUR KHUSUS NOMOR TELEPON
     payload[targetPhoneColumn] = normPhone;
-
-    // JIKA ADA KOLOM TAMBAHAN BERIKAN ESTIMASI
     payload.estimated_weight = isKiloanChecked ? Number(kiloanEstKg) || 3 : 0;
     payload.delivery_fee = finalOngkir;
 
