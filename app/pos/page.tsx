@@ -125,21 +125,30 @@ export default function POSPage() {
   const [memberOrderType, setMemberOrderType] = useState<'Offline' | 'Online'>('Offline');
 // AUTO-FILL POS FORM DARI URL QUERY PARAMS (ANTREAN PENJEMPUTAN)
 useEffect(() => {
-  if (typeof window !== 'undefined') {
-    const params = new URLSearchParams(window.location.search);
-    const name = params.get('name');
-    const phone = params.get('phone');
-    const service = params.get('service');
-    const notes = params.get('notes');
-    const deliveryFeeParam = params.get('delivery_fee');
-    const orderTypeParam = params.get('order_type');
+  if (typeof window === 'undefined') return;
+  const params = new URLSearchParams(window.location.search);
+  const name = params.get('name');
+  const phone = params.get('phone');
+  const service = params.get('service');
+  const deliveryFeeParam = params.get('delivery_fee');
+  const orderTypeParam = params.get('order_type');
 
-    if (name && typeof setCustomerName === 'function') setCustomerName(name);
-    if (phone && typeof setCustomerPhone === 'function') setCustomerPhone(phone);
-    if (service && typeof setSelectedServiceInput === 'function') setSelectedServiceInput(service);
-    if (notes && typeof setInputItemNote === 'function') setInputItemNote(notes);
-    if (deliveryFeeParam && typeof setDeliveryFee === 'function') setDeliveryFee(deliveryFeeParam);
-    if (orderTypeParam && typeof setOrderType === 'function') setOrderType(orderTypeParam);
+  if (name && typeof setCustomerName === 'function') setCustomerName(name);
+  if (phone && typeof setCustomerPhone === 'function') setCustomerPhone(phone);
+
+  // 🌐 PAKSA MODE ONLINE / WHATSAPP: Agar masuk statistik Omset Online di PnL Owner
+  if (typeof setOrderType === 'function') {
+    setOrderType(orderTypeParam || 'WhatsApp');
+  }
+
+  // 🚚 Auto-fill Biaya Ongkir ke Input Ongkir POS
+  if (deliveryFeeParam && typeof setDeliveryFee === 'function') {
+    setDeliveryFee(deliveryFeeParam.toString());
+  }
+
+  // 🛒 Auto-fill Layanan Langsung Masuk ke Input Layanan POS
+  if (service && typeof setSelectedServiceInput === 'function') {
+    setSelectedServiceInput(service);
   }
 }, []);
   const [expCategory, setExpCategory] = useState('');
