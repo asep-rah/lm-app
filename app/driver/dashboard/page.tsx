@@ -14,16 +14,21 @@ export default function DriverDashboard() {
   const [driverName, setDriverName] = useState('Driver Internal');
   const [uploadingId, setUploadingId] = useState<string | null>(null);
 
+  // LOAD TUGAS: MENGAMBIL PESANAN STATUS 'Baru Masuk' DAN 'Driver Menuju Lokasi'
   const loadDriverTasks = async () => {
     setIsLoading(true);
-    const { data, error } = await supabase
-      .from('pickup_orders')
-      .select('*, outlets(name), customer_addresses(*)')
-      .eq('status', 'Driver Menuju Lokasi')
-      .order('created_at', { ascending: true });
+    try {
+      const { data, error } = await supabase
+        .from('pickup_orders')
+        .select('*')
+        .in('status', ['Baru Masuk', 'Driver Menuju Lokasi'])
+        .order('created_at', { ascending: true });
 
-    if (data) setPickups(data);
-    if (error) alert('Gagal memuat tugas: ' + error.message);
+      if (data) setPickups(data);
+      if (error) console.error('Gagal memuat tugas:', error.message);
+    } catch (e) {
+      console.error(e);
+    }
     setIsLoading(false);
   };
 
@@ -54,7 +59,7 @@ export default function DriverDashboard() {
       );
     }
 
-    // Listener Realtime Supabase
+    // Realtime Sync Supabase
     const driverChannel = supabase
       .channel('driver_pickup_sync')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'pickup_orders' }, () => {
@@ -68,9 +73,25 @@ export default function DriverDashboard() {
     };
   }, []);
 
-  const handleOpenMaps = (lat: number, lon: number) => {
-    if (!lat || !lon) return alert('Koordinat lokasi pelanggan belum diatur.');
-    const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
+  // AKSI DRIVER MENGAMBIL PESANAN 'Baru Masuk' -> 'Driver Menuju Lokasi'
+  const handleAcceptTask = async (orderId: string) => {
+    const { error } = await supabase
+      .from('pickup_orders')
+      .update({ status: 'Driver Menuju Lokasi' })
+      .eq('id', orderId);
+
+    if (!error) {
+      alert('🚀 Anda telah menerima tugas ini! Pelanggan dapat memantau lokasi GPS Anda secara live.');
+      loadDriverTasks();
+    } else {
+      alert('Gagal mengambil tugas: ' + error.message);
+    }
+  };
+
+  const handleOpenMaps = (addressOrCoords: string) => {
+    if (!addressOrCoords) return alert('Alamat lokasi pelanggan belum diatur.');
+    const query = encodeURIComponent(addressOrCoords);
+    const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${query}`;
     window.open(mapsUrl, '_blank');
   };
 
@@ -101,7 +122,7 @@ export default function DriverDashboard() {
       photoPublicUrl = `https://qlgbjvzabnfqmfnjdkmo.supabase.co/storage/v1/object/public/pickup-photos/${fileName}`;
     }
 
-    // Update Status menjadi 'Telah Tiba di Outlet' agar otomatis masuk antrean POS
+    // Update Status menjadi 'Telah Tiba di Outlet' agar masuk antrean POS
     const updateData: any = { status: 'Telah Tiba di Outlet' };
     if (photoPublicUrl) updateData.photo_url = photoPublicUrl;
 
@@ -166,62 +187,74 @@ export default function DriverDashboard() {
           <div className="space-y-4">
             {pickups.map((p, index) => (
               <div key={p.id} className="bg-white border-2 border-emerald-500/20 rounded-3xl p-4 shadow-md space-y-3 relative overflow-hidden">
-                <div className="absolute top-0 right-0 bg-emerald-500 text-white text-[10px] font-black px-3 py-1 rounded-bl-xl shadow-sm">
-                  #{index + 1}
+                <div className="flex justify-between items-center border-b pb-2">
+                  <span className="text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-700">
+                    #{index + 1} - {p.order_number || 'ORDER'}
+                  </span>
+                  <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full ${p.status === 'Baru Masuk' ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800'}`}>
+                    {p.status}
+                  </span>
                 </div>
 
                 <div>
                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Data Pelanggan</p>
-                  <h3 className="font-black text-slate-900 text-lg leading-tight mt-0.5">{p.customer_phone || p.phone_number}</h3>
-                  <p className="text-xs font-bold text-slate-700 mt-1 bg-slate-50 p-2 rounded-xl border border-slate-100">
-                    📍 {p.customer_addresses?.full_address || p.notes || 'Alamat tidak ditemukan'}
-                    {p.customer_addresses?.patokan && p.customer_addresses.patokan !== '-' && (
-                      <span className="block mt-1 text-[10px] text-rose-600 italic">
-                        *Patokan: "{p.customer_addresses.patokan}"
-                      </span>
-                    )}
+                  <h3 className="font-black text-slate-900 text-base leading-tight mt-0.5">
+                    {p.customer_name || 'Pelanggan'} ({p.customer_phone || p.phone_number})
+                  </h3>
+                  <p className="text-xs font-bold text-slate-700 mt-1 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                    📍 {p.notes || 'Alamat Penjemputan'}
                   </p>
                 </div>
 
                 <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl space-y-1">
                   <p className="text-[10px] font-bold text-amber-900 uppercase">📦 Rincian Barang yang Dijemput:</p>
                   <p className="text-xs text-amber-950 font-medium">Layanan: <b className="font-black">{p.service_type}</b></p>
-                  <p className="text-xs text-amber-950 font-medium">Estimasi Bawaan: <b className="font-black">{p.estimated_weight || '-'} Kg ({p.bag_count || '1'} Kantong)</b></p>
+                  <p className="text-xs text-amber-950 font-medium">Est. Bawaan: <b className="font-black">{p.estimated_weight || '3'} Kg</b></p>
                   <p className="text-xs text-amber-950 font-medium">Ongkir Tagihan: <b className="font-black text-blue-700">Rp {Number(p.delivery_fee || 0).toLocaleString('id-ID')}</b></p>
                 </div>
 
-                {/* TOMBOL AKSI MAPS & CHAT WA */}
-                <div className="grid grid-cols-2 gap-2 pt-2 border-t">
-                  <button 
-                    onClick={() => handleOpenMaps(p.customer_addresses?.latitude, p.customer_addresses?.longitude)}
-                    className="flex flex-col items-center justify-center bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 font-bold p-3 rounded-xl transition active:scale-95"
+                {/* LOGIKA TOMBOL BERDASARKAN STATUS */}
+                {p.status === 'Baru Masuk' ? (
+                  <button
+                    onClick={() => handleAcceptTask(p.id)}
+                    className="w-full bg-amber-500 hover:bg-amber-600 text-white font-black py-3 rounded-xl text-xs shadow-md transition active:scale-95 flex items-center justify-center gap-2"
                   >
-                    <span className="text-xl mb-1">🗺️</span>
-                    <span className="text-[10px]">Buka Maps</span>
+                    🛵 TERIMA & JEMPUT SEKARANG
                   </button>
-                  <button 
-                    onClick={() => handleOpenWA(p.customer_phone || p.phone_number)}
-                    className="flex flex-col items-center justify-center bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 font-bold p-3 rounded-xl transition active:scale-95"
-                  >
-                    <span className="text-xl mb-1">💬</span>
-                    <span className="text-[10px]">Chat Pelanggan</span>
-                  </button>
-                </div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-2 gap-2 pt-2 border-t">
+                      <button 
+                        onClick={() => handleOpenMaps(p.notes || '')}
+                        className="flex flex-col items-center justify-center bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 font-bold p-3 rounded-xl transition active:scale-95"
+                      >
+                        <span className="text-xl mb-1">🗺️</span>
+                        <span className="text-[10px]">Buka Maps</span>
+                      </button>
+                      <button 
+                        onClick={() => handleOpenWA(p.customer_phone || p.phone_number)}
+                        className="flex flex-col items-center justify-center bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 font-bold p-3 rounded-xl transition active:scale-95"
+                      >
+                        <span className="text-xl mb-1">💬</span>
+                        <span className="text-[10px]">Chat Pelanggan</span>
+                      </button>
+                    </div>
 
-                {/* FITUR TOMBOL FOTO BUKTI & FINISH TASK */}
-                <label className="block w-full mt-2">
-                  <span className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black py-4 rounded-xl text-xs shadow-lg transition active:scale-95 flex justify-center items-center gap-2 cursor-pointer">
-                    📸 {uploadingId === p.id ? 'Mengunggah Foto...' : 'AMBIL FOTO BUKTI & FINISH'}
-                  </span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    className="hidden"
-                    onChange={(e) => handleFileUploadAndFinish(e, p.id)}
-                    disabled={uploadingId === p.id}
-                  />
-                </label>
+                    <label className="block w-full mt-2">
+                      <span className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black py-3.5 rounded-xl text-xs shadow-lg transition active:scale-95 flex justify-center items-center gap-2 cursor-pointer">
+                        📸 {uploadingId === p.id ? 'Mengunggah Foto...' : 'AMBIL FOTO BUKTI & FINISH'}
+                      </span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        className="hidden"
+                        onChange={(e) => handleFileUploadAndFinish(e, p.id)}
+                        disabled={uploadingId === p.id}
+                      />
+                    </label>
+                  </>
+                )}
 
               </div>
             ))}

@@ -39,7 +39,6 @@ export default function AdminPickupsPage() {
   useEffect(() => {
     fetchPickups();
 
-    // REALTIME SUBSCRIPTION SUPABASE DARI PWA CUSTOMER
     const channel = supabase
       .channel('pickup_orders_changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'pickup_orders' }, () => {
@@ -65,7 +64,6 @@ export default function AdminPickupsPage() {
     }
   };
 
-  // MENDUKUNG STATUS 'Baru Masuk' DAN 'Menunggu Penjemputan' SEKALIGUS
   const newOrders = pickups.filter(
     (p) => p.status === 'Baru Masuk' || p.status === 'Menunggu Penjemputan' || p.status === 'Menunggu Driver'
   );
@@ -80,7 +78,6 @@ export default function AdminPickupsPage() {
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 p-6 font-sans">
-      {/* HEADER SECTION */}
       <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-slate-800/80 p-5 rounded-3xl border border-slate-700/80 backdrop-blur-md mb-6 shadow-xl">
         <div>
           <h1 className="text-xl font-extrabold text-emerald-400 flex items-center gap-2">
@@ -114,10 +111,8 @@ export default function AdminPickupsPage() {
         </div>
       </div>
 
-      {/* THREE COLUMNSKANBAN BOARD */}
       <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-6">
         
-        {/* KOLOM 1: BARU MASUK */}
         <div className="bg-slate-800/50 border border-slate-700/80 rounded-3xl p-5 space-y-4">
           <div className="flex justify-between items-center border-b border-slate-700 pb-3">
             <h2 className="text-sm font-extrabold text-rose-400 flex items-center gap-2">
@@ -166,7 +161,6 @@ export default function AdminPickupsPage() {
           </div>
         </div>
 
-        {/* KOLOM 2: DRIVER DALAM PROSES */}
         <div className="bg-slate-800/50 border border-slate-700/80 rounded-3xl p-5 space-y-4">
           <div className="flex justify-between items-center border-b border-slate-700 pb-3">
             <h2 className="text-sm font-extrabold text-amber-400 flex items-center gap-2">
@@ -212,7 +206,6 @@ export default function AdminPickupsPage() {
           </div>
         </div>
 
-        {/* KOLOM 3: ANTREAN MASUK POS */}
         <div className="bg-slate-800/50 border border-slate-700/80 rounded-3xl p-5 space-y-4">
           <div className="flex justify-between items-center border-b border-slate-700 pb-3">
             <h2 className="text-sm font-extrabold text-emerald-400 flex items-center gap-2">
@@ -233,7 +226,15 @@ export default function AdminPickupsPage() {
                   </div>
                   <span className="text-xs font-black text-emerald-400">Rp {Number(item.delivery_fee || 0).toLocaleString('id-ID')}</span>
                 </div>
-                <p className="text-[10px] text-slate-400 italic">
+
+                {item.photo_url && (
+                  <div className="rounded-xl overflow-hidden border border-slate-700 mt-2">
+                    <p className="text-[9px] font-bold text-slate-400 p-1 bg-slate-900">📸 Foto Bukti Driver:</p>
+                    <img src={item.photo_url} alt="Foto Bukti" className="w-full h-24 object-cover" />
+                  </div>
+                )}
+
+                <p className="text-[10px] text-slate-400 italic pt-1">
                   Cucian telah diterima fisik. Buka <strong className="text-emerald-400">Portal Kasir (POS)</strong> untuk verifikasi berat/pcs dan cetak nota.
                 </p>
               </div>

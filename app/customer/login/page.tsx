@@ -1,13 +1,16 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 
 export default function CustomerLogin() {
+  const router = useRouter();
   const [phone, setPhone] = useState('');
   const [step, setStep] = useState(1);
   const [loginCode, setLoginCode] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Standarisasi Format Nomor HP (0812xxxx)
   const cleanPhone = (str: string) => {
     let cleaned = str.trim().replace(/\D/g, '');
     if (cleaned.startsWith('62')) cleaned = '0' + cleaned.slice(2);
@@ -23,7 +26,8 @@ export default function CustomerLogin() {
     setLoginCode(code);
     setStep(2);
 
-    const adminWA = '6281234567890'; 
+    // Ganti dengan Nomor WA Admin/CS Resmi Outlet Anda
+    const adminWA = '6285172141494'; 
     const message = `Halo Admin Laundrivery! 🛵💨%0A%0ASaya ingin masuk ke Aplikasi Pelanggan.%0A%0A*Nomor WA:* ${normalizedPhone}%0A*Kode Akses:* ${code}%0A%0ATerima kasih!`;
     
     window.open(`https://wa.me/${adminWA}?text=${message}`, '_blank');
@@ -33,14 +37,16 @@ export default function CustomerLogin() {
     setIsSubmitting(true);
     const normalizedPhone = cleanPhone(phone);
     
+    // SINKRONISASI KEY LOCALSTORAGE SESUAI CUSTOMER DASHBOARD
+    localStorage.setItem('laundry_customer_phone', normalizedPhone);
     localStorage.setItem('laundrivery_customer', JSON.stringify({
       phone: normalizedPhone,
       login_time: new Date().toISOString()
     }));
 
     setTimeout(() => {
-      window.location.href = '/customer/dashboard';
-    }, 1200);
+      router.push('/customer/dashboard');
+    }, 800);
   };
 
   return (
