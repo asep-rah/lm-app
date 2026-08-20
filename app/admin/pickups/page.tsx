@@ -77,22 +77,26 @@ export default function AdminPickupsPage() {
   );
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 p-6 font-sans">
-      <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-slate-800/80 p-5 rounded-3xl border border-slate-700/80 backdrop-blur-md mb-6 shadow-xl">
+    <div className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-8 font-sans selection:bg-emerald-500 selection:text-slate-900">
+      {/* HEADER SECTION */}
+      <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-slate-900/80 border border-slate-800 p-5 md:p-6 rounded-3xl backdrop-blur-xl mb-8 shadow-2xl">
         <div>
-          <h1 className="text-xl font-extrabold text-emerald-400 flex items-center gap-2">
-            🛵 Monitor Antar-Jemput
-          </h1>
+          <div className="flex items-center gap-2">
+            <span className="h-3 w-3 rounded-full bg-emerald-500 animate-pulse"></span>
+            <h1 className="text-xl md:text-2xl font-black text-white tracking-tight flex items-center gap-2">
+              🛵 Monitor Antar-Jemput
+            </h1>
+          </div>
           <p className="text-xs text-slate-400 mt-1">
-            Role Akses: <span className="text-slate-200 font-bold">KASIR / DRIVER</span> | Penerimaan Fisik Cucian oleh Outlet
+            Role Akses: <span className="text-emerald-400 font-bold uppercase tracking-wider">KASIR / DRIVER</span> | Live Monitoring Kanban Board
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 w-full md:w-auto">
           <select
             value={selectedOutlet}
             onChange={(e) => setSelectedOutlet(e.target.value)}
-            className="bg-slate-900 border border-slate-700 rounded-xl px-4 py-2 text-xs font-bold text-slate-200 focus:outline-none focus:border-emerald-500"
+            className="bg-slate-800 border border-slate-700 rounded-2xl px-4 py-2.5 text-xs font-bold text-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 w-full md:w-auto shadow-inner"
           >
             <option value="ALL">📍 Semua Outlet</option>
             {outlets.map((o) => (
@@ -104,147 +108,159 @@ export default function AdminPickupsPage() {
 
           <Link
             href="/pos"
-            className="bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black px-4 py-2 rounded-xl text-xs shadow-lg shadow-emerald-500/20 transition"
+            className="bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-black px-5 py-2.5 rounded-2xl text-xs shadow-lg shadow-emerald-500/20 transition-all whitespace-nowrap active:scale-95"
           >
-            Portal Kasir
+            Portal Kasir ➔
           </Link>
         </div>
       </div>
 
+      {/* KANBAN BOARD GRID */}
       <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-6">
         
-        <div className="bg-slate-800/50 border border-slate-700/80 rounded-3xl p-5 space-y-4">
-          <div className="flex justify-between items-center border-b border-slate-700 pb-3">
-            <h2 className="text-sm font-extrabold text-rose-400 flex items-center gap-2">
-              🚨 Baru Masuk
-            </h2>
-            <span className="bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-black px-2.5 py-0.5 rounded-full">
-              {newOrders.length}
-            </span>
-          </div>
+        {/* KOLOM 1: BARU MASUK */}
+        <div className="bg-slate-900/50 border border-slate-800/80 rounded-3xl p-5 space-y-4 backdrop-blur-md shadow-xl flex flex-col justify-between">
+          <div>
+            <div className="flex justify-between items-center border-b border-slate-800/80 pb-3 mb-4">
+              <h2 className="text-sm font-black text-rose-400 flex items-center gap-2 tracking-wider uppercase">
+                🚨 Baru Masuk
+              </h2>
+              <span className="bg-rose-500/10 text-rose-400 border border-rose-500/30 text-xs font-black px-3 py-1 rounded-full shadow-sm">
+                {newOrders.length}
+              </span>
+            </div>
 
-          <div className="space-y-3">
-            {newOrders.map((item) => (
-              <div key={item.id} className="bg-slate-800 border border-slate-700/90 rounded-2xl p-4 space-y-3 shadow-md hover:border-slate-600 transition">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <h3 className="font-extrabold text-sm text-slate-100">{item.customer_name || 'Pelanggan Online'}</h3>
-                    <p className="text-[11px] font-mono text-emerald-400">{item.phone_number || item.customer_phone || item.phone || '-'}</p>
+            <div className="space-y-3">
+              {newOrders.map((item) => (
+                <div key={item.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3 shadow-lg hover:border-slate-700 transition-all">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <h3 className="font-extrabold text-sm text-slate-100">{item.customer_name || 'Pelanggan Online'}</h3>
+                      <p className="text-[11px] font-mono text-emerald-400 font-semibold">{item.phone_number || item.customer_phone || item.phone || '-'}</p>
+                    </div>
+                    <span className="text-[10px] bg-rose-500/10 text-rose-300 font-extrabold px-2.5 py-1 rounded-xl border border-rose-500/20">
+                      {item.status}
+                    </span>
                   </div>
-                  <span className="text-[10px] bg-rose-500/20 text-rose-300 font-bold px-2 py-0.5 rounded-md border border-rose-500/30">
-                    {item.status}
-                  </span>
-                </div>
 
-                <div className="text-xs text-slate-300 bg-slate-900/60 p-3 rounded-xl border border-slate-700/50 space-y-1">
-                  <p className="font-bold text-slate-200">{item.service_type}</p>
-                  <p className="text-[10px] text-slate-400 leading-relaxed">{item.notes || '-'}</p>
-                </div>
+                  <div className="text-xs text-slate-300 bg-slate-800/60 p-3 rounded-xl border border-slate-800 space-y-1">
+                    <p className="font-bold text-slate-100">{item.service_type}</p>
+                    <p className="text-[10px] text-slate-400 leading-relaxed">{item.notes || '-'}</p>
+                  </div>
 
-                <div className="flex justify-between items-center text-xs pt-1">
-                  <span className="text-slate-400 text-[10px]">Ongkir: <strong className="text-emerald-400">Rp {Number(item.delivery_fee || 0).toLocaleString('id-ID')}</strong></span>
+                  <div className="flex justify-between items-center text-xs pt-1">
+                    <span className="text-slate-400 text-[10px]">Ongkir: <strong className="text-emerald-400 font-black">Rp {Number(item.delivery_fee || 0).toLocaleString('id-ID')}</strong></span>
+                    <button
+                      onClick={() => handleUpdateStatus(item.id, 'Driver Menuju Lokasi')}
+                      className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-extrabold text-[11px] px-3.5 py-1.5 rounded-xl shadow-lg shadow-blue-500/20 transition-all active:scale-95"
+                    >
+                      Tugaskan Driver 🛵
+                    </button>
+                  </div>
+                </div>
+              ))}
+
+              {newOrders.length === 0 && (
+                <div className="text-center py-12 text-xs text-slate-500 font-bold border border-dashed border-slate-800 rounded-2xl">
+                  Belum ada orderan baru.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* KOLOM 2: DRIVER DALAM PROSES */}
+        <div className="bg-slate-900/50 border border-slate-800/80 rounded-3xl p-5 space-y-4 backdrop-blur-md shadow-xl flex flex-col justify-between">
+          <div>
+            <div className="flex justify-between items-center border-b border-slate-800/80 pb-3 mb-4">
+              <h2 className="text-sm font-black text-amber-400 flex items-center gap-2 tracking-wider uppercase">
+                🛵 Driver Dalam Proses
+              </h2>
+              <span className="bg-amber-500/10 text-amber-400 border border-amber-500/30 text-xs font-black px-3 py-1 rounded-full shadow-sm">
+                {driverInProcess.length}
+              </span>
+            </div>
+
+            <div className="space-y-3">
+              {driverInProcess.map((item) => (
+                <div key={item.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3 shadow-lg hover:border-slate-700 transition-all">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <h3 className="font-extrabold text-sm text-slate-100">{item.customer_name || 'Pelanggan Online'}</h3>
+                      <p className="text-[11px] font-mono text-emerald-400 font-semibold">{item.phone_number || item.customer_phone || item.phone || '-'}</p>
+                    </div>
+                    <span className="text-[10px] bg-amber-500/10 text-amber-300 font-extrabold px-2.5 py-1 rounded-xl border border-amber-500/20">
+                      {item.status}
+                    </span>
+                  </div>
+
+                  <div className="text-xs text-slate-300 bg-slate-800/60 p-3 rounded-xl border border-slate-800 space-y-1">
+                    <p className="font-bold text-slate-100">{item.service_type}</p>
+                    <p className="text-[10px] text-slate-400 leading-relaxed">{item.notes || '-'}</p>
+                  </div>
+
                   <button
-                    onClick={() => handleUpdateStatus(item.id, 'Driver Menuju Lokasi')}
-                    className="bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-[11px] px-3 py-1.5 rounded-xl shadow-md transition"
+                    onClick={() => handleUpdateStatus(item.id, 'Telah Tiba di Outlet')}
+                    className="w-full bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-black text-xs py-2.5 rounded-xl shadow-lg shadow-emerald-500/20 transition-all active:scale-95 flex items-center justify-center gap-2"
                   >
-                    Tugaskan Driver 🛵
+                    📦 Driver Tiba / Terima Fisik Cucian
                   </button>
                 </div>
-              </div>
-            ))}
+              ))}
 
-            {newOrders.length === 0 && (
-              <div className="text-center py-10 text-xs text-slate-500 font-medium">
-                Belum ada orderan baru.
-              </div>
-            )}
+              {driverInProcess.length === 0 && (
+                <div className="text-center py-12 text-xs text-slate-500 font-bold border border-dashed border-slate-800 rounded-2xl">
+                  Tidak ada driver sedang menjemput.
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
-        <div className="bg-slate-800/50 border border-slate-700/80 rounded-3xl p-5 space-y-4">
-          <div className="flex justify-between items-center border-b border-slate-700 pb-3">
-            <h2 className="text-sm font-extrabold text-amber-400 flex items-center gap-2">
-              🛵 Driver Dalam Proses
-            </h2>
-            <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-black px-2.5 py-0.5 rounded-full">
-              {driverInProcess.length}
-            </span>
-          </div>
+        {/* KOLOM 3: ANTREAN MASUK POS */}
+        <div className="bg-slate-900/50 border border-slate-800/80 rounded-3xl p-5 space-y-4 backdrop-blur-md shadow-xl flex flex-col justify-between">
+          <div>
+            <div className="flex justify-between items-center border-b border-slate-800/80 pb-3 mb-4">
+              <h2 className="text-sm font-black text-emerald-400 flex items-center gap-2 tracking-wider uppercase">
+                📦 Antrean Masuk POS
+              </h2>
+              <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-xs font-black px-3 py-1 rounded-full shadow-sm">
+                {arrivedAtOutlet.length}
+              </span>
+            </div>
 
-          <div className="space-y-3">
-            {driverInProcess.map((item) => (
-              <div key={item.id} className="bg-slate-800 border border-slate-700/90 rounded-2xl p-4 space-y-3 shadow-md hover:border-slate-600 transition">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <h3 className="font-extrabold text-sm text-slate-100">{item.customer_name || 'Pelanggan Online'}</h3>
-                    <p className="text-[11px] font-mono text-emerald-400">{item.phone_number || item.customer_phone || item.phone || '-'}</p>
+            <div className="space-y-3">
+              {arrivedAtOutlet.map((item) => (
+                <div key={item.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-2 shadow-lg">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <h3 className="font-extrabold text-sm text-slate-100">{item.customer_name || 'Pelanggan Online'}</h3>
+                      <p className="text-[10px] text-emerald-400 font-bold mt-0.5">✓ Telah Tiba di Outlet</p>
+                    </div>
+                    <span className="text-xs font-black text-emerald-400">Rp {Number(item.delivery_fee || 0).toLocaleString('id-ID')}</span>
                   </div>
-                  <span className="text-[10px] bg-amber-500/20 text-amber-300 font-bold px-2 py-0.5 rounded-md border border-amber-500/30">
-                    {item.status}
-                  </span>
+
+                  {item.photo_url && (
+                    <div className="rounded-xl overflow-hidden border border-slate-800 mt-2 bg-slate-950">
+                      <p className="text-[9px] font-bold text-slate-400 p-1.5 bg-slate-800/60 border-b border-slate-800 flex items-center gap-1">
+                        📸 Foto Bukti Driver:
+                      </p>
+                      <img src={item.photo_url} alt="Foto Bukti" className="w-full h-28 object-cover hover:scale-105 transition-all duration-300" />
+                    </div>
+                  )}
+
+                  <p className="text-[10px] text-slate-400 italic pt-2 border-t border-slate-800/60 mt-2">
+                    Cucian telah diterima fisik. Buka <strong className="text-emerald-400">Portal Kasir (POS)</strong> untuk verifikasi berat/pcs dan cetak nota.
+                  </p>
                 </div>
+              ))}
 
-                <div className="text-xs text-slate-300 bg-slate-900/60 p-3 rounded-xl border border-slate-700/50 space-y-1">
-                  <p className="font-bold text-slate-200">{item.service_type}</p>
-                  <p className="text-[10px] text-slate-400 leading-relaxed">{item.notes || '-'}</p>
+              {arrivedAtOutlet.length === 0 && (
+                <div className="text-center py-12 text-xs text-slate-500 font-bold border border-dashed border-slate-800 rounded-2xl">
+                  Belum ada cucian tiba di outlet.
                 </div>
-
-                <button
-                  onClick={() => handleUpdateStatus(item.id, 'Telah Tiba di Outlet')}
-                  className="w-full bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black text-xs py-2.5 rounded-xl shadow-md transition flex items-center justify-center gap-2"
-                >
-                  📦 Driver Tiba / Terima Fisik Cucian
-                </button>
-              </div>
-            ))}
-
-            {driverInProcess.length === 0 && (
-              <div className="text-center py-10 text-xs text-slate-500 font-medium">
-                Tidak ada driver sedang menjemput.
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="bg-slate-800/50 border border-slate-700/80 rounded-3xl p-5 space-y-4">
-          <div className="flex justify-between items-center border-b border-slate-700 pb-3">
-            <h2 className="text-sm font-extrabold text-emerald-400 flex items-center gap-2">
-              📦 Antrean Masuk POS
-            </h2>
-            <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-black px-2.5 py-0.5 rounded-full">
-              {arrivedAtOutlet.length}
-            </span>
-          </div>
-
-          <div className="space-y-3">
-            {arrivedAtOutlet.map((item) => (
-              <div key={item.id} className="bg-slate-800 border border-slate-700/90 rounded-2xl p-4 space-y-2 shadow-md">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <h3 className="font-extrabold text-sm text-slate-100">{item.customer_name || 'Pelanggan Online'}</h3>
-                    <p className="text-[10px] text-emerald-400 font-medium mt-0.5">Telah Tiba di Outlet</p>
-                  </div>
-                  <span className="text-xs font-black text-emerald-400">Rp {Number(item.delivery_fee || 0).toLocaleString('id-ID')}</span>
-                </div>
-
-                {item.photo_url && (
-                  <div className="rounded-xl overflow-hidden border border-slate-700 mt-2">
-                    <p className="text-[9px] font-bold text-slate-400 p-1 bg-slate-900">📸 Foto Bukti Driver:</p>
-                    <img src={item.photo_url} alt="Foto Bukti" className="w-full h-24 object-cover" />
-                  </div>
-                )}
-
-                <p className="text-[10px] text-slate-400 italic pt-1">
-                  Cucian telah diterima fisik. Buka <strong className="text-emerald-400">Portal Kasir (POS)</strong> untuk verifikasi berat/pcs dan cetak nota.
-                </p>
-              </div>
-            ))}
-
-            {arrivedAtOutlet.length === 0 && (
-              <div className="text-center py-10 text-xs text-slate-500 font-medium">
-                Belum ada cucian tiba di outlet.
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </div>
 

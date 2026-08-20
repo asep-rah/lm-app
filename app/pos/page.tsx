@@ -18,7 +18,7 @@ const safeParse = (data: any, fallback: any) => {
 const cleanPhone = (phoneStr: string) => {
   if (!phoneStr) return '';
   let cleaned = phoneStr.trim().replace(/\D/g, '');
-  if (cleaned.startsWith('62')) cleaned = '0' + cleaned.slice(2);
+  if (cleaned.startsWith('0')) cleaned = '62' + cleaned.slice(1);
   return cleaned;
 };
 
@@ -235,6 +235,18 @@ export default function POSPage() {
 
   const handleRemoveFromCart = (id: string) => {
     setCartItems(cartItems.filter(item => item.id !== id));
+  };
+  // FITUR C: TARIK DATA PENJEMPUTAN DRIVER LANGSUNG KE FORM POS
+  const handleImportPickupOrder = (pickup: any) => {
+    setCustomerName(pickup.customer_name || 'Pelanggan Online');
+    setCustomerPhone(pickup.customer_phone || pickup.phone_number || '');
+    setOrderType('Online');
+    setServiceType(pickup.service_type || 'Cuci Kering Gosok');
+    setWeightKg(pickup.estimated_weight ? String(pickup.estimated_weight) : '3');
+    setDeliveryFee(pickup.delivery_fee ? String(pickup.delivery_fee) : '0');
+    setNotes(pickup.notes || '');
+    setActiveTab('pos');
+    alert('✅ Data penjemputan driver berhasil ditarik ke Form POS!');
   };
 
   const handleOpenDetailModal = async (tx: any) => {
@@ -521,13 +533,12 @@ export default function POSPage() {
     setActiveOrders(orders?.filter((o) => o.status !== 'Siap Diambil') || []); setPickupOrders(orders?.filter((o) => o.status === 'Siap Diambil') || []);
 
     const { data: incomingPkps } = await supabase
-  .from('pickup_orders')
-  .select('*')
-  .eq('outlet_id', selectedOutlet)
-  .neq('status', 'Selesai')
-  .neq('status', 'Batal');
-  
-setIncomingPickupsCount(incomingPkps?.length || 0);
+    .from('pickup_orders')
+    .select('*')
+    .neq('status', 'Selesai')
+    .neq('status', 'Batal');
+
+  setIncomingPickupsCount(incomingPkps?.length || 0);
 
     const { data: txData } = await supabase.from('transactions').select('amount, order_type, created_at').eq('outlet_id', selectedOutlet);
     const { data: memLogsAll } = await supabase.from('membership_logs').select('price, order_type, created_at').eq('outlet_id', selectedOutlet);
@@ -1303,27 +1314,44 @@ setIncomingPickupsCount(incomingPkps?.length || 0);
         </div>
       )}
 
-      <div className="print:hidden min-h-screen bg-slate-50 text-slate-800 p-4 md:p-8 flex flex-col items-center pb-24 md:pb-8">
-        
-        <div className="w-full max-w-xl text-center mb-4 md:mb-6">
-          <h1 className="text-xl md:text-2xl font-black text-emerald-600">📱 Portal Kasir POS</h1>
-          <p className="text-[10px] md:text-xs text-slate-500 font-bold mt-1 uppercase">📍 {outletName}</p>
+<div className="print:hidden min-h-screen bg-slate-950 text-slate-100 p-3 md:p-6 pb-24 md:pb-8 font-sans">
+      {/* TOP HEADER GLASSMORPHISM (ANDROID & MOBILE FRIENDLY) */}
+      <div className="w-full max-w-6xl mx-auto bg-slate-900/90 border border-slate-800 rounded-3xl p-4 md:p-5 mb-6 backdrop-blur-xl shadow-2xl flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-12 h-12 bg-gradient-to-tr from-emerald-500 to-teal-400 rounded-2xl flex items-center justify-center text-2xl shadow-lg shadow-emerald-500/20 shrink-0">
+            🛒
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-lg md:text-xl font-black tracking-tight text-white">Portal Kasir POS</h1>
+              <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[9px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider">Active</span>
+            </div>
+            <p className="text-xs text-slate-400 font-medium mt-0.5">
+              Kasir: <span className="text-indigo-400 font-bold">{employeeName || 'Kasir'}</span> (@{employeeUsername})
+            </p>
+          </div>
         </div>
 
-        <div className="w-full max-w-xl bg-white border border-slate-200 shadow-sm rounded-xl p-3 mb-4 flex flex-wrap justify-between items-center text-xs gap-2">
-          <div className="flex items-center gap-3">
-            <div className="bg-emerald-100 text-emerald-700 p-2 rounded-lg text-lg md:text-base">👤</div>
-            <div><p className="font-bold text-slate-800">{employeeName}</p><p className="text-[10px] text-slate-500">@{employeeUsername}</p></div>
-          </div>
-          <div className="flex items-center gap-2 w-full md:w-auto mt-2 md:mt-0">
-            {isMultiOutletUser && outletsList.length > 0 && (
-              <select value={selectedOutlet} onChange={(e) => handleOutletChange(e.target.value)} className="flex-1 bg-indigo-50 border border-indigo-200 text-indigo-800 font-bold text-[10px] md:text-xs rounded-lg px-2 py-2">
-                {outletsList.map((o) => (<option key={o.id} value={o.id}>📍 {o.name}</option>))}
-              </select>
-            )}
-            <button onClick={handleLogout} className="bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold px-3 py-2 rounded-lg">Keluar</button>
-          </div>
+        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+          {isMultiOutletUser && outletsList.length > 0 && (
+            <select 
+              value={selectedOutlet} 
+              onChange={(e) => handleOutletChange(e.target.value)} 
+              className="flex-1 md:flex-initial bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-2xl px-3 py-2.5 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            >
+              {outletsList.map((o) => (
+                <option key={o.id} value={o.id}>{o.name}</option>
+              ))}
+            </select>
+          )}
+          <button 
+            onClick={handleLogout} 
+            className="bg-rose-500/10 hover:bg-rose-600 border border-rose-500/30 text-rose-400 hover:text-white active:scale-95 text-xs font-bold px-4 py-2.5 rounded-2xl transition-all"
+          >
+            Keluar
+          </button>
         </div>
+      </div>
 
         {/* DESKTOP NAV BAR */}
         <div className="hidden md:grid w-full max-w-xl grid-cols-7 gap-1 p-1.5 bg-white border rounded-xl mb-6 shadow-sm">
@@ -1434,80 +1462,143 @@ setIncomingPickupsCount(incomingPkps?.length || 0);
                 </select>
               </div>
 
-              <div className="bg-slate-50 border border-slate-200 p-3 rounded-2xl space-y-2.5">
-                <div className="flex justify-between items-center border-b pb-2">
-                  <span className="text-xs font-bold text-slate-800">🛒 Input Layanan & Items</span>
-                  <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-100">Bisa Multi-Item / Direct Input</span>
-                </div>
+              {/* KOTAK INPUT ITEM / LAYANAN (DARK MODE GLASSMORPHISM) */}
+          <div className="bg-slate-900 border border-slate-800 p-4 rounded-3xl space-y-3 shadow-xl">
+            <div className="flex justify-between items-center pb-2 border-b border-slate-800">
+              <span className="text-xs font-black tracking-wider uppercase text-emerald-400">
+                ➕ Input Layanan & Items
+              </span>
+              <span className="text-[10px] font-bold text-teal-300 bg-teal-500/10 px-2.5 py-0.5 rounded-full border border-teal-500/30">
+                Bisa Multi-Item
+              </span>
+            </div>
 
-                <div className="space-y-2">
-                  <select 
-                    value={selectedServiceInput || serviceType} 
-                    onChange={(e) => {
-                      setSelectedServiceInput(e.target.value);
-                      setServiceType(e.target.value);
-                    }} 
-                    className="w-full border rounded-xl p-2.5 text-xs font-bold bg-white"
-                  >
-                    {services.map((s, i) => <option key={i} value={s.name}>{s.name} ({s.type === 'pcs' ? 'Satuan/Pcs' : 'Kiloan/Kg'})</option>)}
-                    <option value="Bedcover Double">Bedcover Double (Satuan/Pcs)</option>
-                    <option value="Bedcover Single">Bedcover Single (Satuan/Pcs)</option>
-                    <option value="Sprei Single">Sprei Single (Satuan/Pcs)</option>
-                    <option value="Jaket / Jas / Sepatu">Jaket / Jas / Sepatu (Satuan/Pcs)</option>
-                  </select>
+            <div className="space-y-3">
+              <select
+                value={selectedServiceInput || serviceType}
+                onChange={(e) => {
+                  setSelectedServiceInput(e.target.value);
+                  setServiceType(e.target.value);
+                }}
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-xs font-bold rounded-2xl p-3 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              >
+                {services.map((s, i) => (
+                  <option key={i} value={s.name}>
+                    {s.name} ({s.type === 'pcs' ? 'Satuan/Pcs' : 'Kiloan/Kg'})
+                  </option>
+                ))}
+                <option value="Bedcover Double">Bedcover Double (Satuan/Pcs)</option>
+                <option value="Bedcover Single">Bedcover Single (Satuan/Pcs)</option>
+                <option value="Sprei Single">Sprei Single (Satuan/Pcs)</option>
+                <option value="Jaket / Jas / Sepatu">Jaket / Jas / Sepatu (Satuan/Pcs)</option>
+              </select>
 
-                  <div className="grid grid-cols-2 gap-2">
-                    <input type="number" step="0.1" placeholder="Berat (Kg)" value={inputQtyKg || weightKg} onChange={(e) => { setInputQtyKg(e.target.value); setWeightKg(e.target.value); }} className="w-full border rounded-xl p-2 text-xs bg-white font-bold" />
-                    <input type="number" placeholder="Jumlah (Pcs)" value={inputQtyPcs || pcsCount} onChange={(e) => { setInputQtyPcs(e.target.value); setPcsCount(e.target.value); }} className="w-full border rounded-xl p-2 text-xs bg-white font-bold" />
-                  </div>
-
-                  <input type="text" placeholder="Catatan khusus item ini (misal: Kantong A / Kemeja Putih)" value={inputItemNote} onChange={(e) => setInputItemNote(e.target.value)} className="w-full border rounded-xl p-2 text-xs bg-white" />
-
-                  <button type="button" onClick={handleAddToCart} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl text-xs shadow transition flex items-center justify-center gap-1">
-                    ➕ TAMBAHKAN KE DAFTAR KERANJANG NOTA
-                  </button>
-                </div>
-
-                {cartItems.length > 0 && (
-                  <div className="space-y-1.5 pt-2 border-t">
-                    <p className="text-[10px] font-bold text-slate-500 uppercase">Daftar Item Dalam Nota Ini ({cartItems.length}):</p>
-                    {cartItems.map((item) => {
-                      let durationMultiplier = 1.0;
-                      if (duration.includes('Oneday') || duration.includes('1 Hari')) durationMultiplier = 1.5;
-                      if (duration.includes('Express') || duration.includes('6 Jam')) durationMultiplier = 2.0;
-                      if (duration.includes('Quick') || duration.includes('3 Jam')) durationMultiplier = 3.0;
-
-                      const activeUnitPrice = Math.round((item.basePrice || item.price) * durationMultiplier);
-                      const itemSubtotal = activeUnitPrice * item.qty;
-
-                      return (
-                        <div key={item.id} className="bg-white p-2.5 rounded-xl border flex justify-between items-center text-xs shadow-sm">
-                          <div>
-                            <p className="font-bold text-slate-800">{item.name}</p>
-                            <p className="text-[10px] text-slate-500 font-mono">
-                              {item.qty} {item.type.toUpperCase()} x Rp {activeUnitPrice.toLocaleString('id-ID')}
-                              {item.note && <span className="text-indigo-600 font-sans italic block">Note: {item.note}</span>}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <span className="font-black text-emerald-600 font-mono">Rp {itemSubtotal.toLocaleString('id-ID')}</span>
-                            <button type="button" onClick={() => handleRemoveFromCart(item.id)} className="text-rose-500 hover:bg-rose-50 p-1 rounded-lg font-bold text-xs">✕</button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="number"
+                  step="0.1"
+                  placeholder="Berat (Kg)"
+                  value={inputQtyKg || weightKg}
+                  onChange={(e) => setInputQtyKg(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-xs font-bold rounded-2xl p-3 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+                <input
+                  type="number"
+                  placeholder="Jumlah (Pcs)"
+                  value={inputQtyPcs || pcsCount}
+                  onChange={(e) => setInputQtyPcs(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-xs font-bold rounded-2xl p-3 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
               </div>
 
-              {orderType === 'Online' && <input type="number" placeholder="Biaya Ongkir (Rp)" value={deliveryFee} onChange={(e) => setDeliveryFee(e.target.value)} className="w-full border-indigo-200 bg-indigo-50 rounded-xl px-4 py-3 text-sm font-bold" />}
+              <input
+                type="text"
+                placeholder="Catatan khusus item ini (misal: Kantong A / Kemeja Putih)"
+                value={inputItemNote}
+                onChange={(e) => setInputItemNote(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-xs font-bold rounded-2xl p-3 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
 
-              <div className="bg-rose-50/60 border border-rose-200 p-2.5 rounded-xl flex gap-2 items-center">
-                <span className="text-xs font-bold text-rose-700 whitespace-nowrap">🏷️ Diskon:</span>
-                <select value={discountType} onChange={(e) => setDiscountType(e.target.value as any)} className="border border-rose-300 rounded-lg p-2 text-xs font-bold text-rose-800 bg-white"><option value="nominal">Rupiah (Rp)</option><option value="percent">Persen (%)</option></select>
-                <input type="number" placeholder={discountType === 'percent' ? '10 (%)' : '5000 (Rp)'} value={discountValue} onChange={(e) => setDiscountValue(e.target.value)} className="w-full border border-rose-300 rounded-lg px-3 py-2 text-xs font-bold text-rose-700" />
-              </div>
+              <button
+                type="button"
+                onClick={handleAddToCart}
+                className="w-full bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 active:scale-95 text-white font-black py-3 rounded-2xl text-xs shadow-lg shadow-emerald-500/20 transition-all"
+              >
+                ➕ TAMBAHKAN KE DAFTAR KERANJANG NOTA
+              </button>
+            </div>
+          </div>
+                {/* DAFTAR ITEM KERANJANG */}
+          {cartItems.length > 0 && (
+            <div className="space-y-1.5 pt-2 border-t border-slate-800">
+              <p className="text-[10px] font-bold text-slate-400 uppercase">
+                Daftar Item Dalam Nota Ini ({cartItems.length}):
+              </p>
+              {cartItems.map((item, idx) => {
+                let durationMultiplier = 1.0;
+                if (duration.includes('Oneday') || duration.includes('1 Hari')) durationMultiplier = 1.5;
+                if (duration.includes('Express') || duration.includes('6 Jam')) durationMultiplier = 2.0;
+                if (duration.includes('Quick') || duration.includes('3 Jam')) durationMultiplier = 3.0;
 
+                const activeUnitPrice = Math.round((item.basePrice || item.price) * durationMultiplier);
+                const itemSubtotal = activeUnitPrice * item.qty;
+
+                return (
+                  <div key={idx} className="bg-slate-800/80 p-2.5 rounded-xl border border-slate-700 flex justify-between items-center text-xs shadow-sm">
+                    <div>
+                      <p className="font-bold text-slate-100">{item.name}</p>
+                      <p className="text-[10px] text-slate-400">
+                        {item.qty} x Rp {activeUnitPrice.toLocaleString('id-ID')}
+                        {item.note && <span className="italic text-emerald-400 ml-1">({item.note})</span>}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-black text-emerald-400">Rp {itemSubtotal.toLocaleString('id-ID')}</span>
+                      <button
+                        type="button"
+                        onClick={() => setCartItems(cartItems.filter((_, i) => i !== idx))}
+                        className="text-rose-400 hover:text-rose-300 text-xs font-bold px-1.5 py-0.5 rounded bg-rose-500/10"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* INPUT ONGKIR & DISKON (DARK MODE GLASSMORPHISM) */}
+          {orderType === 'Online' && (
+            <input
+              type="number"
+              placeholder="Biaya Ongkir (Rp)"
+              value={deliveryFee}
+              onChange={(e) => setDeliveryFee(e.target.value)}
+              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-xs font-bold rounded-2xl p-3 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            />
+          )}
+
+          <div className="bg-slate-800/60 border border-rose-500/30 p-3 rounded-2xl flex items-center gap-2">
+            <span className="text-xs font-bold text-rose-400 whitespace-nowrap">
+              🏷️ Diskon:
+            </span>
+            <select
+              value={discountType}
+              onChange={(e) => setDiscountType(e.target.value as any)}
+              className="bg-slate-900 border border-slate-700 text-slate-200 text-xs font-bold rounded-xl p-2 focus:outline-none"
+            >
+              <option value="rp">Rp</option>
+              <option value="percent">%</option>
+            </select>
+            <input
+              type="number"
+              placeholder={discountType === 'percent' ? '10 (%)' : '5000 (Rp)'}
+              value={discountValue}
+              onChange={(e) => setDiscountValue(e.target.value)}
+              className="w-full bg-slate-900 border border-slate-700 text-slate-100 text-xs font-bold rounded-xl p-2 focus:outline-none focus:ring-1 focus:ring-rose-500"
+            />
+          </div>
               <input type="text" placeholder="Catatan Umum Nota Ini (Noda, dll)" value={notes} onChange={(e) => setNotes(e.target.value)} className="w-full border rounded-xl px-4 py-3 text-xs" />
               
               <div><label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">Total Bayar Final (Rp) (Terhitung Otomatis)</label><input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} className="w-full bg-slate-50 border rounded-xl px-4 py-3.5 text-2xl font-black text-emerald-600 text-center" required /></div>

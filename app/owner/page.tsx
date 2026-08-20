@@ -60,6 +60,10 @@ export default function Dashboard() {
   const [newOutletWA, setNewOutletWA] = useState('');
 
   // States Karyawan & Absensi
+  const [editingEmp, setEditingEmp] = useState<any>(null);
+  const [editEmpRole, setEditEmpRole] = useState('');
+  const [editEmpPassword, setEditEmpPassword] = useState('');
+  const [editEmpOutlet, setEditEmpOutlet] = useState('ALL');
   const [employees, setEmployees] = useState<any[]>([]);
   const [attendances, setAttendances] = useState<any[]>([]);
   const [newEmpName, setNewEmpName] = useState('');
@@ -111,6 +115,7 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
+    
     async function loadData() {
       setIsLoading(true);
       const { data: outletData } = await supabase.from('outlets').select('*');
@@ -284,6 +289,17 @@ export default function Dashboard() {
       setIsLoading(false);
     }
     loadData();
+    // LISTEN REALTIME SYNC UNTUK DASHBOARD OWNER
+    const channel = supabase
+      .channel('owner_realtime_dashboard')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'membership_logs' }, () => loadData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses' }, () => loadData())
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [selectedOutlet, period, activeTab]);
 
   useEffect(() => {
@@ -457,7 +473,33 @@ export default function Dashboard() {
     } else alert('❌ Gagal: ' + error.message);
     setIsSaving(false);
   };
+  const handleSaveEditEmployee = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingEmp) return;
+    setIsSaving(true);
 
+    const payload: any = {
+      role: editEmpRole,
+      outlet_id: editEmpOutlet === 'ALL' ? null : editEmpOutlet
+    };
+
+    if (editEmpPassword.trim()) {
+      payload.password = editEmpPassword.trim();
+    }
+
+    const { error } = await supabase.from('employees').update(payload).eq('id', editingEmp.id);
+
+    if (!error) {
+      alert('✅ Data karyawan berhasil diperbarui!');
+      setEditingEmp(null);
+      setEditEmpPassword('');
+      const { data } = await supabase.from('employees').select('*, outlets(name)').order('created_at', { ascending: false });
+      if (data) setEmployees(data);
+    } else {
+      alert('❌ Gagal memperbarui karyawan: ' + error.message);
+    }
+    setIsSaving(false);
+  };
   const handleDeleteEmployee = async (id: string) => {
     if (!confirm('Yakin ingin menghapus karyawan ini?')) return; setIsSaving(true);
     const { error } = await supabase.from('employees').delete().eq('id', id);
@@ -519,28 +561,36 @@ export default function Dashboard() {
     ? filteredServices 
     : filteredServices.slice(0, 5);
 
-  const exportCSV = () => {
-    const currentMonthName = new Date().toLocaleString('id-ID', { month: 'long' }).toUpperCase();
-    const outletNameStr = selectedOutlet === 'ALL' ? 'SEMUA CABANG' : outlets.find((o) => o.id === selectedOutlet)?.name?.toUpperCase() || 'OUTLET';
-    let offlineRev = 0; let onlineRev = 0; let ongkirRev = 0;
-    rawExportData.txs.forEach((tx: any) => { const amt = Number(tx.amount) || 0; const fee = Number(tx.delivery_fee) || 0; if (tx.order_type === 'Online') onlineRev += (amt - fee); else offlineRev += (amt - fee); ongkirRev += fee; });
-    rawExportData.mems.forEach((m: any) => { const prc = Number(m.price) || 0; if (m.order_type === 'Online') onlineRev += prc; else offlineRev += prc; });
-    const totalPendapatan = offlineRev + onlineRev + ongkirRev;
-
-    const expMap: Record<string, number> = {}; rawExportData.exps.forEach((ex: any) => { const cat = ex.category; expMap[cat] = (expMap[cat] || 0) + Number(ex.amount); });
-    const bppList = ['5201 - Detergent', '5202 - Gas', '5203 - Parfume', '5204 - Plastik', '5205 - Solasi & Thermal Paper', '5206 - Hanger'];
-    const opexList = ['600001 - Beban Subscribe Apps', '600019 - Beban Sewa Ruko', '600009 - Beban Gaji Crew', '600003 - Beban Listrik'];
-    const depList = ['Depresiasi Machine', 'Depresiasi Furniture'];
-
-    let totalBPP = 0; let totalOpex = 0; let totalDep = 0;
-    bppList.forEach((c) => (totalBPP += expMap[c] || 0)); opexList.forEach((c) => (totalOpex += expMap[c] || 0)); depList.forEach((c) => (totalDep += expMap[c] || 0));
-    let otherOpexStr = ''; const knownCats = new Set([...bppList, ...opexList, ...depList]);
-    Object.keys(expMap).forEach((k) => { if (!knownCats.has(k)) { totalOpex += expMap[k]; otherOpexStr += `"${k}",${expMap[k]}\n`; } });
-
-    const labaBersih = totalPendapatan - totalBPP - totalOpex; const labaSetelahDepresiasi = labaBersih - totalDep;
-    let csv = `LAPORAN LABA RUGI ${outletNameStr},,\n"Pendapatan Offline",${offlineRev}\n"Pendapatan Online",${onlineRev}\n"Total Pendapatan",${totalPendapatan}\n"Total BPP",${totalBPP}\n"Total Opex",${totalOpex}\n"LABA BERSIH",${labaBersih}\n"LABA SETELAH DEPRESIASI",${labaSetelahDepresiasi}\n`;
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `Laporan_PnL_${outletNameStr.replace(/ /g, '_')}_${currentMonthName}.csv`; link.click();
-  };
+    const exportCSV = () => {
+      const currentMonthName = new Date().toLocaleString('id-ID', { month: 'long' }).toUpperCase();
+      const outletNameStr = selectedOutlet === 'ALL' ? 'SEMUA CABANG' : outlets.find((o) => o.id === selectedOutlet)?.name?.toUpperCase() || 'OUTLET';
+  
+      let csv = `LAPORAN LABA RUGI - ${outletNameStr}\n`;
+      csv += `"Periode", "${period.replace('_', ' ')}"\n`;
+      csv += `"Tanggal Cetak", "${new Date().toLocaleString('id-ID')}"\n\n`;
+      
+      csv += `"KATEGORI FINANCIAL","NOMINAL (RP)"\n`;
+      csv += `"Pendapatan Offline",${stats.offlineIncome}\n`;
+      csv += `"Pendapatan Online",${stats.onlineIncome}\n`;
+      csv += `"TOTAL OMSET (GROSS REVENUE)",${stats.income}\n`;
+      csv += `"TOTAL PENGELUARAN (OPEX)",${stats.expense}\n`;
+      csv += `"NET PROFIT (LABA BERSIH)",${stats.profit}\n\n`;
+  
+      csv += `"RINCIAN AUDIT TRANSAKSI"\n`;
+      csv += `"Tanggal & Waktu","Kategori","Deskripsi / Pelanggan","Nominal (Rp)"\n`;
+      
+      tableData.forEach((row) => {
+        const dateStr = new Date(row.date).toLocaleString('id-ID');
+        csv += `"${dateStr}","${row.category}","${row.desc.replace(/"/g, '""')}",${row.amount}\n`;
+      });
+  
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `Laporan_PnL_${outletNameStr.replace(/ /g, '_')}_${currentMonthName}.csv`;
+      link.click();
+    };
 
   const filteredHistory = fullYearHistory.filter((item) => {
     const itemDate = new Date(item.date);
@@ -674,30 +724,38 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* NAV HEADER */}
-        <div className="bg-white border border-slate-200 p-4 md:p-6 rounded-2xl shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-          <div>
-            <h1 className="text-xl md:text-2xl font-black text-emerald-600">Laundry ERP 🏛️</h1>
-            <p className="text-[10px] md:text-xs text-slate-500 mt-1">
-              Management <span className="font-bold text-indigo-600">({currentUserRole.toUpperCase()})</span>
+        {/* NAV HEADER EXECUTIVE GLASSMORPHISM */}
+        <div className="relative overflow-hidden bg-slate-900 text-white p-6 md:p-8 rounded-3xl shadow-2xl border border-slate-800 backdrop-blur-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+          {/* Ambient Background Glow */}
+          <div className="absolute -top-12 -left-12 w-40 h-40 bg-emerald-500/20 rounded-full blur-3xl pointer-events-none" />
+          <div className="absolute -bottom-12 -right-12 w-40 h-40 bg-indigo-500/20 rounded-full blur-3xl pointer-events-none" />
+
+          <div className="relative z-10">
+            <div className="flex items-center gap-2">
+              <span className="inline-block w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-[10px] font-mono tracking-widest uppercase text-emerald-400 font-extrabold">Executive Terminal</span>
+            </div>
+            <h1 className="text-2xl md:text-3xl font-black tracking-tight text-white mt-1">
+              Laundrivery <span className="bg-gradient-to-r from-emerald-400 to-teal-300 bg-clip-text text-transparent">ERP</span> 🏛️
+            </h1>
+            <p className="text-xs text-slate-400 font-medium mt-0.5">
+              Logged as <span className="text-indigo-300 font-bold uppercase">{currentUserName || 'Owner'}</span> ({currentUserRole})
             </p>
           </div>
-          <div className="flex w-full md:w-auto overflow-x-auto pb-2 md:pb-0 gap-2 hide-scrollbar">
-            <button onClick={() => setActiveTab('pnl')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'pnl' ? 'bg-emerald-600 text-white shadow' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>📊 Laporan PnL & Ranking</button>
-            <button onClick={() => setActiveTab('history')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'history' ? 'bg-indigo-600 text-white shadow' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>📜 History 1 Tahun</button>
-            <button onClick={() => setActiveTab('loans')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'loans' ? 'bg-amber-600 text-white shadow' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>💸 Kasbon & Potongan</button>
+
+          <div className="relative z-10 flex w-full md:w-auto overflow-x-auto pb-2 md:pb-0 gap-2 hide-scrollbar">
+            <button onClick={() => setActiveTab('pnl')} className={`whitespace-nowrap px-4 py-2.5 font-bold text-xs rounded-2xl transition-all duration-200 ${activeTab === 'pnl' ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-lg shadow-emerald-500/20 scale-105' : 'bg-slate-800/80 text-slate-300 hover:bg-slate-700'}`}>📊 Laporan PnL</button>
+            <button onClick={() => setActiveTab('history')} className={`whitespace-nowrap px-4 py-2.5 font-bold text-xs rounded-2xl transition-all duration-200 ${activeTab === 'history' ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-lg shadow-indigo-500/20 scale-105' : 'bg-slate-800/80 text-slate-300 hover:bg-slate-700'}`}>📜 History 1 Thn</button>
+            <button onClick={() => setActiveTab('loans')} className={`whitespace-nowrap px-4 py-2.5 font-bold text-xs rounded-2xl transition-all duration-200 ${activeTab === 'loans' ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-lg shadow-amber-500/20 scale-105' : 'bg-slate-800/80 text-slate-300 hover:bg-slate-700'}`}>💸 Kasbon Crew</button>
             
             {isManagementAdmin && (
               <>
-                <button onClick={() => setActiveTab('settings')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'settings' ? 'bg-indigo-600 text-white shadow' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>⚙️ Pengaturan</button>
-                <button onClick={() => setActiveTab('employees')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'employees' ? 'bg-purple-600 text-white shadow' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>👥 Karyawan & Akses</button>
-                <button onClick={() => setActiveTab('delete_requests')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition relative ${activeTab === 'delete_requests' ? 'bg-rose-600 text-white shadow' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
-                  🗑️ Request Hapus {deleteRequests.length > 0 && <span className="ml-1 bg-white text-rose-600 text-[10px] px-1.5 py-0.5 rounded-full font-black">{deleteRequests.length}</span>}
-                </button>
+                <button onClick={() => setActiveTab('settings')} className={`whitespace-nowrap px-4 py-2.5 font-bold text-xs rounded-2xl transition-all duration-200 ${activeTab === 'settings' ? 'bg-gradient-to-r from-purple-500 to-pink-600 text-white shadow-lg shadow-purple-500/20 scale-105' : 'bg-slate-800/80 text-slate-300 hover:bg-slate-700'}`}>⚙️ Settings</button>
+                <button onClick={() => setActiveTab('employees')} className={`whitespace-nowrap px-4 py-2.5 font-bold text-xs rounded-2xl transition-all duration-200 ${activeTab === 'employees' ? 'bg-gradient-to-r from-blue-500 to-cyan-600 text-white shadow-lg shadow-blue-500/20 scale-105' : 'bg-slate-800/80 text-slate-300 hover:bg-slate-700'}`}>👥 Karyawan</button>
               </>
             )}
-            <Link href="/pos" className="whitespace-nowrap bg-slate-800 hover:bg-slate-900 text-white text-xs px-4 py-2 rounded-xl font-bold transition">🛒 Portal Kasir</Link>
-            <button onClick={handleLogout} className="whitespace-nowrap bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold text-xs px-3 py-2 rounded-xl transition">Keluar</button>
+            <Link href="/pos" className="whitespace-nowrap bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500 hover:text-white text-xs px-4 py-2.5 rounded-2xl font-bold transition-all duration-200">🛒 POS Kasir</Link>
+            <button onClick={handleLogout} className="whitespace-nowrap bg-rose-500/10 border border-rose-500/30 text-rose-400 hover:bg-rose-600 hover:text-white font-bold text-xs px-3.5 py-2.5 rounded-2xl transition-all duration-200">Keluar</button>
           </div>
         </div>
 
@@ -724,24 +782,47 @@ export default function Dashboard() {
               <button onClick={exportCSV} className="w-full md:w-auto mt-auto bg-blue-600 text-white font-bold text-xs px-6 py-3 rounded-xl shadow-md">📥 EXPORT CSV</button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
-              <div className="bg-white border border-slate-200 p-4 md:p-6 rounded-2xl shadow-sm">
-                <p className="text-[10px] md:text-xs font-bold text-slate-500 uppercase">Gross Revenue (Total Omset)</p>
-                <h2 className="text-xl md:text-2xl font-black text-emerald-600 mt-1">Rp {stats.income.toLocaleString('id-ID')}</h2>
-                <div className="mt-2 pt-2 border-t flex justify-between text-[11px] font-semibold text-slate-500">
-                  <span>🏪 Offline: <b>Rp {stats.offlineIncome.toLocaleString('id-ID')}</b></span>
-                  <span>🌐 Online: <b className="text-indigo-600">Rp {stats.onlineIncome.toLocaleString('id-ID')}</b></span>
-                </div>
-              </div>
-              <div className="bg-white border border-slate-200 p-4 md:p-6 rounded-2xl shadow-sm">
-                <p className="text-[10px] md:text-xs font-bold text-slate-500 uppercase">Opex (Total Pengeluaran)</p>
-                <h2 className="text-xl md:text-2xl font-black text-rose-600 mt-1">Rp {stats.expense.toLocaleString('id-ID')}</h2>
-              </div>
-              <div className={`p-4 md:p-6 rounded-2xl border shadow-sm ${stats.profit >= 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-rose-50 border-rose-200'}`}>
-                <p className={`text-[10px] md:text-xs font-bold uppercase ${stats.profit >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>Net Profit (Laba Bersih)</p>
-                <h2 className={`text-xl md:text-2xl font-black mt-1 ${stats.profit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>Rp {stats.profit.toLocaleString('id-ID')}</h2>
-              </div>
+            {/* TOP FINANCIAL METRIC CARDS (FINTECH GRADIENT) */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 pt-2">
+          {/* GROSS REVENUE */}
+          <div className="relative overflow-hidden bg-gradient-to-br from-emerald-600 via-teal-600 to-emerald-800 text-white p-6 rounded-3xl shadow-xl shadow-emerald-500/10 border border-emerald-400/20 transform hover:-translate-y-1 transition-all duration-300">
+            <div className="flex justify-between items-start">
+              <span className="text-[10px] font-extrabold tracking-wider uppercase bg-emerald-950/40 px-3 py-1 rounded-full border border-emerald-400/30 text-emerald-200 backdrop-blur-md">Gross Revenue</span>
+              <span className="text-xl">💰</span>
             </div>
+            <h2 className="text-2xl md:text-3xl font-black tracking-tight mt-4">
+              Rp {stats.income.toLocaleString('id-ID')}
+            </h2>
+            <div className="mt-4 pt-3 border-t border-emerald-400/20 flex justify-between text-[11px] font-medium text-emerald-100">
+              <span>Offline: <b>Rp {stats.offlineIncome.toLocaleString('id-ID')}</b></span>
+              <span>Online: <b className="text-amber-200">Rp {stats.onlineIncome.toLocaleString('id-ID')}</b></span>
+            </div>
+          </div>
+
+          {/* OPEX */}
+          <div className="relative overflow-hidden bg-gradient-to-br from-rose-600 via-pink-600 to-rose-800 text-white p-6 rounded-3xl shadow-xl shadow-rose-500/10 border border-rose-400/20 transform hover:-translate-y-1 transition-all duration-300">
+            <div className="flex justify-between items-start">
+              <span className="text-[10px] font-extrabold tracking-wider uppercase bg-rose-950/40 px-3 py-1 rounded-full border border-rose-400/30 text-rose-200 backdrop-blur-md">Total Opex</span>
+              <span className="text-xl">💸</span>
+            </div>
+            <h2 className="text-2xl md:text-3xl font-black tracking-tight mt-4">
+              Rp {stats.expense.toLocaleString('id-ID')}
+            </h2>
+            <p className="text-[10px] text-rose-200 font-medium mt-4">Termasuk Beban Gaji, Detergen, & Operasional</p>
+          </div>
+
+          {/* NET PROFIT */}
+          <div className={`relative overflow-hidden p-6 rounded-3xl shadow-xl border transform hover:-translate-y-1 transition-all duration-300 text-white ${stats.profit >= 0 ? 'bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 border-indigo-500/30 shadow-indigo-500/10' : 'bg-gradient-to-br from-rose-950 via-slate-900 to-rose-950 border-rose-500/30 shadow-rose-500/10'}`}>
+            <div className="flex justify-between items-start">
+              <span className={`text-[10px] font-extrabold tracking-wider uppercase px-3 py-1 rounded-full backdrop-blur-md border ${stats.profit >= 0 ? 'bg-indigo-900/60 text-indigo-300 border-indigo-400/30' : 'bg-rose-900/60 text-rose-300 border-rose-400/30'}`}>Net Profit</span>
+              <span className="text-xl">{stats.profit >= 0 ? '📈' : '📉'}</span>
+            </div>
+            <h2 className={`text-2xl md:text-3xl font-black tracking-tight mt-4 ${stats.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+              Rp {stats.profit.toLocaleString('id-ID')}
+            </h2>
+            <p className="text-[10px] text-slate-400 font-medium mt-4">Estimasi Laba Bersih Setelah Pengeluaran</p>
+          </div>
+        </div>
 
             {/* TABEL RANKING OUTLET & SUPERVISOR */}
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 md:gap-6 pt-2">
@@ -1249,7 +1330,25 @@ export default function Dashboard() {
                                   <span className="text-slate-600 text-[10px] font-medium">{emp.outlets?.name || 'Pusat/Global'}</span>
                                 )}
                               </td>
-                              <td className="p-3 text-right"><button onClick={() => handleDeleteEmployee(emp.id)} className="bg-rose-100 text-rose-600 hover:bg-rose-200 px-2.5 py-1 rounded text-[10px] font-bold transition">Hapus</button></td>
+                              <td className="p-3 text-right flex gap-1 justify-end">
+  <button 
+    onClick={() => {
+      setEditingEmp(emp);
+      setEditEmpRole(emp.role);
+      setEditEmpOutlet(emp.outlet_id || 'ALL');
+      setEditEmpPassword('');
+    }} 
+    className="bg-indigo-100 text-indigo-700 hover:bg-indigo-200 px-2.5 py-1 rounded text-[10px] font-bold transition"
+  >
+    ✏️ Edit
+  </button>
+  <button 
+    onClick={() => handleDeleteEmployee(emp.id)} 
+    className="bg-rose-100 text-rose-600 hover:bg-rose-200 px-2.5 py-1 rounded text-[10px] font-bold transition"
+  >
+    Hapus
+  </button>
+</td>
                             </tr>
                           );
                         })}
