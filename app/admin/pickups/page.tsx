@@ -230,30 +230,45 @@ export default function AdminPickupsPage() {
             </div>
 
             <div className="space-y-3">
-              {arrivedAtOutlet.map((item) => (
-                <div key={item.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-2 shadow-lg">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <h3 className="font-extrabold text-sm text-slate-100">{item.customer_name || 'Pelanggan Online'}</h3>
-                      <p className="text-[10px] text-emerald-400 font-bold mt-0.5">✓ Telah Tiba di Outlet</p>
+              {arrivedAtOutlet.map((item) => {
+                const customerPhone = item.phone_number || item.customer_phone || item.phone || '';
+                const customerName = item.customer_name || 'Pelanggan Online';
+                const posUrl = `/pos?pickup_id=${item.id}&name=${encodeURIComponent(customerName)}&phone=${encodeURIComponent(customerPhone)}&service=${encodeURIComponent(item.service_type || '')}&notes=${encodeURIComponent(item.notes || '')}&delivery_fee=${item.delivery_fee || 0}&order_type=Online`;
+
+                return (
+                  <div key={item.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3 shadow-lg hover:border-slate-700 transition-all">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <h3 className="font-extrabold text-sm text-slate-100">{customerName}</h3>
+                        <p className="text-[11px] font-mono text-emerald-400 font-semibold">{customerPhone || '-'}</p>
+                        <p className="text-[10px] text-emerald-400 font-bold mt-0.5">✓ Telah Tiba di Outlet</p>
+                      </div>
+                      <span className="text-xs font-black text-emerald-400">Rp {Number(item.delivery_fee || 0).toLocaleString('id-ID')}</span>
                     </div>
-                    <span className="text-xs font-black text-emerald-400">Rp {Number(item.delivery_fee || 0).toLocaleString('id-ID')}</span>
+
+                    <div className="text-xs text-slate-300 bg-slate-800/60 p-3 rounded-xl border border-slate-800 space-y-1">
+                      <p className="font-bold text-slate-100">{item.service_type}</p>
+                      <p className="text-[10px] text-slate-400 leading-relaxed">{item.notes || '-'}</p>
+                    </div>
+
+                    {item.photo_url && (
+                      <div className="rounded-xl overflow-hidden border border-slate-800 bg-slate-950">
+                        <p className="text-[9px] font-bold text-slate-400 p-1.5 bg-slate-800/60 border-b border-slate-800 flex items-center gap-1">
+                          📸 Foto Bukti Driver:
+                        </p>
+                        <img src={item.photo_url} alt="Foto Bukti" className="w-full h-28 object-cover hover:scale-105 transition-all duration-300" />
+                      </div>
+                    )}
+
+                    <Link
+                      href={posUrl}
+                      className="w-full bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-black text-xs py-2.5 rounded-xl shadow-lg shadow-emerald-500/20 transition-all active:scale-95 flex items-center justify-center gap-2 mt-2"
+                    >
+                      🧾 PROSES DI POS KASIR ➔
+                    </Link>
                   </div>
-
-                  {item.photo_url && (
-                    <div className="rounded-xl overflow-hidden border border-slate-800 mt-2 bg-slate-950">
-                      <p className="text-[9px] font-bold text-slate-400 p-1.5 bg-slate-800/60 border-b border-slate-800 flex items-center gap-1">
-                        📸 Foto Bukti Driver:
-                      </p>
-                      <img src={item.photo_url} alt="Foto Bukti" className="w-full h-28 object-cover hover:scale-105 transition-all duration-300" />
-                    </div>
-                  )}
-
-                  <p className="text-[10px] text-slate-400 italic pt-2 border-t border-slate-800/60 mt-2">
-                    Cucian telah diterima fisik. Buka <strong className="text-emerald-400">Portal Kasir (POS)</strong> untuk verifikasi berat/pcs dan cetak nota.
-                  </p>
-                </div>
-              ))}
+                );
+              })}
 
               {arrivedAtOutlet.length === 0 && (
                 <div className="text-center py-12 text-xs text-slate-500 font-bold border border-dashed border-slate-800 rounded-2xl">
