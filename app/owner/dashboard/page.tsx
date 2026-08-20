@@ -656,7 +656,6 @@ export default function Dashboard() {
               </div>
             </div>
           </div>
-        )}
 
         {/* 📜 TAB: HISTORY 1 TAHUN KE BELAKANG */}
         {activeTab === 'history' && (
