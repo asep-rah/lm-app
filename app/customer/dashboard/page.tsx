@@ -192,7 +192,7 @@ export default function CustomerDashboardPage() {
       const { data: pickupOrders } = await supabase
         .from('pickup_orders')
         .select('*')
-        .eq('phone_number', norm)
+        .or(`phone.eq.${norm},customer_phone.eq.${norm}`)
         .order('created_at', { ascending: false });
 
       const { data: posTransactions } = await supabase
@@ -350,10 +350,12 @@ export default function CustomerDashboardPage() {
     const primaryServiceLabel = isKiloanChecked ? `${selectedKiloanSvc} (${kiloanDuration})` : `Satuan (${cartSatuan.length} Item)`;
     const serviceDetailLabel = rincianArr.join(' + ');
 
-    const payload = {
+    // SKEMA FLEKSIBEL TERHADAP SUPABASE NAMA KOLOM PHONE
+    const basePayload: any = {
       outlet_id: selectedOutlet,
       customer_name: customerName || 'Pelanggan Online',
-      phone_number: normPhone,
+      phone: normPhone,
+      customer_phone: normPhone,
       service_type: primaryServiceLabel,
       service_detail: serviceDetailLabel,
       estimated_weight: isKiloanChecked ? Number(kiloanEstKg) || 3 : 0,
@@ -362,7 +364,13 @@ export default function CustomerDashboardPage() {
       status: 'Menunggu Penjemputan'
     };
 
-    const { error } = await supabase.from('pickup_orders').insert([payload]);
+    let { error } = await supabase.from('pickup_orders').insert([basePayload]);
+
+    if (error && error.message.includes('column')) {
+      delete basePayload.phone;
+      const secondTry = await supabase.from('pickup_orders').insert([basePayload]);
+      error = secondTry.error;
+    }
 
     if (!error) {
       alert('✅ PESANAN BERHASIL TERKIRIM KE KASIR POS!\nDriver/Kasir kami akan segera memproses penjemputan.');
