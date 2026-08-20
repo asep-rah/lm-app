@@ -14,7 +14,7 @@ export default function AdminPickupsPage() {
   const [outlets, setOutlets] = useState<any[]>([]);
   const [selectedOutlet, setSelectedOutlet] = useState('ALL');
   const [loading, setLoading] = useState(true);
-
+  const [currentUserRole, setCurrentUserRole] = useState<string>('kasir');
   const fetchPickups = async () => {
     setLoading(true);
     const { data: dbOutlets } = await supabase.from('outlets').select('*');
@@ -102,7 +102,7 @@ export default function AdminPickupsPage() {
             }`}
           >
             {currentUserRole !== 'kasir' && <option value="ALL">📍 Semua Outlet</option>}
-            {outletsList.map((o: any) => (
+            {outlets.map((o: any) => (
               <option key={o.id} value={o.id}>
                 📍 {o.name}
               </option>
