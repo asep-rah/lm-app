@@ -350,7 +350,9 @@ export default function CustomerDashboardPage() {
     const notesCombined = `Alamat: ${customerAddress} | Detail: ${detailLines.join(' | ')}${notes ? ` | Catatan: ${notes}` : ''}`;
     const autoOrderNo = `ORD-${Date.now().toString().slice(-8)}`;
 
-    // STRATEGI LENGKAP: MEMBERIKAN SETIAP KEMUNGKINAN NAMA KOLOM UTAMA
+    const nowIso = new Date().toISOString();
+    const todayDateStr = nowIso.split('T')[0];
+
     const basePayload: any = {
       order_number: autoOrderNo,
       pickup_number: autoOrderNo,
@@ -366,12 +368,14 @@ export default function CustomerDashboardPage() {
       estimated_price: grandTotalEstimate,
       total_price: grandTotalEstimate,
       notes: notesCombined,
+      pickup_date: todayDateStr,
+      pickup_time: nowIso,
+      created_at: nowIso,
       status: 'Menunggu Penjemputan'
     };
 
     let { error } = await supabase.from('pickup_orders').insert([basePayload]);
 
-    // HAPUS SECARA BERTAHALAP JIKA ADA PROPERTI KHUSUS YANG DITOLAK
     if (error && error.message.includes('column')) {
       delete basePayload.service_detail;
       delete basePayload.estimated_price;
@@ -518,7 +522,7 @@ export default function CustomerDashboardPage() {
 
                 {activeOrders.length === 0 && (
                   <div className="bg-white border border-slate-200/80 p-8 rounded-3xl text-center text-xs text-slate-400 shadow-sm">
-                    Belum ada cucian yang sedang diproses.
+                    Belum ada cucian yang sedang dipproses.
                   </div>
                 )}
               </div>
