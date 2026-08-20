@@ -349,26 +349,36 @@ export default function CustomerDashboardPage() {
     const mainServiceLabel = isKiloanChecked ? `${selectedKiloanSvc} (${kiloanDuration})` : `Satuan (${cartSatuan.length} Item)`;
     const notesCombined = `Alamat: ${customerAddress} | Detail: ${detailLines.join(' | ')}${notes ? ` | Catatan: ${notes}` : ''}`;
 
-    // COBA KIRIM PAYLOAD DENGAN FALLBACK KOLOM TERKECIL
-    const payloadOptions = [
-      { outlet_id: selectedOutlet, customer_name: customerName || 'Pelanggan Online', phone_number: normPhone, service_type: mainServiceLabel, estimated_weight: isKiloanChecked ? Number(kiloanEstKg) || 3 : 0, delivery_fee: finalOngkir, notes: notesCombined, status: 'Menunggu Penjemputan' },
-      { outlet_id: selectedOutlet, customer_name: customerName || 'Pelanggan Online', customer_phone: normPhone, service_type: mainServiceLabel, estimated_weight: isKiloanChecked ? Number(kiloanEstKg) || 3 : 0, delivery_fee: finalOngkir, notes: notesCombined, status: 'Menunggu Penjemputan' },
-      { outlet_id: selectedOutlet, customer_name: customerName || 'Pelanggan Online', phone: normPhone, service_type: mainServiceLabel, notes: notesCombined, status: 'Menunggu Penjemputan' }
-    ];
-
-    let success = false;
-    let lastErr = '';
-
-    for (const p of payloadOptions) {
-      const { error } = await supabase.from('pickup_orders').insert([p]);
-      if (!error) {
-        success = true;
-        break;
+    // DETEKSI OTOMATIS STRUKTUR KOLOM DARI SUPABASE SENSITIF DENGAN FETCH SAMPLE 1 BARIS
+    let targetPhoneColumn = 'phone_number';
+    try {
+      const { data: sampleData } = await supabase.from('pickup_orders').select('*').limit(1);
+      if (sampleData && sampleData.length > 0) {
+        const sampleKeys = Object.keys(sampleData[0]);
+        if (sampleKeys.includes('phone_number')) targetPhoneColumn = 'phone_number';
+        else if (sampleKeys.includes('customer_phone')) targetPhoneColumn = 'customer_phone';
+        else if (sampleKeys.includes('phone')) targetPhoneColumn = 'phone';
       }
-      lastErr = error.message;
-    }
+    } catch (err) {}
 
-    if (success) {
+    const payload: any = {
+      outlet_id: selectedOutlet,
+      customer_name: customerName || 'Pelanggan Online',
+      service_type: mainServiceLabel,
+      notes: notesCombined,
+      status: 'Menunggu Penjemputan'
+    };
+    
+    // ATUR KHUSUS NOMOR TELEPON
+    payload[targetPhoneColumn] = normPhone;
+
+    // JIKA ADA KOLOM TAMBAHAN BERIKAN ESTIMASI
+    payload.estimated_weight = isKiloanChecked ? Number(kiloanEstKg) || 3 : 0;
+    payload.delivery_fee = finalOngkir;
+
+    const { error } = await supabase.from('pickup_orders').insert([payload]);
+
+    if (!error) {
       alert('✅ PESANAN BERHASIL TERKIRIM KE KASIR POS!\nDriver/Kasir kami akan segera memproses penjemputan.');
       setCartSatuan([]);
       setNotes('');
@@ -376,7 +386,7 @@ export default function CustomerDashboardPage() {
       setActiveTab('home');
       fetchCustomerProfile(normPhone);
     } else {
-      alert('❌ Gagal membuat pesanan: ' + lastErr);
+      alert('❌ Gagal membuat pesanan: ' + error.message);
     }
     setIsSubmitting(false);
   };
