@@ -353,9 +353,8 @@ export default function CustomerDashboardPage() {
     const nowIso = new Date().toISOString();
     const todayDateStr = nowIso.split('T')[0];
 
-    // MENGUJI COBA VARIASI PAYLOAD SECARA BERURUTAN HINGGA TERIMA SUPABASE
+    // SINKRONISASI STATUS "Baru Masuk" AGAR TERBACA PORTAL ADMIN & DRIVER
     const candidatePayloads = [
-      // VARIASI 1: Paling umum dengan customer_phone
       {
         order_number: autoOrderNo,
         outlet_id: selectedOutlet,
@@ -366,9 +365,8 @@ export default function CustomerDashboardPage() {
         delivery_fee: finalOngkir,
         notes: notesCombined,
         pickup_date: todayDateStr,
-        status: 'Menunggu Penjemputan'
+        status: 'Baru Masuk'
       },
-      // VARIASI 2: Menggunakan phone_number
       {
         order_number: autoOrderNo,
         outlet_id: selectedOutlet,
@@ -379,9 +377,8 @@ export default function CustomerDashboardPage() {
         delivery_fee: finalOngkir,
         notes: notesCombined,
         pickup_date: todayDateStr,
-        status: 'Menunggu Penjemputan'
+        status: 'Baru Masuk'
       },
-      // VARIASI 3: Menggunakan phone
       {
         order_number: autoOrderNo,
         outlet_id: selectedOutlet,
@@ -392,16 +389,15 @@ export default function CustomerDashboardPage() {
         delivery_fee: finalOngkir,
         notes: notesCombined,
         pickup_date: todayDateStr,
-        status: 'Menunggu Penjemputan'
+        status: 'Baru Masuk'
       },
-      // VARIASI 4: Versi paling ringkas dasar
       {
         outlet_id: selectedOutlet,
         customer_name: customerName || 'Pelanggan Online',
         customer_phone: normPhone,
         service_type: mainServiceLabel,
         notes: notesCombined,
-        status: 'Menunggu Penjemputan'
+        status: 'Baru Masuk'
       }
     ];
 
