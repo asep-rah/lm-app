@@ -84,7 +84,11 @@ export default function CustomerDashboardPage() {
 
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-
+// STATE INFORMASI DETAIL CUCIAN (1 - 4)
+const [bagCount, setBagCount] = useState('1 Kantong');
+const [washProcess, setWashProcess] = useState('Gabung Semua');
+const [hasFading, setHasFading] = useState('Tidak');
+const [hasValuables, setHasValuables] = useState('Tidak');
   const [activeOrders, setActiveOrders] = useState<any[]>([]);
   const [completedOrders, setCompletedOrders] = useState<any[]>([]);
   const [depositLogs, setDepositLogs] = useState<any[]>([]);
@@ -353,67 +357,28 @@ export default function CustomerDashboardPage() {
     const nowIso = new Date().toISOString();
     const todayDateStr = nowIso.split('T')[0];
 
-    // SINKRONISASI STATUS "Baru Masuk" AGAR TERBACA PORTAL ADMIN & DRIVER
-    const candidatePayloads = [
-      {
-        order_number: autoOrderNo,
-        outlet_id: selectedOutlet,
-        customer_name: customerName || 'Pelanggan Online',
-        customer_phone: normPhone,
-        service_type: mainServiceLabel,
-        estimated_weight: isKiloanChecked ? Number(kiloanEstKg) || 3 : 0,
-        delivery_fee: finalOngkir,
-        notes: notesCombined,
-        pickup_date: todayDateStr,
-        status: 'Baru Masuk'
-      },
-      {
-        order_number: autoOrderNo,
-        outlet_id: selectedOutlet,
-        customer_name: customerName || 'Pelanggan Online',
-        phone_number: normPhone,
-        service_type: mainServiceLabel,
-        estimated_weight: isKiloanChecked ? Number(kiloanEstKg) || 3 : 0,
-        delivery_fee: finalOngkir,
-        notes: notesCombined,
-        pickup_date: todayDateStr,
-        status: 'Baru Masuk'
-      },
-      {
-        order_number: autoOrderNo,
-        outlet_id: selectedOutlet,
-        customer_name: customerName || 'Pelanggan Online',
-        phone: normPhone,
-        service_type: mainServiceLabel,
-        estimated_weight: isKiloanChecked ? Number(kiloanEstKg) || 3 : 0,
-        delivery_fee: finalOngkir,
-        notes: notesCombined,
-        pickup_date: todayDateStr,
-        status: 'Baru Masuk'
-      },
-      {
-        outlet_id: selectedOutlet,
-        customer_name: customerName || 'Pelanggan Online',
-        customer_phone: normPhone,
-        service_type: mainServiceLabel,
-        notes: notesCombined,
-        status: 'Baru Masuk'
-      }
-    ];
+    // GABUNGKAN 4 INFORMASI DETAIL CUCIAN KE DALAM CATATAN
+    const detailInfo = `[INFO CUCIAN] Kantong: ${bagCount} | Cuci: ${washProcess} | Luntur: ${hasFading} | Brg Berharga: ${hasValuables}`;
+    const finalNotes = notesCombined ? `${detailInfo} | ${notesCombined}` : detailInfo;
 
-    let isSuccess = false;
-    let finalErrorMessage = '';
+    const payload = {
+      order_number: autoOrderNo,
+      outlet_id: selectedOutlet || null,
+      customer_name: customerName || 'Pelanggan Online',
+      customer_phone: normPhone,
+      phone_number: normPhone,
+      service_type: mainServiceLabel,
+      estimated_weight: isKiloanChecked ? Number(kiloanEstKg) || 3 : 0,
+      delivery_fee: Number(finalOngkir) || 0,
+      notes: finalNotes,
+      pickup_date: todayDateStr,
+      status: 'Baru Masuk',
+      created_at: nowIso
+    };
 
-    for (const payload of candidatePayloads) {
-      const { error } = await supabase.from('pickup_orders').insert([payload]);
-      if (!error) {
-        isSuccess = true;
-        break;
-      }
-      finalErrorMessage = error.message;
-    }
+    const { error } = await supabase.from('pickup_orders').insert([payload]);
 
-    if (isSuccess) {
+    if (!error) {
       alert('✅ PESANAN BERHASIL TERKIRIM KE KASIR POS!\nDriver/Kasir kami akan segera memproses penjemputan.');
       setCartSatuan([]);
       setNotes('');
@@ -421,7 +386,7 @@ export default function CustomerDashboardPage() {
       setActiveTab('home');
       fetchCustomerProfile(normPhone);
     } else {
-      alert('❌ Gagal membuat pesanan: ' + finalErrorMessage);
+      alert('❌ Gagal membuat pesanan: ' + error.message);
     }
     setIsSubmitting(false);
   };
@@ -789,6 +754,84 @@ export default function CustomerDashboardPage() {
                     </div>
                   )}
                 </div>
+                {/* INFORMASI DETAIL CUCIAN (1 - 4) */}
+          <div className="bg-slate-800/80 border border-slate-700/80 p-4 rounded-2xl space-y-3.5 my-4">
+            <h3 className="text-xs font-black tracking-wider uppercase text-cyan-400 flex items-center gap-2">
+              📋 INFORMASI DETAIL CUCIAN
+            </h3>
+
+            <div className="space-y-3 text-xs text-slate-200">
+              {/* 1. Jumlah Kantong */}
+              <div className="flex justify-between items-center">
+                <span className="font-semibold text-slate-300">1. Jumlah Kantong:</span>
+                <select
+                  value={bagCount}
+                  onChange={(e) => setBagCount(e.target.value)}
+                  className="bg-slate-900 border border-slate-700 text-cyan-400 font-extrabold rounded-xl px-3 py-1.5 focus:outline-none"
+                >
+                  <option value="1 Kantong">1 Kantong</option>
+                  <option value="2 Kantong">2 Kantong</option>
+                  <option value="3 Kantong">3 Kantong</option>
+                  <option value="4+ Kantong">4+ Kantong</option>
+                </select>
+              </div>
+
+              {/* 2. Proses Cuci */}
+              <div className="flex justify-between items-center">
+                <span className="font-semibold text-slate-300">2. Proses Cuci:</span>
+                <select
+                  value={washProcess}
+                  onChange={(e) => setWashProcess(e.target.value)}
+                  className="bg-slate-900 border border-slate-700 text-cyan-400 font-extrabold rounded-xl px-3 py-1.5 focus:outline-none"
+                >
+                  <option value="Gabung Semua">Gabung Semua</option>
+                  <option value="Pisah Warna Khusus">Pisah Warna Khusus</option>
+                </select>
+              </div>
+
+              {/* 3. Ada Pakaian Luntur? */}
+              <div className="flex justify-between items-center">
+                <span className="font-semibold text-slate-300">3. Ada Pakaian Luntur?</span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setHasFading('Tidak')}
+                    className={`px-3 py-1 rounded-xl font-extrabold text-xs transition ${hasFading === 'Tidak' ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
+                  >
+                    Tidak
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setHasFading('Ya')}
+                    className={`px-3 py-1 rounded-xl font-extrabold text-xs transition ${hasFading === 'Ya' ? 'bg-rose-500 text-white shadow-md shadow-rose-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
+                  >
+                    Ya
+                  </button>
+                </div>
+              </div>
+
+              {/* 4. Ada Barang Berharga? */}
+              <div className="flex justify-between items-center">
+                <span className="font-semibold text-slate-300">4. Ada Barang Berharga?</span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setHasValuables('Tidak')}
+                    className={`px-3 py-1 rounded-xl font-extrabold text-xs transition ${hasValuables === 'Tidak' ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
+                  >
+                    Tidak
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setHasValuables('Ya')}
+                    className={`px-3 py-1 rounded-xl font-extrabold text-xs transition ${hasValuables === 'Ya' ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
+                  >
+                    Ya
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
 
                 <input
                   type="text"
