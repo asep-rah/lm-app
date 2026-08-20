@@ -12,21 +12,40 @@ const supabase = createClient(
 export default function AdminPickupsPage() {
   const [pickups, setPickups] = useState<any[]>([]);
   const [outlets, setOutlets] = useState<any[]>([]);
-  const [selectedOutlet, setSelectedOutlet] = useState('ALL');
+  const [selectedOutlet, setSelectedOutlet] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [currentUserRole, setCurrentUserRole] = useState<string>('kasir');
+
   const fetchPickups = async () => {
     setLoading(true);
+
+    // 1. Fetch data outlet
     const { data: dbOutlets } = await supabase.from('outlets').select('*');
     if (dbOutlets) setOutlets(dbOutlets);
 
+    // 2. Tentukan outlet ID aktif (Ambil dari localStorage/Session jika ada)
+    const savedOutlet = localStorage.getItem('user_outlet_id') || localStorage.getItem('outlet_id');
+    const savedRole = localStorage.getItem('user_role') || 'kasir';
+    
+    setCurrentUserRole(savedRole);
+
+    let activeOutletId = selectedOutlet;
+    if (!activeOutletId && savedOutlet && savedRole === 'kasir') {
+      activeOutletId = savedOutlet;
+      setSelectedOutlet(savedOutlet);
+    }
+
+    // 3. Query data pickup order
     let query = supabase
       .from('pickup_orders')
       .select('*')
       .order('created_at', { ascending: false });
 
-    if (selectedOutlet !== 'ALL') {
-      query = query.eq('outlet_id', selectedOutlet);
+    // 🔒 FILTER STRICT: Jika Kasir ATAU selectedOutlet terisi & bukan 'ALL'
+    if (savedRole === 'kasir' && activeOutletId && activeOutletId !== 'ALL') {
+      query = query.eq('outlet_id', activeOutletId);
+    } else if (activeOutletId && activeOutletId !== 'ALL') {
+      query = query.eq('outlet_id', activeOutletId);
     }
 
     const { data, error } = await query;
@@ -50,7 +69,6 @@ export default function AdminPickupsPage() {
       supabase.removeChannel(channel);
     };
   }, [selectedOutlet]);
-
   const handleUpdateStatus = async (id: string, newStatus: string) => {
     const { error } = await supabase
       .from('pickup_orders')
