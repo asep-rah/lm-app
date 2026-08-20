@@ -192,8 +192,12 @@ export default function CustomerDashboardPage() {
       const { data: pickupOrders } = await supabase
         .from('pickup_orders')
         .select('*')
-        .or(`phone.eq.${norm},customer_phone.eq.${norm}`)
         .order('created_at', { ascending: false });
+
+      const filteredPickups = (pickupOrders || []).filter((o: any) => {
+        const p = o.phone_number || o.customer_phone || o.phone || '';
+        return cleanPhone(p) === norm;
+      });
 
       const { data: posTransactions } = await supabase
         .from('transactions')
@@ -201,15 +205,13 @@ export default function CustomerDashboardPage() {
         .eq('customer_phone', norm)
         .order('created_at', { ascending: false });
 
-      if (pickupOrders) {
-        setActiveOrders(pickupOrders.filter(o => o.status !== 'Selesai' && o.status !== 'Batal'));
-      }
+      setActiveOrders(filteredPickups.filter((o: any) => o.status !== 'Selesai' && o.status !== 'Batal'));
 
       let historyArr: any[] = [];
-      pickupOrders?.filter(o => o.status === 'Selesai' || o.status === 'Batal').forEach(o => {
-        historyArr.push({ id: o.id, type: 'Online Order', title: o.service_type, detail: o.service_detail, price: o.delivery_fee, date: o.created_at, status: o.status });
+      filteredPickups.filter((o: any) => o.status === 'Selesai' || o.status === 'Batal').forEach((o: any) => {
+        historyArr.push({ id: o.id, type: 'Online Order', title: o.service_type, detail: o.notes || '', price: o.delivery_fee || 0, date: o.created_at, status: o.status });
       });
-      posTransactions?.forEach(t => {
+      posTransactions?.forEach((t: any) => {
         historyArr.push({ id: t.id, type: 'Outlet POS', title: `${t.service_type} (${t.receipt_number})`, detail: t.notes, price: t.amount, date: t.created_at, status: t.status });
       });
 
@@ -333,46 +335,40 @@ export default function CustomerDashboardPage() {
     setIsSubmitting(true);
     const normPhone = cleanPhone(customerPhone);
 
-    const rincianArr: string[] = [];
-    if (customerAddress) rincianArr.push(`Alamat: ${customerAddress}`);
-    if (claimedPromo) rincianArr.push(`Promo: ${claimedPromo.title}`);
-
+    const detailLines: string[] = [];
     if (isKiloanChecked) {
-      rincianArr.push(`${selectedKiloanSvc} (${kiloanDuration}, Est. ${kiloanEstKg} Kg)`);
+      detailLines.push(`Kiloan: ${selectedKiloanSvc} (${kiloanDuration}, ${kiloanEstKg}Kg)`);
     }
     if (isSatuanChecked && cartSatuan.length > 0) {
-      const satuanItemsStr = cartSatuan.map(i => `${i.name} x${i.qty} [${i.duration}]`).join(', ');
-      rincianArr.push(`Satuan: [${satuanItemsStr}]`);
+      const items = cartSatuan.map(i => `${i.name} x${i.qty}`).join(', ');
+      detailLines.push(`Satuan: ${items}`);
+    }
+    if (claimedPromo) detailLines.push(`Promo: ${claimedPromo.title}`);
+    detailLines.push(`Est. Tagihan: Rp ${grandTotalEstimate.toLocaleString('id-ID')}`);
+
+    const mainServiceLabel = isKiloanChecked ? `${selectedKiloanSvc} (${kiloanDuration})` : `Satuan (${cartSatuan.length} Item)`;
+    const notesCombined = `Alamat: ${customerAddress} | Detail: ${detailLines.join(' | ')}${notes ? ` | Catatan: ${notes}` : ''}`;
+
+    // COBA KIRIM PAYLOAD DENGAN FALLBACK KOLOM TERKECIL
+    const payloadOptions = [
+      { outlet_id: selectedOutlet, customer_name: customerName || 'Pelanggan Online', phone_number: normPhone, service_type: mainServiceLabel, estimated_weight: isKiloanChecked ? Number(kiloanEstKg) || 3 : 0, delivery_fee: finalOngkir, notes: notesCombined, status: 'Menunggu Penjemputan' },
+      { outlet_id: selectedOutlet, customer_name: customerName || 'Pelanggan Online', customer_phone: normPhone, service_type: mainServiceLabel, estimated_weight: isKiloanChecked ? Number(kiloanEstKg) || 3 : 0, delivery_fee: finalOngkir, notes: notesCombined, status: 'Menunggu Penjemputan' },
+      { outlet_id: selectedOutlet, customer_name: customerName || 'Pelanggan Online', phone: normPhone, service_type: mainServiceLabel, notes: notesCombined, status: 'Menunggu Penjemputan' }
+    ];
+
+    let success = false;
+    let lastErr = '';
+
+    for (const p of payloadOptions) {
+      const { error } = await supabase.from('pickup_orders').insert([p]);
+      if (!error) {
+        success = true;
+        break;
+      }
+      lastErr = error.message;
     }
 
-    rincianArr.push(`Est. Tagihan: Rp ${grandTotalEstimate.toLocaleString('id-ID')}`);
-
-    const primaryServiceLabel = isKiloanChecked ? `${selectedKiloanSvc} (${kiloanDuration})` : `Satuan (${cartSatuan.length} Item)`;
-    const serviceDetailLabel = rincianArr.join(' + ');
-
-    // SKEMA FLEKSIBEL TERHADAP SUPABASE NAMA KOLOM PHONE
-    const basePayload: any = {
-      outlet_id: selectedOutlet,
-      customer_name: customerName || 'Pelanggan Online',
-      phone: normPhone,
-      customer_phone: normPhone,
-      service_type: primaryServiceLabel,
-      service_detail: serviceDetailLabel,
-      estimated_weight: isKiloanChecked ? Number(kiloanEstKg) || 3 : 0,
-      delivery_fee: finalOngkir,
-      notes: notes ? `Catatan: ${notes} | Alamat: ${customerAddress}` : `Alamat: ${customerAddress}`,
-      status: 'Menunggu Penjemputan'
-    };
-
-    let { error } = await supabase.from('pickup_orders').insert([basePayload]);
-
-    if (error && error.message.includes('column')) {
-      delete basePayload.phone;
-      const secondTry = await supabase.from('pickup_orders').insert([basePayload]);
-      error = secondTry.error;
-    }
-
-    if (!error) {
+    if (success) {
       alert('✅ PESANAN BERHASIL TERKIRIM KE KASIR POS!\nDriver/Kasir kami akan segera memproses penjemputan.');
       setCartSatuan([]);
       setNotes('');
@@ -380,7 +376,7 @@ export default function CustomerDashboardPage() {
       setActiveTab('home');
       fetchCustomerProfile(normPhone);
     } else {
-      alert('❌ Gagal membuat pesanan: ' + error.message);
+      alert('❌ Gagal membuat pesanan: ' + lastErr);
     }
     setIsSubmitting(false);
   };
@@ -494,7 +490,7 @@ export default function CustomerDashboardPage() {
                     <div className="flex justify-between items-start">
                       <div>
                         <h4 className="font-extrabold text-slate-900 text-sm">{order.service_type}</h4>
-                        <p className="text-[10px] text-slate-500 font-medium mt-0.5">{order.service_detail}</p>
+                        <p className="text-[10px] text-slate-500 font-medium mt-0.5">{order.notes || '-'}</p>
                       </div>
                       <span className="bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-extrabold px-3 py-1 rounded-full">
                         {order.status}
