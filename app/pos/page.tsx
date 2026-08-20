@@ -431,19 +431,25 @@ export default function POSPage() {
 
   useEffect(() => {
     if (!selectedOutlet) return;
+
     const subscription = supabase
-      .channel('realtime_pickup_orders')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'pickup_orders' }, (payload) => {
+      .channel('pos_realtime_sync')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'pickup_orders' }, (payload) => {
         try {
           const audio = new Audio('/notification.mp3');
           audio.play().catch(() => {});
         } catch (e) {}
-        alert(`🔔 ORDERAN ONLINE BARU MASUK!\nService: ${payload.new.service_type || 'Penjemputan Customer'}`);
+        alert(`🔔 ORDERAN ONLINE BARU MASUK!\nService: ${(payload.new as any)?.service_type || 'Penjemputan Customer'}`);
+        refreshData();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
         refreshData();
       })
       .subscribe();
 
-    return () => { supabase.removeChannel(subscription); };
+    return () => {
+      supabase.removeChannel(subscription);
+    };
   }, [selectedOutlet]);
 
   useEffect(() => {
@@ -522,7 +528,6 @@ export default function POSPage() {
   .neq('status', 'Batal');
   
 setIncomingPickupsCount(incomingPkps?.length || 0);
-if (incomingPkps) setOnlinePickupsList(incomingPkps);
 
     const { data: txData } = await supabase.from('transactions').select('amount, order_type, created_at').eq('outlet_id', selectedOutlet);
     const { data: memLogsAll } = await supabase.from('membership_logs').select('price, order_type, created_at').eq('outlet_id', selectedOutlet);
