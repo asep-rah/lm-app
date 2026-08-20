@@ -814,6 +814,16 @@ useEffect(() => {
         outletPhone: curOutletPhone
       });
 
+      // OTOMATIS HAPUS/UPDATE ANTREAN KANBAN AGAR HILANG DARI PORTAL POS
+    const params = new URLSearchParams(window.location.search);
+    const pickupId = params.get('pickup_id');
+
+    if (pickupId) {
+      await supabase
+        .from('pickup_orders')
+        .update({ status: 'Selesai' })
+        .eq('id', pickupId);
+    }
       setAmount(''); setCustomerName(''); setCustomerPhone(''); setWeightKg(''); setPcsCount(''); setNotes(''); setDiscountValue(''); setCartItems([]); setDeliveryFee(orderType === 'Online' ? '20000' : '');
       refreshData();
     } else alert('❌ Gagal: ' + error?.message);
@@ -943,27 +953,66 @@ useEffect(() => {
   };
 
   const renderNextStepButton = (order: any) => {
-    const svcDef = services.find((s) => (s.name || '').trim().toLowerCase() === (order.service_type || '').trim().toLowerCase());
-    const activeCommissions = outletOverrides?.[selectedOutlet]?.[svcDef?.id]?.commissions || svcDef?.commissions || {};
-    const hasCuci = Number(activeCommissions.cuci) > 0; const hasKering = Number(activeCommissions.kering) > 0; const hasSetrika = Number(activeCommissions.setrika) > 0;
+    const currentStatus = order.status || 'Diterima';
 
-    if (order.status === 'Diterima') return <button onClick={() => handleUpdateStatus(order, 'Sortir')} className="w-full bg-purple-600 text-xs font-bold py-3 rounded-lg text-white shadow">🔍 Mulai Sortir</button>;
-    if (order.status === 'Sortir') {
-      if (hasCuci) return <button onClick={() => handleUpdateStatus(order, 'Mencuci')} className="w-full bg-cyan-500 text-xs font-bold py-3 rounded-lg text-white shadow">🧼 Mulai Cuci</button>;
-      if (hasSetrika) return <button onClick={() => handleUpdateStatus(order, 'Setrika')} className="w-full bg-orange-500 text-xs font-bold py-3 rounded-lg text-white shadow">👔 Setrika</button>;
-      return <button onClick={() => { setSelectedOrderForRack(order); setShowRackModal(true); }} className="w-full bg-blue-600 text-xs font-bold py-3 rounded-lg text-white shadow">🗄️ Masuk Rak</button>;
+    if (currentStatus === 'Diterima' || currentStatus === 'Baru') {
+      return (
+        <button
+          onClick={() => handleUpdateStatus(order, 'Sortir')}
+          className="w-full bg-purple-600 hover:bg-purple-700 text-white text-xs font-black py-2.5 rounded-xl shadow-md transition"
+        >
+          🔍 Mulai Sortir
+        </button>
+      );
     }
-    if (order.status === 'Mencuci') {
-      if (hasKering) return <button onClick={() => handleUpdateStatus(order, 'Pengeringan')} className="w-full bg-amber-500 text-xs font-bold py-3 rounded-lg text-white shadow">🌀 Keringkan</button>;
-      if (hasSetrika) return <button onClick={() => handleUpdateStatus(order, 'Setrika')} className="w-full bg-orange-500 text-xs font-bold py-3 rounded-lg text-white shadow">👔 Setrika</button>;
-      return <button onClick={() => handleUpdateStatus(order, 'Packing')} className="w-full bg-emerald-500 text-xs font-bold py-3 rounded-lg text-white shadow">📦 Packing</button>;
+
+    if (currentStatus === 'Sortir') {
+      return (
+        <button
+          onClick={() => handleUpdateStatus(order, 'Mencuci')}
+          className="w-full bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-black py-2.5 rounded-xl shadow-md transition"
+        >
+          🧼 Mulai Cuci
+        </button>
+      );
     }
-    if (order.status === 'Pengeringan') {
-      if (hasSetrika) return <button onClick={() => handleUpdateStatus(order, 'Setrika')} className="w-full bg-orange-500 text-xs font-bold py-3 rounded-lg text-white shadow">👔 Setrika</button>;
-      return <button onClick={() => handleUpdateStatus(order, 'Packing')} className="w-full bg-emerald-500 text-xs font-bold py-3 rounded-lg text-white shadow">📦 Packing</button>;
+
+    if (currentStatus === 'Mencuci') {
+      return (
+        <button
+          onClick={() => handleUpdateStatus(order, 'Pengeringan')}
+          className="w-full bg-amber-500 hover:bg-amber-600 text-white text-xs font-black py-2.5 rounded-xl shadow-md transition"
+        >
+          🔥 Mulai Pengeringan
+        </button>
+      );
     }
-    if (order.status === 'Setrika') return <button onClick={() => handleUpdateStatus(order, 'Packing')} className="w-full bg-emerald-500 text-xs font-bold py-3 rounded-lg text-white shadow">📦 Packing</button>;
-    if (order.status === 'Packing') return <button onClick={() => { setSelectedOrderForRack(order); setShowRackModal(true); }} className="w-full bg-blue-600 text-xs font-bold py-3 rounded-lg text-white shadow">🗄️ Simpan ke Rak</button>;
+
+    if (currentStatus === 'Pengeringan') {
+      return (
+        <button
+          onClick={() => handleUpdateStatus(order, 'Setrika')}
+          className="w-full bg-orange-500 hover:bg-orange-600 text-white text-xs font-black py-2.5 rounded-xl shadow-md transition"
+        >
+          👔 Mulai Setrika
+        </button>
+      );
+    }
+
+    if (currentStatus === 'Setrika') {
+      return (
+        <button
+          onClick={() => {
+            setSelectedOrderForRack(order);
+            setShowRackModal(true);
+          }}
+          className="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black py-2.5 rounded-xl shadow-md transition"
+        >
+          📦 Mulai Packing & Simpan di Rak
+        </button>
+      );
+    }
+
     return null;
   };
 

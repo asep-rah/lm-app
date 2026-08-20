@@ -93,13 +93,16 @@ export default function AdminPickupsPage() {
         </div>
 
         <div className="flex items-center gap-3 w-full md:w-auto">
-          <select
+        <select
             value={selectedOutlet}
             onChange={(e) => setSelectedOutlet(e.target.value)}
-            className="bg-slate-800 border border-slate-700 rounded-2xl px-4 py-2.5 text-xs font-bold text-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 w-full md:w-auto shadow-inner"
+            disabled={currentUserRole === 'kasir'}
+            className={`bg-slate-800 border border-slate-700 rounded-2xl px-4 py-2.5 text-xs font-bold text-slate-200 focus:outline-none ${
+              currentUserRole === 'kasir' ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'
+            }`}
           >
-            <option value="ALL">📍 Semua Outlet</option>
-            {outlets.map((o) => (
+            {currentUserRole !== 'kasir' && <option value="ALL">📍 Semua Outlet</option>}
+            {outletsList.map((o: any) => (
               <option key={o.id} value={o.id}>
                 📍 {o.name}
               </option>
