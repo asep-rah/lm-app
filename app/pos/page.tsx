@@ -515,12 +515,14 @@ export default function POSPage() {
     setActiveOrders(orders?.filter((o) => o.status !== 'Siap Diambil') || []); setPickupOrders(orders?.filter((o) => o.status === 'Siap Diambil') || []);
 
     const { data: incomingPkps } = await supabase
-      .from('pickup_orders')
-      .select('id')
-      .eq('outlet_id', selectedOutlet)
-      .neq('status', 'Selesai')
-      .neq('status', 'Batal');
-    setIncomingPickupsCount(incomingPkps?.length || 0);
+  .from('pickup_orders')
+  .select('*')
+  .eq('outlet_id', selectedOutlet)
+  .neq('status', 'Selesai')
+  .neq('status', 'Batal');
+  
+setIncomingPickupsCount(incomingPkps?.length || 0);
+if (incomingPkps) setOnlinePickupsList(incomingPkps);
 
     const { data: txData } = await supabase.from('transactions').select('amount, order_type, created_at').eq('outlet_id', selectedOutlet);
     const { data: memLogsAll } = await supabase.from('membership_logs').select('price, order_type, created_at').eq('outlet_id', selectedOutlet);

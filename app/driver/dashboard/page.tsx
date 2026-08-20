@@ -28,15 +28,28 @@ export default function DriverDashboard() {
   };
 
   useEffect(() => {
-    // Simulasi Login Nama Driver (Bisa disesuaikan nanti)
+    // Simulasi Login Nama Driver
     const driverStr = localStorage.getItem('laundry_user');
     if (driverStr) {
-      setDriverName(JSON.parse(driverStr).name || 'Driver Internal');
+      try {
+        const parsed = JSON.parse(driverStr);
+        setDriverName(parsed.name || 'Driver Internal');
+      } catch (e) {}
     }
-    
+
     loadDriverTasks();
-    const interval = setInterval(loadDriverTasks, 15000); // Auto-refresh 15 detik
-    return () => clearInterval(interval);
+
+    // Listener Realtime Supabase untuk Driver
+    const driverChannel = supabase
+      .channel('driver_pickup_sync')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'pickup_orders' }, () => {
+        loadDriverTasks();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(driverChannel);
+    };
   }, []);
 
   const handleOpenMaps = (lat: number, lon: number) => {
