@@ -1098,7 +1098,7 @@ const [hasValuables, setHasValuables] = useState('Tidak');
             <div>
               <h3 className="text-base font-extrabold text-slate-900">Informasi Estimasi Tagihan</h3>
               <p className="text-xs text-slate-600 mt-2 leading-relaxed font-medium">
-                Perhitungan angka ini adalah **estimasi sementara**. Tagihan final akan dihitung dan dikonfirmasi ulang oleh kasir outlet setelah pakaian ditimbang dan dicek langsung di lokasi.
+              Perhitungan angka ini adalah <b>estimasi sementara</b>, tagihan final akan dihitung dan dikonfirmasi ulang oleh kasir outlet setelah pakaian ditimbang dan dicek langsung di lokasi.
               </p>
             </div>
             <button

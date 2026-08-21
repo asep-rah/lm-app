@@ -24,7 +24,7 @@ export default function PickupOrderForm() {
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
   
-  const [category, setCategory] = useState<'KILOAN' | 'SATUAN'>('KILOAN');
+  const [category, setCategory] = useState<'KILOAN' | 'SATUAN' | ''>('');
   const [kiloanPackage, setKiloanPackage] = useState('Cuci Komplit (Rp 7.000/kg)');
   const [kiloanPricePerKg, setKiloanPricePerKg] = useState(7000);
   const [estimatedKg, setEstimatedKg] = useState<number>(3);
@@ -64,7 +64,7 @@ export default function PickupOrderForm() {
   // Subtotal dasar
   const subtotalBase = useMemo(() => {
     if (category === 'KILOAN') {
-      return kiloanPricePerKg * estimatedKg;
+        return kiloanPricePerKg * Math.max(estimatedKg, 3);
     } else {
       return selectedSatuanItems.reduce((acc, curr) => acc + (curr.price * curr.qty), 0);
     }

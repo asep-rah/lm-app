@@ -77,12 +77,16 @@ export default function DriverDashboard() {
   const handleAcceptTask = async (orderId: string) => {
     const { error } = await supabase
       .from('pickup_orders')
-      .update({ status: 'Driver Menuju Lokasi' })
+      .update({ 
+        status: 'Driver Menuju Lokasi',
+        driver_id: currentDriverId || null,
+        accepted_at: new Date().toISOString()
+      })
       .eq('id', orderId);
 
     if (!error) {
       alert('🚀 Anda telah menerima tugas ini! Pelanggan dapat memantau lokasi GPS Anda secara live.');
-      loadDriverTasks();
+      loadDriverTasks(); // Reload daftar tugas driver
     } else {
       alert('Gagal mengambil tugas: ' + error.message);
     }
@@ -115,44 +119,59 @@ export default function DriverDashboard() {
     window.open(`https://wa.me/${cleanPhone}?text=${msg}`, '_blank');
   };
 
-  // FITUR 2: UPLOAD FOTO BUKTI PENJEMPUTAN BARANG
-  const handleFileUploadAndFinish = async (e: React.ChangeEvent<HTMLInputElement>, orderId: string) => {
+  // FITUR DUAL FOTO BUKTI: FOTO 1 (LOKASI CUSTOMER) & FOTO 2 (TIBA DI OUTLET)
+  const handleFileUploadAndFinish = async (e: React.ChangeEvent<HTMLInputElement>, orderId: string, currentStatus: string) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!confirm('Apakah foto bukti penjemputan sudah sesuai dan barang dibawa ke Outlet?')) return;
+    const isPickupStep = currentStatus === 'Driver Menuju Lokasi';
+    const confirmMsg = isPickupStep 
+      ? 'Upload foto bukti pengambilan pakaian di lokasi customer?' 
+      : 'Upload foto bukti penyerahan pakaian di outlet?';
+
+    if (!confirm(confirmMsg)) return;
 
     setUploadingId(orderId);
-    const fileName = `pickup-${orderId}-${Date.now()}.jpg`;
+    const photoType = isPickupStep ? 'pickup' : 'outlet';
+    const fileName = `proofs/${photoType}-${orderId}-${Date.now()}.jpg`;
 
-    // Unggah ke Supabase Storage Bucket 'pickup-photos'
-    const { data, error } = await supabase.storage
+    // Upload ke Supabase Storage
+    const { error: uploadError } = await supabase.storage
       .from('pickup-photos')
       .upload(fileName, file);
 
-    let photoPublicUrl = '';
-    if (!error && data) {
-      photoPublicUrl = `https://qlgbjvzabnfqmfnjdkmo.supabase.co/storage/v1/object/public/pickup-photos/${fileName}`;
+    if (uploadError) {
+      alert('Gagal mengunggah foto: ' + uploadError.message);
+      setUploadingId(null);
+      return;
     }
 
-    // Update Status menjadi 'Telah Tiba di Outlet' agar masuk antrean POS
-    const updateData: any = { status: 'Telah Tiba di Outlet' };
-    if (photoPublicUrl) updateData.photo_url = photoPublicUrl;
+    const { data: publicUrlData } = supabase.storage
+      .from('pickup-photos')
+      .getPublicUrl(fileName);
 
-    const { error: dbError } = await supabase
+    const photoUrl = publicUrlData.publicUrl;
+
+    // Update DB sesuai tahapan foto
+    const updateData: any = isPickupStep
+      ? { photo_url: photoUrl, status: 'Barang Dibawa ke Outlet' }
+      : { photo_outlet_url: photoUrl, status: 'Telah Tiba di Outlet' };
+
+    const { error: updateError } = await supabase
       .from('pickup_orders')
       .update(updateData)
       .eq('id', orderId);
 
-    if (!dbError) {
-      alert('✅ Tugas penjemputan selesai! Cucian dan foto bukti berhasil dikirim ke Kasir POS.');
+    setUploadingId(null);
+
+    if (!updateError) {
+      alert(isPickupStep ? '📷 Foto jemput berhasil! Lanjutkan perjalanan ke Outlet.' : '🏪 Foto serah terima outlet berhasil! Tugas Selesai.');
       loadDriverTasks();
     } else {
-      alert('Gagal menyelesaikan tugas: ' + dbError.message);
+      alert('Gagal memperbarui status: ' + updateError.message);
     }
-    setUploadingId(null);
   };
-
+    
   return (
     <div className="min-h-screen bg-slate-100 flex justify-center pb-24 font-sans">
       <div className="bg-slate-50 w-full max-w-md min-h-screen shadow-2xl flex flex-col relative">
