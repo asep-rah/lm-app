@@ -104,21 +104,18 @@ export default function DriverDashboard() {
     }
   };
 
-  const handleOpenMaps = (addressOrCoords: string, notes?: string) => {
-    let targetAddress = addressOrCoords;
+  const handleOpenMaps = (order: any) => {
+    // Ambil alamat dari semua kemungkinan kolom database
+    const targetAddress = order.notes || order.address || order.customer_address || '';
 
-    if ((!targetAddress || targetAddress === 'undefined') && notes) {
-      const match = notes.match(/Alamat:\s*([^|]+)/i);
-      if (match && match[1]) {
-        targetAddress = match[1].trim();
-      }
-    }
-
-    if (!targetAddress || targetAddress === 'undefined' || targetAddress === 'Belum diisi') {
+    if (!targetAddress || targetAddress === 'Belum diisi' || targetAddress.trim() === '') {
       return alert('Alamat lokasi pelanggan belum diatur.');
     }
 
-    const query = encodeURIComponent(targetAddress);
+    // Bersihkan teks "Alamat: " jika ada prefiks tambahan
+    const cleanAddress = targetAddress.replace(/^Alamat:\s*/i, '').trim();
+
+    const query = encodeURIComponent(cleanAddress);
     const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${query}`;
     window.open(mapsUrl, '_blank');
   };
@@ -279,7 +276,7 @@ export default function DriverDashboard() {
                   <>
                     <div className="grid grid-cols-2 gap-2 pt-2 border-t">
                       <button 
-                        onClick={() => handleOpenMaps(p.address || '', p.notes || '')}
+                        onClick={() => handleOpenMaps(p)}
                         className="flex flex-col items-center justify-center bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 font-bold p-3 rounded-xl transition active:scale-95"
                       >
                         <span className="text-xl mb-1">🗺️</span>
