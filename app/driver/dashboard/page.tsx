@@ -88,9 +88,22 @@ export default function DriverDashboard() {
     }
   };
 
-  const handleOpenMaps = (addressOrCoords: string) => {
-    if (!addressOrCoords) return alert('Alamat lokasi pelanggan belum diatur.');
-    const query = encodeURIComponent(addressOrCoords);
+  const handleOpenMaps = (addressOrCoords: string, notes?: string) => {
+    let targetAddress = addressOrCoords;
+
+    // Jika addressOrCoords kosong/undefined, cari teks 'Alamat: ...' dari notes
+    if ((!targetAddress || targetAddress === 'undefined') && notes) {
+      const match = notes.match(/Alamat:\s*([^|]+)/i);
+      if (match && match[1]) {
+        targetAddress = match[1].trim();
+      }
+    }
+
+    if (!targetAddress || targetAddress === 'undefined' || targetAddress === 'Belum diisi') {
+      return alert('Alamat lokasi pelanggan belum diatur.');
+    }
+
+    const query = encodeURIComponent(targetAddress);
     const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${query}`;
     window.open(mapsUrl, '_blank');
   };
@@ -225,7 +238,7 @@ export default function DriverDashboard() {
                   <>
                     <div className="grid grid-cols-2 gap-2 pt-2 border-t">
                       <button 
-                        onClick={() => handleOpenMaps(p.notes || '')}
+                        onClick={() => handleOpenMaps(p.address || '', p.notes || '')}
                         className="flex flex-col items-center justify-center bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 font-bold p-3 rounded-xl transition active:scale-95"
                       >
                         <span className="text-xl mb-1">🗺️</span>
