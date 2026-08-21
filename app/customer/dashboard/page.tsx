@@ -65,7 +65,7 @@ export default function CustomerDashboardPage() {
   const [isEditingAddress, setIsEditingAddress] = useState(false);
   const [userCoords, setUserCoords] = useState<{ lat: number; lon: number } | null>(null);
 
-  const [isKiloanChecked, setIsKiloanChecked] = useState(true);
+  const [isKiloanChecked, setIsKiloanChecked] = useState(false);
   const [selectedKiloanSvc, setSelectedKiloanSvc] = useState('');
   const [kiloanEstKg, setKiloanEstKg] = useState('3');
   const [kiloanDuration, setKiloanDuration] = useState('Reguler (3 Hari)');
@@ -657,9 +657,12 @@ const [hasValuables, setHasValuables] = useState('Tidak');
                           <label className="block text-[10px] text-slate-500 font-bold mb-1">Est. Berat (Kg)</label>
                           <input
                             type="number"
-                            step="0.5"
+                            min="3"
                             value={kiloanEstKg}
-                            onChange={(e) => setKiloanEstKg(e.target.value)}
+                            onChange={(e) => {
+                              const val = parseFloat(e.target.value) || 0;
+                              setKiloanEstKg(val < 3 ? '3' : e.target.value);
+                            }}
                             className="w-full bg-white border border-blue-200 rounded-xl p-2 text-xs font-extrabold text-blue-700"
                           />
                         </div>
