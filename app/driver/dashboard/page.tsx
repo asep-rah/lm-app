@@ -78,15 +78,13 @@ export default function DriverDashboard() {
     const { error } = await supabase
       .from('pickup_orders')
       .update({ 
-        status: 'Driver Menuju Lokasi',
-        driver_id: currentDriverId || null,
-        accepted_at: new Date().toISOString()
+        status: 'Driver Menuju Lokasi'
       })
       .eq('id', orderId);
 
     if (!error) {
       alert('🚀 Anda telah menerima tugas ini! Pelanggan dapat memantau lokasi GPS Anda secara live.');
-      loadDriverTasks(); // Reload daftar tugas driver
+      loadDriverTasks();
     } else {
       alert('Gagal mengambil tugas: ' + error.message);
     }
@@ -273,18 +271,18 @@ export default function DriverDashboard() {
                     </div>
 
                     <label className="block w-full mt-2">
-                      <span className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black py-3.5 rounded-xl text-xs shadow-lg transition active:scale-95 flex justify-center items-center gap-2 cursor-pointer">
-                        📸 {uploadingId === p.id ? 'Mengunggah Foto...' : 'AMBIL FOTO BUKTI & FINISH'}
-                      </span>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        capture="environment"
-                        className="hidden"
-                        onChange={(e) => handleFileUploadAndFinish(e, p.id)}
-                        disabled={uploadingId === p.id}
-                      />
-                    </label>
+                    <span className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black py-3.5 rounded-xl text-xs shadow-lg transition flex items-center justify-center cursor-pointer">
+                      📷 {uploadingId === p.id ? 'Mengunggah Foto...' : (p.status === 'Driver Menuju Lokasi' ? '1. AMBIL FOTO DI LOKASI CUSTOMER' : '2. AMBIL FOTO SERAH TERIMA OUTLET')}
+                    </span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      className="hidden"
+                      onChange={(e) => handleFileUploadAndFinish(e, p.id, p.status)}
+                      disabled={uploadingId === p.id}
+                    />
+                  </label>
                   </>
                 )}
 
