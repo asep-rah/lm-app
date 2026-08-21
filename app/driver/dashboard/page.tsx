@@ -14,16 +14,22 @@ export default function DriverDashboard() {
   const [driverName, setDriverName] = useState('Driver Internal');
   const [uploadingId, setUploadingId] = useState<string | null>(null);
 
-  // LOAD TUGAS: MENGAMBIL PESANAN STATUS 'Baru Masuk' DAN 'Driver Menuju Lokasi'
-  const loadDriverTasks = async () => {
+  // LOAD TUGAS: HANYA UNTUK OUTLET DRIVER YANG LOGIN
+  const loadDriverTasks = async (outletId?: string) => {
     setIsLoading(true);
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('pickup_orders')
         .select('*')
-        .in('status', ['Baru Masuk', 'Driver Menuju Lokasi'])
+        .in('status', ['Baru Masuk', 'Driver Menuju Lokasi', 'Barang Dibawa ke Outlet', 'Ready for Delivery'])
         .order('created_at', { ascending: true });
 
+      // Jika ada outlet_id, filter pesanan berdasarkan cabang outlet driver
+      if (outletId) {
+        query = query.eq('outlet_id', outletId);
+      }
+
+      const { data, error } = await query;
       if (data) setPickups(data);
       if (error) console.error('Gagal memuat tugas:', error.message);
     } catch (e) {
@@ -73,6 +79,14 @@ export default function DriverDashboard() {
     };
   }, []);
 
+  // FUNGSI LOGOUT DRIVER
+  const handleLogout = () => {
+    if (confirm('Apakah Anda yakin ingin keluar dari Portal Driver?')) {
+      localStorage.removeItem('laundry_user');
+      window.location.href = '/driver/login';
+    }
+  };
+
   // AKSI DRIVER MENGAMBIL PESANAN 'Baru Masuk' -> 'Driver Menuju Lokasi'
   const handleAcceptTask = async (orderId: string) => {
     const { error } = await supabase
@@ -93,7 +107,6 @@ export default function DriverDashboard() {
   const handleOpenMaps = (addressOrCoords: string, notes?: string) => {
     let targetAddress = addressOrCoords;
 
-    // Jika addressOrCoords kosong/undefined, cari teks 'Alamat: ...' dari notes
     if ((!targetAddress || targetAddress === 'undefined') && notes) {
       const match = notes.match(/Alamat:\s*([^|]+)/i);
       if (match && match[1]) {
@@ -117,12 +130,12 @@ export default function DriverDashboard() {
     window.open(`https://wa.me/${cleanPhone}?text=${msg}`, '_blank');
   };
 
-  // FITUR DUAL FOTO BUKTI: FOTO 1 (LOKASI CUSTOMER) & FOTO 2 (TIBA DI OUTLET)
+  // FITUR DUAL FOTO BUKTI ANTI-GAGAL
   const handleFileUploadAndFinish = async (e: React.ChangeEvent<HTMLInputElement>, orderId: string, currentStatus: string) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const isPickupStep = currentStatus === 'Driver Menuju Lokasi';
+    const isPickupStep = currentStatus === 'Driver Menuju Lokasi' || currentStatus === 'Baru Masuk';
     const confirmMsg = isPickupStep 
       ? 'Upload foto bukti pengambilan pakaian di lokasi customer?' 
       : 'Upload foto bukti penyerahan pakaian di outlet?';
@@ -130,43 +143,47 @@ export default function DriverDashboard() {
     if (!confirm(confirmMsg)) return;
 
     setUploadingId(orderId);
-    const photoType = isPickupStep ? 'pickup' : 'outlet';
-    const fileName = `proofs/${photoType}-${orderId}-${Date.now()}.jpg`;
 
-    // Upload ke Supabase Storage
-    const { error: uploadError } = await supabase.storage
-      .from('pickup-photos')
-      .upload(fileName, file);
+    try {
+      const photoType = isPickupStep ? 'pickup' : 'outlet';
+      const cleanFileName = `${photoType}-${orderId}-${Date.now()}.jpg`;
 
-    if (uploadError) {
-      alert('Gagal mengunggah foto: ' + uploadError.message);
-      setUploadingId(null);
-      return;
-    }
+      const { error: uploadError } = await supabase.storage
+        .from('pickup-photos')
+        .upload(cleanFileName, file, {
+          cacheControl: '3600',
+          upsert: true
+        });
 
-    const { data: publicUrlData } = supabase.storage
-      .from('pickup-photos')
-      .getPublicUrl(fileName);
+      if (uploadError) {
+        throw new Error('Storage Error: ' + uploadError.message);
+      }
 
-    const photoUrl = publicUrlData.publicUrl;
+      const { data: publicUrlData } = supabase.storage
+        .from('pickup-photos')
+        .getPublicUrl(cleanFileName);
 
-    // Update DB sesuai tahapan foto
-    const updateData: any = isPickupStep
-      ? { photo_url: photoUrl, status: 'Barang Dibawa ke Outlet' }
-      : { photo_outlet_url: photoUrl, status: 'Telah Tiba di Outlet' };
+      const photoUrl = publicUrlData.publicUrl;
 
-    const { error: updateError } = await supabase
-      .from('pickup_orders')
-      .update(updateData)
-      .eq('id', orderId);
+      const updateData: any = isPickupStep
+        ? { photo_url: photoUrl, status: 'Barang Dibawa ke Outlet' }
+        : { photo_outlet_url: photoUrl, status: 'Telah Tiba di Outlet' };
 
-    setUploadingId(null);
+      const { error: updateError } = await supabase
+        .from('pickup_orders')
+        .update(updateData)
+        .eq('id', orderId);
 
-    if (!updateError) {
+      if (updateError) {
+        throw new Error('DB Error: ' + updateError.message);
+      }
+
       alert(isPickupStep ? '📷 Foto jemput berhasil! Lanjutkan perjalanan ke Outlet.' : '🏪 Foto serah terima outlet berhasil! Tugas Selesai.');
       loadDriverTasks();
-    } else {
-      alert('Gagal memperbarui status: ' + updateError.message);
+    } catch (err: any) {
+      alert('⚠️ Gagal mengirim foto: ' + (err.message || 'Terjadi kesalahan jaringan'));
+    } finally {
+      setUploadingId(null);
     }
   };
     
@@ -184,7 +201,7 @@ export default function DriverDashboard() {
               </h1>
               <p className="text-[10px] text-emerald-100 font-medium">🛵 Aplikasi Kurir Internal Laundrivery</p>
             </div>
-            <button onClick={loadDriverTasks} className="bg-emerald-800 text-white text-[10px] font-bold px-3 py-1.5 rounded-full shadow-sm active:scale-95 transition">
+            <button onClick={() => loadDriverTasks()} className="bg-emerald-800 text-white text-[10px] font-bold px-3 py-1.5 rounded-full shadow-sm active:scale-95 transition">
               🔄 Refresh
             </button>
           </div>
@@ -197,9 +214,16 @@ export default function DriverDashboard() {
                 <p className="font-black text-white">{driverName}</p>
               </div>
             </div>
-            <div className="text-right">
-              <p className="text-[10px] text-emerald-200">Tugas Aktif</p>
-              <p className="font-black text-lg text-white">{pickups.length}</p>
+            <div className="flex items-center gap-3">
+              <div className="text-right">
+                <p className="text-[10px] text-emerald-200">Tugas Aktif</p>
+                <p className="font-black text-lg text-white leading-tight">{pickups.length}</p>
+              </div>
+              <button 
+                onClick={handleLogout}
+                className="bg-red-500/80 hover:bg-red-600 text-white text-[10px] px-2.5 py-1.5 rounded-xl font-bold transition shadow-sm active:scale-95 border border-red-400/40">
+                🚪 Keluar
+              </button>
             </div>
           </div>
         </div>
@@ -271,33 +295,31 @@ export default function DriverDashboard() {
                     </div>
 
                     <label className="block w-full mt-2">
-                    <span className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black py-3.5 rounded-xl text-xs shadow-lg transition flex items-center justify-center cursor-pointer">
-                      📷 {uploadingId === p.id ? 'Mengunggah Foto...' : (p.status === 'Driver Menuju Lokasi' ? '1. AMBIL FOTO DI LOKASI CUSTOMER' : '2. AMBIL FOTO SERAH TERIMA OUTLET')}
-                    </span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      capture="environment"
-                      className="hidden"
-                      onChange={(e) => handleFileUploadAndFinish(e, p.id, p.status)}
-                      disabled={uploadingId === p.id}
-                    />
-                  </label>
+                      <span className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black py-3.5 rounded-xl text-xs shadow-lg transition flex items-center justify-center cursor-pointer">
+                        📷 {uploadingId === p.id ? 'Mengunggah Foto...' : (p.status === 'Driver Menuju Lokasi' ? '1. AMBIL FOTO DI LOKASI CUSTOMER' : '2. AMBIL FOTO SERAH TERIMA OUTLET')}
+                      </span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        className="hidden"
+                        onChange={(e) => handleFileUploadAndFinish(e, p.id, p.status)}
+                        disabled={uploadingId === p.id}
+                      />
+                    </label>
                   </>
                 )}
-
               </div>
             ))}
-
-            {pickups.length === 0 && !isLoading && (
-              <div className="text-center py-16 border-2 border-dashed border-slate-300 rounded-3xl text-slate-500">
-                <span className="text-5xl block mb-3 opacity-50">☕</span>
-                <p className="text-sm font-black">Tidak ada tugas penjemputan.</p>
-                <p className="text-[10px] mt-1">Silakan istirahat atau standby di outlet.</p>
-              </div>
-            )}
           </div>
 
+          {pickups.length === 0 && !isLoading && (
+            <div className="text-center py-16 border-2 border-dashed border-slate-300 rounded-3xl text-slate-500">
+              <span className="text-5xl block mb-3 opacity-50">☕</span>
+              <p className="text-sm font-black">Tidak ada tugas penjemputan.</p>
+              <p className="text-[10px] mt-1">Silakan istirahat atau standby di outlet.</p>
+            </div>
+          )}
         </div>
       </div>
     </div>
