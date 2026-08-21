@@ -25,8 +25,8 @@ export default function PickupOrderForm() {
   const [address, setAddress] = useState('');
   
   const [category, setCategory] = useState<'KILOAN' | 'SATUAN' | ''>('');
-  const [kiloanPackage, setKiloanPackage] = useState('Cuci Komplit (Rp 7.000/kg)');
-  const [kiloanPricePerKg, setKiloanPricePerKg] = useState(7000);
+  const [kiloanPackage, setKiloanPackage] = useState('Cuci Kering Gosok (Rp 8.000/kg)');
+  const [kiloanPricePerKg, setKiloanPricePerKg] = useState(8000);
   const [estimatedKg, setEstimatedKg] = useState<number>(3);
   
   const [searchQuery, setSearchQuery] = useState('');
@@ -44,7 +44,14 @@ export default function PickupOrderForm() {
 
   const [agreeOngkir, setAgreeOngkir] = useState(true);
   const [loading, setLoading] = useState(false);
-
+  const handleKgChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseInt(e.target.value) || 0;
+    if (val < 3) {
+      setEstimatedKg(3);
+    } else {
+      setEstimatedKg(val);
+    }
+  };
   const filteredSatuan = useMemo(() => {
     if (!searchQuery) return [];
     return SATUAN_ITEMS.filter(item => item.name.toLowerCase().includes(searchQuery.toLowerCase()));
@@ -187,24 +194,24 @@ export default function PickupOrderForm() {
               value={kiloanPackage}
               onChange={(e) => {
                 setKiloanPackage(e.target.value);
-                setKiloanPricePerKg(e.target.value.includes('Setrika') ? 5000 : 7000);
+                setKiloanPricePerKg(e.target.value.includes('Cuci Kering Gosok') ? 8000 : 6000);
               }}
               className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2.5 text-xs text-white"
             >
-              <option value="Cuci Komplit (Rp 7.000/kg)">Cuci Komplit (Rp 7.000/kg)</option>
-              <option value="Cuci Lipat (Rp 5.500/kg)">Cuci Lipat (Rp 5.500/kg)</option>
-              <option value="Setrika Saja (Rp 5.000/kg)">Setrika Saja (Rp 5.000/kg)</option>
+              <option value="Cuci Kering Gosok (Rp 8.000/kg)">Cuci Kering Gosok (Rp 8.000/kg)</option>
+                <option value="Cuci Lipat (Rp 6.000/kg)">Cuci Lipat (Rp 6.000/kg)</option>
+                <option value="Setrika Saja (Rp 6.000/kg)">Setrika Saja (Rp 6.000/kg)</option>
             </select>
 
             <div className="flex justify-between items-center text-xs text-slate-300">
               <span>Estimasi Berat (Kg):</span>
               <input
-                type="number"
-                min="1"
-                value={estimatedKg}
-                onChange={(e) => setEstimatedKg(Number(e.target.value))}
-                className="w-16 bg-slate-900 border border-slate-700 text-center rounded-lg p-1 text-xs font-bold text-cyan-400"
-              />
+              type="number"
+              min="3"
+              value={estimatedKg}
+              onChange={handleKgChange}
+              className="w-16 bg-slate-900 border border-slate-700 text-center rounded-lg p-1 text-xs font-bold text-cyan-400"
+            />
             </div>
           </div>
         )}
