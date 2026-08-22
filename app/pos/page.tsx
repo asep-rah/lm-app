@@ -90,7 +90,10 @@ const [depositAmount, setDepositAmount] = useState('');
 const [depositMethod, setDepositMethod] = useState<'INDOMARET_ALFAMART' | 'MBANKING_PERSONAL'>('INDOMARET_ALFAMART');
 const [adminFee, setAdminFee] = useState('');
 const [proofUrl, setProofUrl] = useState('');
-
+// State Closing Shift / Blind Cash Count
+const [showClosingModal, setShowClosingModal] = useState(false);
+const [physicalCashCount, setPhysicalCashCount] = useState('');
+const [closingNotes, setClosingNotes] = useState('');
 // Handler Submit Setoran Kasir
 const handleSubmitDeposit = async () => {
   const amount = parseFloat(depositAmount) || 0;
@@ -128,6 +131,65 @@ const handleSubmitDeposit = async () => {
   setDepositAmount('');
   setAdminFee('');
   setProofUrl('');
+};
+// Handler Submit Closing Shift & Blind Cash Count
+const handleSubmitClosingShift = async () => {
+  const physicalAmount = parseFloat(physicalCashCount);
+  if (isNaN(physicalAmount) || physicalAmount < 0) {
+    return alert('⚠️ Masukkan jumlah fisik uang tunai di laci secara valid!');
+  }
+
+  // Hitung total penerimaan tunai sistem hari ini untuk outlet aktif
+  const { data: cashOrders } = await supabase
+    .from('transactions')
+    .select('total_amount, amount_paid')
+    .eq('outlet_id', selectedOutlet)
+    .ilike('payment_method', '%cash%');
+
+  const expectedSystemCash = (cashOrders || []).reduce((acc, curr) => acc + (Number(curr.amount_paid) || Number(curr.total_amount) || 0), 0);
+  const cashDifference = physicalAmount - expectedSystemCash;
+
+  // Catat data closing ke tabel cash_closings / expenses jika ada minus
+  const { error } = await supabase.from('cash_closings').insert([
+    {
+      outlet_id: selectedOutlet,
+      cashier_id: employeeId || '00000000-0000-0000-0000-000000000000',
+      system_expected_cash: expectedSystemCash,
+      physical_actual_cash: physicalAmount,
+      cash_difference: cashDifference,
+      notes: closingNotes.trim() || 'Closing Shift Kasir Regular'
+    }
+  ]);
+
+  if (error) {
+    return alert('❌ Gagal menyimpan closing shift: ' + error.message);
+  }
+
+  // Jika terjadi selisih kas (minus), catat otomatis ke laporan selisih kas
+  if (cashDifference < 0) {
+    await supabase.from('expenses').insert([
+      {
+        outlet_id: selectedOutlet,
+        amount: Math.abs(cashDifference),
+        notes: `Selisih Minus Kas Laci Shift Kasir (${employeeName || 'Kasir'})`,
+        category: 'Selisih Kas'
+      }
+    ]);
+  }
+
+  alert(
+    `✅ Closing Shift Berhasil!\n\n` +
+    `• Fisik Kas: Rp ${physicalAmount.toLocaleString('id-ID')}\n` +
+    `• Kas Sistem: Rp ${expectedSystemCash.toLocaleString('id-ID')}\n` +
+    `• Status: ${cashDifference === 0 ? 'SEIMBANG (MATCH) ✨' : cashDifference > 0 ? `SURPLUS (+Rp ${cashDifference.toLocaleString('id-ID')})` : `MINUS (-Rp ${Math.abs(cashDifference).toLocaleString('id-ID')}) ⚠️`}`
+  );
+
+  setShowClosingModal(false);
+  setPhysicalCashCount('');
+  setClosingNotes('');
+  
+  // Jalankan Absen Pulang
+  handleClockOut();
 };
 // State Kasbon Terintegrasi (Limit 60% Hari Kerja & Surat Piutang)
 const [loanAmount, setLoanAmount] = useState('');
@@ -2131,9 +2193,14 @@ const deductChemicalInventory = async (orderItemName: string, qtyKgOrPcs: number
                 ) : !todayAttendance.check_out ? (
                   <div className="flex flex-col gap-3">
                     <div className="bg-emerald-50 text-emerald-800 px-3 py-2 rounded-lg text-xs font-bold border border-emerald-200">✅ Sudah Absen Masuk: {new Date(todayAttendance.check_in).toLocaleTimeString('id-ID')} WIB</div>
-                    <button onClick={handleClockOut} disabled={isSubmitting} className="w-full bg-amber-500 hover:bg-amber-600 text-white font-bold py-3 rounded-lg text-xs shadow-md transition">
-                      🏠 ABSEN PULANG
-                    </button>
+                    <button 
+                  type="button" 
+                  onClick={() => setShowClosingModal(true)} 
+                  disabled={isSubmitting} 
+                  className="w-full bg-amber-500 hover:bg-amber-600 text-white font-bold py-2.5 rounded-xl text-xs shadow transition flex justify-center items-center gap-1.5"
+                >
+                  <span>🏃‍♂️ CLOSING SHIFT & ABSEN PULANG</span>
+                </button>
                   </div>
                 ) : (
                   <div className="bg-slate-100 text-slate-700 px-3 py-2 rounded-lg text-xs font-bold border border-slate-200 text-center">
@@ -2141,6 +2208,65 @@ const deductChemicalInventory = async (orderItemName: string, qtyKgOrPcs: number
                   </div>
                 )}
               </div>
+              {/* MODAL BLIND CASH COUNT CLOSING SHIFT */}
+      {showClosingModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
+          <div className="bg-white border border-slate-200 w-full max-w-md rounded-3xl p-6 space-y-4 shadow-2xl">
+            <div className="flex justify-between items-center border-b pb-3">
+              <h3 className="font-black text-slate-900 text-sm flex items-center gap-2">
+                <span>🔐 Closing Shift & Hitung Uang Laci</span>
+              </h3>
+              <button type="button" onClick={() => setShowClosingModal(false)} className="text-slate-400 font-bold text-sm">✖</button>
+            </div>
+
+            <div className="space-y-3">
+              <div className="bg-blue-50 border border-blue-200 p-3 rounded-xl text-[10px] text-blue-900">
+                <p className="font-bold">⚠️ Ketentuan Blind Cash Count:</p>
+                <p>Hitung dan masukkan total uang fisiknya yang ada di laci kasir saat ini. Sistem akan mencocokkan secara otomatis dengan catatan omset tunai harian.</p>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">Total Fisik Uang Tunai di Laci (Rp)</label>
+                <input
+                  type="number"
+                  placeholder="Contoh: 450000"
+                  value={physicalCashCount}
+                  onChange={(e) => setPhysicalCashCount(e.target.value)}
+                  className="w-full border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">Catatan Shift / Serah Terima (Opsional)</label>
+                <input
+                  type="text"
+                  placeholder="Contoh: Uang pecahan Rp 2.000 tersisa sedikit"
+                  value={closingNotes}
+                  onChange={(e) => setClosingNotes(e.target.value)}
+                  className="w-full border border-slate-300 rounded-xl p-2.5 text-xs text-slate-900 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowClosingModal(false)}
+                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2.5 rounded-xl text-xs transition"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleSubmitClosingShift}
+                className="flex-1 bg-amber-600 hover:bg-amber-700 text-white font-bold py-2.5 rounded-xl text-xs shadow transition"
+              >
+                Selesaikan Shift
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 {/* FORM PENGAJUAN KASBON KARYAWAN */}
 <form onSubmit={handleApplyLoan} className="bg-white border border-slate-200 p-5 rounded-2xl space-y-3 shadow-sm">
               <h3 className="font-bold text-xs text-indigo-900 flex items-center gap-1.5 border-b pb-2">
