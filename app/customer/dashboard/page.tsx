@@ -84,16 +84,15 @@ export default function CustomerDashboardPage() {
 
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-// STATE INFORMASI DETAIL CUCIAN (1 - 4)
-const [bagCount, setBagCount] = useState('1 Kantong');
-const [washProcess, setWashProcess] = useState('Gabung Semua');
-const [hasFading, setHasFading] = useState('Tidak');
-const [hasValuables, setHasValuables] = useState('Tidak');
-  const [activeOrders, setActiveOrders] = useState<any[]>([]);
-  const [completedOrders, setCompletedOrders] = useState<any[]>([]);
-  const [depositLogs, setDepositLogs] = useState<any[]>([]);
-// State Pilihan Kurir & Chat CS
-const [courierType, setCourierType] = useState<'INTERNAL' | 'THIRD_PARTY'>('INTERNAL');
+// STATE INFORMASI DETAIL CUCIAN (1 - 4) - Default Kosong
+const [bagCount, setBagCount] = useState('');
+const [washProcess, setWashProcess] = useState('');
+const [hasFading, setHasFading] = useState('');
+const [hasValuables, setHasValuables] = useState('');
+const [thirdPartyVendor, setThirdPartyVendor] = useState('');
+
+// State Pilihan Kurir & Chat CS - Default Kosong
+const [courierType, setCourierType] = useState<'' | 'INTERNAL' | 'THIRD_PARTY'>('');
 const [queueCount, setQueueCount] = useState<number>(0);
 const [chatMessages, setChatMessages] = useState<any[]>([]);
 const [inputChat, setInputChat] = useState<string>('');
@@ -110,6 +109,10 @@ useEffect(() => {
   };
   fetchQueue();
 }, []);
+// State Data Orders & Deposit Customer
+const [activeOrders, setActiveOrders] = useState<any[]>([]);
+const [completedOrders, setCompletedOrders] = useState<any[]>([]);
+const [depositLogs, setDepositLogs] = useState<any[]>([]);
 
 // Hitung Estimasi Menit Penjemputan Internal
 const estimatedPickupMinutes = (queueCount * 30) + 15;
@@ -533,7 +536,20 @@ const loadChats = async (orderId: string) => {
                   </div>
                 </button>
               </div>
-
+{/* FLOATING BANNER BANTUAN LIVE CS & AI */}
+<div className="bg-gradient-to-r from-indigo-600 to-purple-600 p-4 rounded-3xl text-white my-4 shadow-lg flex justify-between items-center">
+            <div>
+              <h4 className="font-black text-xs">💬 Butuh Bantuan / Tanya AI?</h4>
+              <p className="text-[10px] text-indigo-100">Hubungi CS Admin atau AI Assistant kami.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveChatOrderId('GENERAL_CS')}
+              className="bg-white text-indigo-900 font-extrabold px-3.5 py-2 rounded-xl text-xs shadow hover:bg-indigo-50 transition"
+            >
+              Mulai Chat
+            </button>
+          </div>
               <div className="space-y-2.5 pt-1">
                 <div className="flex justify-between items-center">
                   <h3 className="text-xs font-extrabold text-slate-700 uppercase tracking-wider">⚡ Pesanan Dalam Proses ({activeOrders.length})</h3>
@@ -555,6 +571,43 @@ const loadChats = async (orderId: string) => {
                       <span className="text-slate-400 font-medium">{new Date(order.created_at).toLocaleDateString('id-ID')}</span>
                       <span className="font-black text-blue-600 text-xs">Ongkir: Rp {Number(order.delivery_fee || 0).toLocaleString('id-ID')}</span>
                     </div>
+                    {/* VISUAL PROGRESS STEPPER TRACKING REAL-TIME */}
+          <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-2xl my-2.5 space-y-2.5">
+            <div className="flex justify-between items-center">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Status Pengerjaan Live</span>
+              <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-2.5 py-0.5 rounded-full border border-indigo-200">
+                {order.status || 'Dalam Antrean'}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-6 gap-1 text-center pt-1">
+              {[
+                { label: 'Jemput', icon: '🚚', key: 'jemput' },
+                { label: 'Cuci', icon: '🧼', key: 'cuci' },
+                { label: 'Kering', icon: '💨', key: 'kering' },
+                { label: 'Setrika', icon: '👔', key: 'setrika' },
+                { label: 'Siap', icon: '📦', key: 'siap' },
+                { label: 'Selesai', icon: '✅', key: 'selesai' },
+              ].map((step, idx) => {
+                const currentStatus = (order.status || '').toLowerCase();
+                const isActive = currentStatus.includes(step.key);
+                return (
+                  <div key={idx} className="flex flex-col items-center">
+                    <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold transition-all ${
+                      isActive 
+                        ? 'bg-emerald-500 text-white ring-2 ring-emerald-200 scale-105' 
+                        : 'bg-slate-200 text-slate-400'
+                    }`}>
+                      {step.icon}
+                    </div>
+                    <span className={`text-[8px] mt-1 font-semibold ${isActive ? 'text-emerald-700 font-bold' : 'text-slate-400'}`}>
+                      {step.label}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
                   {/* INDIKATOR LIVE TRACKING DRIVER */}
           {order.status === 'Driver Menuju Lokasi' && order.driver_lat && (
             <div className="bg-blue-50 border border-blue-200 p-3 rounded-2xl space-y-1.5 text-xs mt-2">
@@ -813,28 +866,30 @@ const loadChats = async (orderId: string) => {
               <div className="flex justify-between items-center">
                 <span className="font-semibold text-slate-300">1. Jumlah Kantong:</span>
                 <select
-                  value={bagCount}
-                  onChange={(e) => setBagCount(e.target.value)}
-                  className="bg-slate-900 border border-slate-700 text-cyan-400 font-extrabold rounded-xl px-3 py-1.5 focus:outline-none"
-                >
-                  <option value="1 Kantong">1 Kantong</option>
-                  <option value="2 Kantong">2 Kantong</option>
-                  <option value="3 Kantong">3 Kantong</option>
-                  <option value="4+ Kantong">4+ Kantong</option>
-                </select>
+                value={bagCount}
+                onChange={(e) => setBagCount(e.target.value)}
+                className="bg-slate-900 border border-slate-700 text-cyan-400 font-extrabold rounded-xl px-3 py-1.5 focus:outline-none"
+              >
+                <option value="">-- Pilih Jumlah Kantong --</option>
+                <option value="1 Kantong">1 Kantong</option>
+                <option value="2 Kantong">2 Kantong</option>
+                <option value="3 Kantong">3 Kantong</option>
+                <option value="4+ Kantong">4+ Kantong</option>
+              </select>
               </div>
 
               {/* 2. Proses Cuci */}
               <div className="flex justify-between items-center">
                 <span className="font-semibold text-slate-300">2. Proses Cuci:</span>
                 <select
-                  value={washProcess}
-                  onChange={(e) => setWashProcess(e.target.value)}
-                  className="bg-slate-900 border border-slate-700 text-cyan-400 font-extrabold rounded-xl px-3 py-1.5 focus:outline-none"
-                >
-                  <option value="Gabung Semua">Gabung Semua</option>
-                  <option value="Pisah Warna Khusus">Pisah Warna Khusus</option>
-                </select>
+                value={washProcess}
+                onChange={(e) => setWashProcess(e.target.value)}
+                className="bg-slate-900 border border-slate-700 text-cyan-400 font-extrabold rounded-xl px-3 py-1.5 focus:outline-none"
+              >
+                <option value="">-- Pilih Proses Cuci --</option>
+                <option value="Gabung Semua">Gabung Semua</option>
+                <option value="Pisah Warna Khusus">Pisah Warna Khusus</option>
+              </select>
               </div>
 
               {/* 3. Ada Pakaian Luntur? */}
@@ -958,7 +1013,7 @@ const loadChats = async (orderId: string) => {
                 }`}
               >
                 <div className="text-xs font-bold mb-1">📦 Pihak Ketiga</div>
-                <div className="text-[10px] text-amber-400 font-semibold">Gojek / Grab / Maxim</div>
+                <div className="text-[10px] text-amber-400 font-semibold">Gojek / Grab / Lalamove</div>
                 <div className="text-[9px] text-slate-400 mt-1">
                   Dipesankan manual oleh CS + Link Live Track
                 </div>
