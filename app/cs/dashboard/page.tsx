@@ -21,7 +21,56 @@ export default function CSDashboard() {
   const [drivers, setDrivers] = useState<any[]>([]);
   const [assignedDriverMap, setAssignedDriverMap] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
+// State Live Chat CS & Link Tracking Kurir Pihak Ketiga
+const [activeChatOrder, setActiveChatOrder] = useState<any | null>(null);
+const [chatMessages, setChatMessages] = useState<any[]>([]);
+const [inputCsChat, setInputCsChat] = useState<string>('');
+const [trackingUrlInput, setTrackingUrlInput] = useState<Record<string, string>>({});
 
+// Load Pesan Chat CS
+const loadCsChats = async (orderId: string) => {
+  const { data } = await supabase
+    .from('support_chats')
+    .select('*')
+    .eq('order_id', orderId)
+    .order('created_at', { ascending: true });
+  setChatMessages(data || []);
+};
+
+// Kirim Pesan CS ke Customer
+const handleSendCsChat = async () => {
+  if (!inputCsChat.trim() || !activeChatOrder) return;
+  await supabase.from('support_chats').insert([
+    {
+      order_id: activeChatOrder.id,
+      sender_type: 'cs',
+      message: inputCsChat.trim()
+    }
+  ]);
+  setInputCsChat('');
+  loadCsChats(activeChatOrder.id);
+};
+
+// Simpan Link Live Tracking Pihak Ketiga
+const handleSaveTrackingUrl = async (orderId: string) => {
+  const url = trackingUrlInput[orderId];
+  if (!url || !url.trim()) return alert('Masukkan URL Tracking terlebih dahulu!');
+
+  const { error } = await supabase
+    .from('pickup_orders')
+    .update({ 
+      third_party_tracking_url: url.trim(),
+      status: 'Driver Menuju Lokasi'
+    })
+    .eq('id', orderId);
+
+  if (!error) {
+    alert('✅ Link Live Tracking berhasil dikirim ke customer!');
+    loadCSData();
+  } else {
+    alert('❌ Gagal menyimpan URL tracking: ' + error.message);
+  }
+};
   // Load Data Master, Transaksi & Driver
   const loadCSData = async () => {
     setIsLoading(true);

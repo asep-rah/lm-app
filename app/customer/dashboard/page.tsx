@@ -92,7 +92,52 @@ const [hasValuables, setHasValuables] = useState('Tidak');
   const [activeOrders, setActiveOrders] = useState<any[]>([]);
   const [completedOrders, setCompletedOrders] = useState<any[]>([]);
   const [depositLogs, setDepositLogs] = useState<any[]>([]);
+// State Pilihan Kurir & Chat CS
+const [courierType, setCourierType] = useState<'INTERNAL' | 'THIRD_PARTY'>('INTERNAL');
+const [queueCount, setQueueCount] = useState<number>(0);
+const [chatMessages, setChatMessages] = useState<any[]>([]);
+const [inputChat, setInputChat] = useState<string>('');
+const [activeChatOrderId, setActiveChatOrderId] = useState<string | null>(null);
 
+// Hitung Antrian Driver Internal Secara Auto
+useEffect(() => {
+  const fetchQueue = async () => {
+    const { count } = await supabase
+      .from('pickup_orders')
+      .select('*', { count: 'exact', head: true })
+      .in('status', ['Baru Masuk', 'Driver Menuju Lokasi']);
+    setQueueCount(count || 0);
+  };
+  fetchQueue();
+}, []);
+
+// Hitung Estimasi Menit Penjemputan Internal
+const estimatedPickupMinutes = (queueCount * 30) + 15;
+
+// Kirim Chat ke CS
+const handleSendChat = async () => {
+  if (!inputChat.trim() || !activeChatOrderId) return;
+  await supabase.from('support_chats').insert([
+    {
+      order_id: activeChatOrderId,
+      sender_type: 'customer',
+      message: inputChat.trim()
+    }
+  ]);
+  setInputChat('');
+  loadChats(activeChatOrderId);
+};
+
+// Load Chat CS
+const loadChats = async (orderId: string) => {
+  setActiveChatOrderId(orderId);
+  const { data } = await supabase
+    .from('support_chats')
+    .select('*')
+    .eq('order_id', orderId)
+    .order('created_at', { ascending: true });
+  setChatMessages(data || []);
+};
   useEffect(() => {
     async function initPWA() {
       const { data: dbOutlets } = await supabase.from('outlets').select('*');
@@ -880,7 +925,46 @@ const [hasValuables, setHasValuables] = useState('Tidak');
                     <span>Rp {grandTotalEstimate.toLocaleString('id-ID')}</span>
                   </div>
                 </div>
+          {/* PILIHAN METODE KURIR */}
+          <div className="bg-slate-900/90 border border-slate-800 p-4 rounded-2xl space-y-3 my-4">
+            <label className="text-xs font-bold text-slate-300 block">Pilih Metode Penjemputan</label>
+            
+            <div className="grid grid-cols-2 gap-3">
+              {/* Driver Internal */}
+              <div 
+                onClick={() => setCourierType('INTERNAL')}
+                className={`p-3 rounded-xl border cursor-pointer transition ${
+                  courierType === 'INTERNAL' 
+                    ? 'bg-cyan-950/50 border-cyan-500 text-white' 
+                    : 'bg-slate-800/50 border-slate-700 text-slate-400'
+                }`}
+              >
+                <div className="text-xs font-bold mb-1">🛵 Driver Internal</div>
+                <div className="text-[10px] text-cyan-400 font-semibold">
+                  {queueCount === 0 ? '🟢 Tanpa Antrian' : `🔴 ${queueCount} Antrian`}
+                </div>
+                <div className="text-[9px] text-slate-400 mt-1">
+                  Est. Penjemputan ~{estimatedPickupMinutes} Menit
+                </div>
+              </div>
 
+              {/* Pihak Ketiga */}
+              <div 
+                onClick={() => setCourierType('THIRD_PARTY')}
+                className={`p-3 rounded-xl border cursor-pointer transition ${
+                  courierType === 'THIRD_PARTY' 
+                    ? 'bg-cyan-950/50 border-cyan-500 text-white' 
+                    : 'bg-slate-800/50 border-slate-700 text-slate-400'
+                }`}
+              >
+                <div className="text-xs font-bold mb-1">📦 Pihak Ketiga</div>
+                <div className="text-[10px] text-amber-400 font-semibold">Gojek / Grab / Maxim</div>
+                <div className="text-[9px] text-slate-400 mt-1">
+                  Dipesankan manual oleh CS + Link Live Track
+                </div>
+              </div>
+            </div>
+          </div>
                 <button
                   type="submit"
                   disabled={isSubmitting}
@@ -1113,7 +1197,60 @@ const [hasValuables, setHasValuables] = useState('Tidak');
           </div>
         </div>
       )}
+      {/* MODAL CHAT CUSTOMER SERVICE */}
+      {activeChatOrderId && (
+          <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
+            <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-2xl flex flex-col h-[500px]">
+              {/* Header Modal */}
+              <div className="p-4 border-b border-slate-800 flex justify-between items-center">
+                <div className="text-xs font-bold text-white">💬 Live Chat Customer Service</div>
+                <button onClick={() => setActiveChatOrderId(null)} className="text-slate-400 text-xs">✖</button>
+              </div>
 
+              {/* Bubble Chat Area */}
+              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                {chatMessages.length === 0 ? (
+                  <div className="text-center text-xs text-slate-500 py-10">Belum ada percakapan. Halo CS kami sekarang!</div>
+                ) : (
+                  chatMessages.map((msg) => (
+                    <div 
+                      key={msg.id} 
+                      className={`flex flex-col ${msg.sender_type === 'customer' ? 'items-end' : 'items-start'}`}
+                    >
+                      <div className={`p-2.5 rounded-xl text-xs max-w-[80%] ${
+                        msg.sender_type === 'customer' 
+                          ? 'bg-cyan-600 text-white rounded-br-none' 
+                          : 'bg-slate-800 text-slate-200 rounded-bl-none'
+                      }`}>
+                        {msg.message}
+                      </div>
+                      <span className="text-[9px] text-slate-500 mt-1">
+                        {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* Input Chat */}
+              <div className="p-3 border-t border-slate-800 flex gap-2">
+                <input 
+                  type="text"
+                  value={inputChat}
+                  onChange={(e) => setInputChat(e.target.value)}
+                  placeholder="Ketik pesan ke CS..."
+                  className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3 text-xs text-white focus:outline-none"
+                />
+                <button 
+                  onClick={handleSendChat}
+                  className="bg-cyan-500 hover:bg-cyan-600 text-white font-bold px-4 py-2 rounded-xl text-xs"
+                >
+                  Kirim
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       {/* BOTTOM NAVIGATION BAR */}
       <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/95 backdrop-blur-md border-t border-slate-200 flex justify-around p-2.5 z-50 shadow-lg">
         <button onClick={() => setActiveTab('home')} className={`flex flex-col items-center flex-1 ${activeTab === 'home' ? 'text-blue-600' : 'text-slate-400'}`}>
