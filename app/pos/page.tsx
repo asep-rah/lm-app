@@ -84,7 +84,51 @@ export default function POSPage() {
   const [outletOverrides, setOutletOverrides] = useState<any>({});
   const [receiptTerms, setReceiptTerms] = useState('');
   const [settings, setSettings] = useState<any>(null);
+// State Fitur Setoran Cash via Digital Wallet & QRIS Meja Kasir
+const [showDepositModal, setShowDepositModal] = useState(false);
+const [depositAmount, setDepositAmount] = useState('');
+const [depositMethod, setDepositMethod] = useState<'INDOMARET_ALFAMART' | 'MBANKING_PERSONAL'>('INDOMARET_ALFAMART');
+const [adminFee, setAdminFee] = useState('');
+const [proofUrl, setProofUrl] = useState('');
 
+// Handler Submit Setoran Kasir
+const handleSubmitDeposit = async () => {
+  const amount = parseFloat(depositAmount) || 0;
+  const fee = depositMethod === 'INDOMARET_ALFAMART' ? (parseFloat(adminFee) || 0) : 0;
+
+  if (amount <= 0) return alert('⚠️ Masukkan nominal setoran cash yang valid!');
+
+  const { error: depositErr } = await supabase.from('cash_deposits').insert([
+    {
+      outlet_id: selectedOutlet,
+      cashier_id: employeeId || '00000000-0000-0000-0000-000000000000',
+      amount_cash: amount,
+      admin_fee: fee,
+      deposit_method: depositMethod,
+      qr_payment_status: 'pending',
+      proof_url: proofUrl || 'Setor via QRIS Meja Kasir'
+    }
+  ]);
+
+  if (depositErr) return alert('❌ Gagal menyimpan setoran: ' + depositErr.message);
+
+  if (fee > 0) {
+    await supabase.from('expenses').insert([
+      {
+        outlet_id: selectedOutlet,
+        amount: fee,
+        notes: `Biaya Admin Top-Up Setoran Cash (${depositMethod})`,
+        category: 'Biaya Admin'
+      }
+    ]);
+  }
+
+  alert('✅ Setoran berhasil diajukan! Finance akan memverifikasi mutasi masuk pada QRIS.');
+  setShowDepositModal(false);
+  setDepositAmount('');
+  setAdminFee('');
+  setProofUrl('');
+};
   // Form Transaksi Baru
   const [orderType, setOrderType] = useState('Offline');
   const [deliveryFee, setDeliveryFee] = useState('');
@@ -1801,6 +1845,19 @@ useEffect(() => {
 
           {activeTab === 'expense' && (
             <div className="space-y-6">
+              {/* TOMBOL PEMICU SETORAN CASH */}
+          <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-xl flex justify-between items-center mb-4">
+            <div>
+              <h4 className="font-bold text-xs text-emerald-900">📲 Setoran Cash Outlet via Wallet/QRIS</h4>
+              <p className="text-[10px] text-emerald-700">Top-up cash via Indomaret/Alfamart/m-Banking lalu setor ke QRIS Meja Kasir</p>
+            </div>
+            <button
+              onClick={() => setShowDepositModal(true)}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-2 rounded-xl text-xs shadow transition whitespace-nowrap"
+            >
+              Setor Sekarang
+            </button>
+          </div>
               <form onSubmit={handleExpenseSubmit} className="space-y-3 border rounded-xl p-4 shadow-sm">
                 <h3 className="text-xs font-bold text-rose-600 border-b pb-2">💸 Pengeluaran Kas</h3>
                 <select value={expCategory} onChange={(e) => setExpCategory(e.target.value)} className="w-full border rounded-xl px-3 py-3 text-xs md:text-sm">{settings?.coas?.map((c: string, i: number) => <option key={i} value={c}>{c}</option>)}</select>
@@ -1814,9 +1871,125 @@ useEffect(() => {
                 <input type="number" placeholder="Jumlah LITER" value={stockAddAmount} onChange={(e) => setStockAddAmount(e.target.value)} className="w-full border rounded-xl px-3 py-3 text-lg font-bold text-indigo-600" required />
                 <button type="submit" disabled={isSubmitting} className="w-full bg-indigo-600 text-white font-bold py-3.5 rounded-xl text-sm">SIMPAN</button>
               </form>
+            
+            {/* MODAL SETORAN CASH KASIR */}
+      {showDepositModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
+          <div className="bg-white border border-slate-200 w-full max-w-md rounded-3xl p-6 space-y-4 shadow-2xl">
+            <div className="flex justify-between items-center border-b pb-3">
+              <h3 className="font-black text-slate-900 text-sm flex items-center gap-2">
+                <span>🏧 Setoran Uang Cash Outlet</span>
+              </h3>
+              <button onClick={() => setShowDepositModal(false)} className="text-slate-400 font-bold text-sm">✖</button>
             </div>
-          )}
 
+            <div className="space-y-3">
+              {/* Pilihan Metode Top Up */}
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">Metode Top-Up / Setor</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDepositMethod('INDOMARET_ALFAMART');
+                      setAdminFee('2500');
+                    }}
+                    className={`p-2.5 rounded-xl border text-xs font-bold transition ${
+                      depositMethod === 'INDOMARET_ALFAMART'
+                        ? 'bg-emerald-50 border-emerald-500 text-emerald-800'
+                        : 'bg-slate-50 border-slate-200 text-slate-600'
+                    }`}
+                  >
+                    🏪 Indomaret / Alfamart
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDepositMethod('MBANKING_PERSONAL');
+                      setAdminFee('0');
+                    }}
+                    className={`p-2.5 rounded-xl border text-xs font-bold transition ${
+                      depositMethod === 'MBANKING_PERSONAL'
+                        ? 'bg-emerald-50 border-emerald-500 text-emerald-800'
+                        : 'bg-slate-50 border-slate-200 text-slate-600'
+                    }`}
+                  >
+                    🏦 m-Banking Pribadi
+                  </button>
+                </div>
+              </div>
+
+              {/* Nominal Cash Ditransfer */}
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">Nominal Cash Disetor (Rp)</label>
+                <input
+                  type="number"
+                  placeholder="Contoh: 250000"
+                  value={depositAmount}
+                  onChange={(e) => setDepositAmount(e.target.value)}
+                  className="w-full border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              {/* Biaya Admin Top-Up */}
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">
+                  Biaya Admin (Rp) {depositMethod === 'MBANKING_PERSONAL' && <span className="text-rose-500">(Wajib 0)</span>}
+                </label>
+                <input
+                  type="number"
+                  disabled={depositMethod === 'MBANKING_PERSONAL'}
+                  placeholder="0"
+                  value={adminFee}
+                  onChange={(e) => setAdminFee(e.target.value)}
+                  className="w-full border border-slate-300 bg-slate-50 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:outline-none disabled:bg-slate-100 disabled:text-slate-400"
+                />
+                {depositMethod === 'INDOMARET_ALFAMART' && (
+                  <p className="text-[10px] text-emerald-700 mt-1 font-semibold">
+                    * Biaya admin ini akan otomatis dicatat pada Pengeluaran Outlet.
+                  </p>
+                )}
+              </div>
+
+              {/* Catatan / URL Bukti Transfer */}
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">Catatan / Keterangan (Opsional)</label>
+                <input
+                  type="text"
+                  placeholder="Contoh: Top-up ShopeePay via Indomaret lalu scan QRIS Meja"
+                  value={proofUrl}
+                  onChange={(e) => setProofUrl(e.target.value)}
+                  className="w-full border border-slate-300 rounded-xl p-2.5 text-xs text-slate-900 focus:outline-none"
+                />
+              </div>
+
+              {/* Panduan Singkat */}
+              <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl text-[10px] text-amber-900 space-y-1">
+                <p className="font-bold">📍 Langkah Akhir Kasir:</p>
+                <p>1. Lakukan Scan QRIS Meja Kasir menggunakan e-Wallet / M-Banking Anda sejumlah nominal setoran.</p>
+                <p>2. Tekan tombol <b>Kirim Setoran</b> di bawah untuk diteruskan ke tim Finance.</p>
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => setShowDepositModal(false)}
+                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2.5 rounded-xl text-xs transition"
+              >
+                Batal
+              </button>
+              <button
+                onClick={handleSubmitDeposit}
+                className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs shadow transition"
+              >
+                Kirim Setoran
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )}
           {activeTab === 'performance' && (
             <div className="space-y-4">
 
