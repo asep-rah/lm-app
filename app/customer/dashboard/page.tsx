@@ -1093,7 +1093,7 @@ const loadChats = async (orderId: string) => {
           {activeTab === 'history' && (
             <div className="space-y-3">
               <h3 className="text-xs font-extrabold text-slate-700 uppercase tracking-wider">📜 Riwayat Pesanan Selesai</h3>
-              {completedOrders.map((item) => (
+              {completedOrders.map((item: any) => (
                 <div key={item.id} className="bg-white border border-slate-200 rounded-2xl p-4 text-xs space-y-2 shadow-sm">
                   <div className="flex justify-between items-start">
                     <div>
