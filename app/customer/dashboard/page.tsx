@@ -49,7 +49,7 @@ const calculateDistanceKm = (lat1: number, lon1: number, lat2: number, lon2: num
 
 export default function CustomerDashboardPage() {
   const [activeTab, setActiveTab] = useState<'home' | 'order' | 'deposit' | 'history' | 'profile'>('home');
-
+  const [activeSupportTab, setActiveSupportTab] = useState<'cs' | 'ai'>('cs');
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerData, setCustomerData] = useState<any>(null);
   const [outletsList, setOutletsList] = useState<any[]>([]);
@@ -1201,11 +1201,33 @@ const loadChats = async (orderId: string) => {
       {activeChatOrderId && (
           <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
             <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-2xl flex flex-col h-[500px]">
-              {/* Header Modal */}
-              <div className="p-4 border-b border-slate-800 flex justify-between items-center">
-                <div className="text-xs font-bold text-white">💬 Live Chat Customer Service</div>
-                <button onClick={() => setActiveChatOrderId(null)} className="text-slate-400 text-xs">✖</button>
+              {/* Header Modal Chat & Switcher AI/CS */}
+          <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-white">💬 Bantuan Laundrivery</span>
+              <div className="flex bg-slate-800 p-0.5 rounded-lg border border-slate-700">
+                <button
+                  type="button"
+                  onClick={() => setActiveSupportTab('cs')}
+                  className={`px-2 py-0.5 text-[10px] font-bold rounded-md transition ${
+                    activeSupportTab === 'cs' ? 'bg-cyan-600 text-white' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  🎧 Live CS
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveSupportTab('ai')}
+                  className={`px-2 py-0.5 text-[10px] font-bold rounded-md transition ${
+                    activeSupportTab === 'ai' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  🤖 Tanya AI
+                </button>
               </div>
+            </div>
+            <button onClick={() => setActiveChatOrderId(null)} className="text-slate-400 hover:text-white text-xs font-bold">✕</button>
+          </div>
 
               {/* Bubble Chat Area */}
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
