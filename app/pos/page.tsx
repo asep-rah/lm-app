@@ -129,6 +129,71 @@ const handleSubmitDeposit = async () => {
   setAdminFee('');
   setProofUrl('');
 };
+// State Kasbon & Kendala Supervisor
+const [loanAmount, setLoanAmount] = useState('');
+const [loanReason, setLoanReason] = useState('');
+const [incidentTitle, setIncidentTitle] = useState('');
+const [incidentDesc, setIncidentDesc] = useState('');
+const [coaList, setCoaList] = useState<any[]>([]);
+
+// Load Master COA dari Supabase
+useEffect(() => {
+  const fetchCoa = async () => {
+    const { data } = await supabase.from('chart_of_accounts').select('*');
+    if (data) setCoaList(data);
+  };
+  fetchCoa();
+}, []);
+
+// Handler Pengajuan Kasbon Karyawan
+const handleApplyLoan = async (e: React.FormEvent) => {
+  e.preventDefault();
+  const amount = parseFloat(loanAmount) || 0;
+  if (amount <= 0 || !loanReason.trim()) return alert('⚠️ Lengkapi nominal dan alasan kasbon!');
+
+  const { error } = await supabase.from('employee_loans').insert([
+    {
+      employee_id: employeeId || '00000000-0000-0000-0000-000000000000',
+      outlet_id: selectedOutlet,
+      amount: amount,
+      reason: loanReason.trim(),
+      status: 'pending'
+    }
+  ]);
+
+  if (!error) {
+    alert('✅ Pengajuan kasbon dikirim! Menunggu verifikasi dari Supervisor.');
+    setLoanAmount('');
+    setLoanReason('');
+  } else {
+    alert('❌ Gagal mengajukan kasbon: ' + error.message);
+  }
+};
+
+// Handler Pengaduan Kendala Outlet ke Supervisor
+const handleReportIncident = async (e: React.FormEvent) => {
+  e.preventDefault();
+  if (!incidentTitle.trim() || !incidentDesc.trim()) return alert('⚠️ Lengkapi judul dan deskripsi kendala!');
+
+  const { error } = await supabase.from('supervisor_incidents').insert([
+    {
+      outlet_id: selectedOutlet,
+      reporter_id: employeeId || '00000000-0000-0000-0000-000000000000',
+      supervisor_id: '00000000-0000-0000-0000-000000000000',
+      title: incidentTitle.trim(),
+      description: incidentDesc.trim(),
+      resolution_status: 'open'
+    }
+  ]);
+
+  if (!error) {
+    alert('🚨 Kendala berhasil dilaporkan ke Supervisor!');
+    setIncidentTitle('');
+    setIncidentDesc('');
+  } else {
+    alert('❌ Gagal melaporkan kendala: ' + error.message);
+  }
+};
   // Form Transaksi Baru
   const [orderType, setOrderType] = useState('Offline');
   const [deliveryFee, setDeliveryFee] = useState('');
@@ -2013,7 +2078,56 @@ useEffect(() => {
                   </div>
                 )}
               </div>
+{/* FORM PENGAJUAN KASBON KARYAWAN */}
+<form onSubmit={handleApplyLoan} className="bg-white border border-slate-200 p-5 rounded-2xl space-y-3 shadow-sm">
+              <h3 className="font-bold text-xs text-indigo-900 flex items-center gap-1.5 border-b pb-2">
+                <span>💵 Form Pengajuan Kasbon Karyawan</span>
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <input
+                  type="number"
+                  placeholder="Nominal Kasbon (Rp)"
+                  value={loanAmount}
+                  onChange={(e) => setLoanAmount(e.target.value)}
+                  className="border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:outline-none"
+                />
+                <input
+                  type="text"
+                  placeholder="Alasan Pengajuan Kasbon..."
+                  value={loanReason}
+                  onChange={(e) => setLoanReason(e.target.value)}
+                  className="border border-slate-300 rounded-xl p-2.5 text-xs text-slate-900 focus:outline-none"
+                />
+              </div>
+              <p className="text-[10px] text-slate-500 italic">* Kasbon yang disetujui Supervisor akan otomatis dipotong saat penggajian.</p>
+              <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl text-xs shadow transition">
+                Ajukan Kasbon Sekarang
+              </button>
+            </form>
 
+            {/* FORM LAPOR KENDALA OUTLET (KPI SUPERVISOR) */}
+            <form onSubmit={handleReportIncident} className="bg-white border border-rose-200 p-5 rounded-2xl space-y-3 shadow-sm">
+              <h3 className="font-bold text-xs text-rose-900 flex items-center gap-1.5 border-b pb-2">
+                <span>🚨 Lapor Kendala / Keluhan Outlet ke Supervisor</span>
+              </h3>
+              <input
+                type="text"
+                placeholder="Judul Kendala (Contoh: Mesin Cuci No. 2 Bocor)"
+                value={incidentTitle}
+                onChange={(e) => setIncidentTitle(e.target.value)}
+                className="w-full border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:outline-none"
+              />
+              <textarea
+                rows={3}
+                placeholder="Rincian kendala secara detail..."
+                value={incidentDesc}
+                onChange={(e) => setIncidentDesc(e.target.value)}
+                className="w-full border border-slate-300 rounded-xl p-2.5 text-xs text-slate-900 focus:outline-none"
+              ></textarea>
+              <button type="submit" className="w-full bg-rose-600 hover:bg-rose-700 text-white font-bold py-2.5 rounded-xl text-xs shadow transition">
+                Kirim Laporan Kendala
+              </button>
+            </form>
               {/* PRODUKSI HARI INI */}
               <div className="bg-gradient-to-r from-emerald-600 to-teal-600 rounded-2xl p-4 text-white shadow-md space-y-3">
                 <div className="flex justify-between items-center border-b border-white/20 pb-2">
