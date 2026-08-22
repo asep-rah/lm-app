@@ -1042,12 +1042,52 @@ useEffect(() => {
     if (invData) await supabase.from('inventory').update({ stock_ml_gram: Number(invData.stock_ml_gram) + Number(stockAddAmount) * 1000 }).eq('id', invData.id); else await supabase.from('inventory').insert([{ outlet_id: selectedOutlet, item_name: stockItem, stock_ml_gram: Number(stockAddAmount) * 1000 }]);
     setStockAddAmount(''); setSuccessMsg(`✅ Stok Ditambah!`); refreshData(); setTimeout(() => setSuccessMsg(''), 3000); setIsSubmitting(false);
   };
+// Helper Hitung & Deduct Stok Bahan Baku (Deterjen & Parfum)
+const deductChemicalInventory = async (orderItemName: string, qtyKgOrPcs: number, outletId: string) => {
+  let detergentMl = 0;
+  let perfumeMl = 0;
+  const name = (orderItemName || '').toLowerCase();
+  const qty = qtyKgOrPcs || 1;
 
+  if (name.includes('bedcover')) {
+    detergentMl = 30 * qty;
+    perfumeMl = 15 * qty;
+  } else if (name.includes('sprei') || name.includes('spree')) {
+    detergentMl = 15 * qty;
+    perfumeMl = 8 * qty;
+  } else if (name.includes('kemeja') || name.includes('jaket')) {
+    detergentMl = 10 * qty;
+    perfumeMl = 5 * qty;
+  } else {
+    // Default Kiloan / Layanan Umum
+    detergentMl = 5 * qty;
+    perfumeMl = 3 * qty;
+  }
+
+  // Update langsung ke tabel inventory di Supabase
+  if (detergentMl > 0) {
+    const { data: detData } = await supabase.from('inventory').select('*').eq('outlet_id', outletId).ilike('item_name', '%Deterjen%').single();
+    if (detData) {
+      await supabase.from('inventory').update({ stock_ml_gram: Math.max(0, Number(detData.stock_ml_gram || 0) - detergentMl) }).eq('id', detData.id);
+    }
+  }
+
+  if (perfumeMl > 0) {
+    const { data: parfData } = await supabase.from('inventory').select('*').eq('outlet_id', outletId).ilike('item_name', '%Parfum%').single();
+    if (parfData) {
+      await supabase.from('inventory').update({ stock_ml_gram: Math.max(0, Number(parfData.stock_ml_gram || 0) - perfumeMl) }).eq('id', parfData.id);
+    }
+  }
+};
   const handleUpdateStatus = async (order: any, nextStatus: string) => {
     setIsSubmitting(true);
     const updateObj: any = { status: nextStatus };
     const s = (nextStatus || '').toLowerCase();
-
+    if (s.includes('cuci')) {
+      updateObj.by_cuci = employeeName;
+      // Otomatis potong stok Deterjen & Parfum berdasarkan takaran layanan
+      deductChemicalInventory(order.service_type || order.item_name || '', parseFloat(order.weight_kg || order.qty || 1), selectedOutlet);
+    }
     if (s.includes('sortir')) updateObj.by_sortir = employeeName;
     else if (s.includes('cuci')) updateObj.by_cuci = employeeName;
     else if (s.includes('kering')) updateObj.by_kering = employeeName;
