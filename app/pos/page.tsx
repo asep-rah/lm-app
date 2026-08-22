@@ -129,13 +129,21 @@ const handleSubmitDeposit = async () => {
   setAdminFee('');
   setProofUrl('');
 };
-// State Kasbon & Kendala Supervisor
+// State Kasbon Terintegrasi (Limit 60% Hari Kerja & Surat Piutang)
 const [loanAmount, setLoanAmount] = useState('');
 const [loanReason, setLoanReason] = useState('');
+const [isSpecialLoan, setIsSpecialLoan] = useState(false);
+const [piutangDocNo, setPiutangDocNo] = useState('');
+
 const [incidentTitle, setIncidentTitle] = useState('');
 const [incidentDesc, setIncidentDesc] = useState('');
 const [coaList, setCoaList] = useState<any[]>([]);
 
+// Hitung Limit Kasbon Otomatis berbasis Hari Kerja (26 Hari / Bulan & 60% Cap)
+const daysWorked = 10; // Default fallback akumulasi hari masuk kerja bulan berjalan
+const dailySalary = (empBasicSalary || 1300000) / 26;
+const accumulatedSalary = dailySalary * daysWorked;
+const maxAutoLoan = Math.floor(accumulatedSalary * 0.6);
 // Load Master COA dari Supabase
 useEffect(() => {
   const fetchCoa = async () => {
@@ -145,11 +153,21 @@ useEffect(() => {
   fetchCoa();
 }, []);
 
-// Handler Pengajuan Kasbon Karyawan
+// Handler Pengajuan Kasbon Karyawan (Dengan Validasi 60% & Surat Piutang)
 const handleApplyLoan = async (e: React.FormEvent) => {
   e.preventDefault();
   const amount = parseFloat(loanAmount) || 0;
   if (amount <= 0 || !loanReason.trim()) return alert('⚠️ Lengkapi nominal dan alasan kasbon!');
+
+  if (amount > maxAutoLoan && !isSpecialLoan) {
+    return alert(
+      `⚠️ Nominal melebihi limit otomatis Anda (Maks: Rp ${maxAutoLoan.toLocaleString('id-ID')} berdasarkan ${daysWorked || 10} hari kerja).\n\nCentang 'Kasbon Khusus / Darurat' dan masukkan Nomor Surat Piutang yang disetujui SPV.`
+    );
+  }
+
+  if (isSpecialLoan && !piutangDocNo.trim()) {
+    return alert('⚠️ Wajib memasukkan Nomor Surat Piutang SPV untuk kasbon di atas limit!');
+  }
 
   const { error } = await supabase.from('employee_loans').insert([
     {
@@ -157,14 +175,19 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       outlet_id: selectedOutlet,
       amount: amount,
       reason: loanReason.trim(),
-      status: 'pending'
+      status: 'pending',
+      is_special_loan: isSpecialLoan,
+      piutang_doc_number: isSpecialLoan ? piutangDocNo.trim() : null,
+      max_allowed_at_submission: maxAutoLoan
     }
   ]);
 
   if (!error) {
-    alert('✅ Pengajuan kasbon dikirim! Menunggu verifikasi dari Supervisor.');
+    alert('✅ Pengajuan kasbon dikirim! Menunggu verifikasi dari Supervisor/Owner.');
     setLoanAmount('');
     setLoanReason('');
+    setIsSpecialLoan(false);
+    setPiutangDocNo('');
   } else {
     alert('❌ Gagal mengajukan kasbon: ' + error.message);
   }
