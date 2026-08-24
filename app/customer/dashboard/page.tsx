@@ -84,169 +84,156 @@ export default function CustomerDashboardPage() {
 
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-// STATE INFORMASI DETAIL CUCIAN (1 - 4) - Default Kosong
-const [bagCount, setBagCount] = useState('');
-const [washProcess, setWashProcess] = useState('');
-const [hasFading, setHasFading] = useState('');
-const [hasValuables, setHasValuables] = useState('');
-const [thirdPartyVendor, setThirdPartyVendor] = useState('');
 
-// State Pilihan Kurir & Chat CS - Default Kosong
-const [courierType, setCourierType] = useState<'' | 'INTERNAL' | 'THIRD_PARTY'>('');
-const [queueCount, setQueueCount] = useState<number>(0);
-const [chatMessages, setChatMessages] = useState<any[]>([]);
-const [inputChat, setInputChat] = useState<string>('');
-const [activeChatOrderId, setActiveChatOrderId] = useState<string | null>(null);
+  const [bagCount, setBagCount] = useState('');
+  const [washProcess, setWashProcess] = useState('');
+  const [hasFading, setHasFading] = useState('');
+  const [hasValuables, setHasValuables] = useState('');
+  const [thirdPartyVendor, setThirdPartyVendor] = useState('');
 
-// Hitung Antrian Driver Internal Secara Auto
-useEffect(() => {
-  const fetchQueue = async () => {
-    const { count } = await supabase
-      .from('pickup_orders')
-      .select('*', { count: 'exact', head: true })
-      .in('status', ['Baru Masuk', 'Driver Menuju Lokasi']);
-    setQueueCount(count || 0);
-  };
-  fetchQueue();
-}, []);
-// State Data Orders & Deposit Customer
-const [activeOrders, setActiveOrders] = useState<any[]>([]);
-const [completedOrders, setCompletedOrders] = useState<any[]>([]);
-const [depositLogs, setDepositLogs] = useState<any[]>([]);
+  const [courierType, setCourierType] = useState<'' | 'INTERNAL' | 'THIRD_PARTY'>('');
+  const [queueCount, setQueueCount] = useState<number>(0);
+  const [chatMessages, setChatMessages] = useState<any[]>([]);
+  const [inputChat, setInputChat] = useState<string>('');
+  const [activeChatOrderId, setActiveChatOrderId] = useState<string | null>(null);
 
-// Hitung Estimasi Menit Penjemputan Internal
-const estimatedPickupMinutes = (queueCount * 30) + 15;
-
-// State Terpisah untuk Mode Chat (CS vs AI)
-const [chatMode, setChatMode] = useState<'cs' | 'ai'>('cs');
-const [aiMessages, setAiMessages] = useState<any[]>([
-  { id: '1', sender_type: 'ai', message: 'Halo! Saya AI Assistant Laundrivery. Ada yang bisa saya bantu mengenai layanan laundry?' }
-]);
-
-const handleSendChat = async () => {
-  if (!inputChat.trim()) return;
-  const messageText = inputChat.trim();
-  setInputChat('');
-
-  if (activeSupportTab === 'cs') {
-    // --- MODE 1: LIVE CS (SIMPAN KE SUPABASE) ---
-    const validOrderId = (activeChatOrderId && activeChatOrderId !== 'GENERAL_CS') ? activeChatOrderId : null;
-    const newMsg = {
-      id: Date.now().toString(),
-      order_id: validOrderId,
-      customer_phone: customerPhone || null,
-      sender_type: 'customer',
-      message: messageText,
-      created_at: new Date().toISOString()
+  useEffect(() => {
+    const fetchQueue = async () => {
+      const { count } = await supabase
+        .from('pickup_orders')
+        .select('*', { count: 'exact', head: true })
+        .in('status', ['Baru Masuk', 'Driver Menuju Lokasi']);
+      setQueueCount(count || 0);
     };
-    setChatMessages((prev) => [...prev, newMsg]);
+    fetchQueue();
+  }, []);
 
-    const { error } = await supabase.from('support_chats').insert([
-      {
+  const [activeOrders, setActiveOrders] = useState<any[]>([]);
+  const [completedOrders, setCompletedOrders] = useState<any[]>([]);
+  const [depositLogs, setDepositLogs] = useState<any[]>([]);
+
+  const estimatedPickupMinutes = (queueCount * 30) + 15;
+
+  const [aiMessages, setAiMessages] = useState<any[]>([
+    { id: '1', sender_type: 'ai', message: 'Halo! Saya AI Assistant Laundrivery. Ada yang bisa saya bantu mengenai layanan laundry?' }
+  ]);
+
+  const handleSendChat = async () => {
+    if (!inputChat.trim()) return;
+    const messageText = inputChat.trim();
+    setInputChat('');
+
+    if (activeSupportTab === 'cs') {
+      const validOrderId = (activeChatOrderId && activeChatOrderId !== 'GENERAL_CS') ? activeChatOrderId : null;
+      const newMsg = {
+        id: Date.now().toString(),
         order_id: validOrderId,
         customer_phone: customerPhone || null,
         sender_type: 'customer',
         message: messageText,
-      }
-    ]);
-
-    if (error) {
-      console.error('Error insert chat Supabase:', error.message);
-      alert(`⚠️ Gagal mengirim pesan: ${error.message}`);
-    }
-  } else {
-    // --- MODE 2: TANYA AI (PANGGIL API AI) ---
-    const userMsg = {
-      id: Date.now().toString(),
-      sender_type: 'customer',
-      message: messageText,
-      created_at: new Date().toISOString()
-    };
-    setAiMessages((prev) => [...prev, userMsg]);
-
-    try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: messageText }),
-      });
-      const data = await res.json();
-
-      const aiReply = {
-        id: (Date.now() + 1).toString(),
-        sender_type: 'ai',
-        message: data.reply || data.message || 'Maaf, AI sedang tidak dapat merespons.',
         created_at: new Date().toISOString()
       };
-      setAiMessages((prev) => [...prev, aiReply]);
-    } catch (err) {
-      setAiMessages((prev) => [
-        ...prev,
+      setChatMessages((prev) => [...prev, newMsg]);
+
+      const { error } = await supabase.from('support_chats').insert([
         {
-          id: (Date.now() + 1).toString(),
-          sender_type: 'ai',
-          message: '⚠️ Gagal terhubung ke AI Assistant.',
-          created_at: new Date().toISOString()
+          order_id: validOrderId,
+          customer_phone: customerPhone || null,
+          sender_type: 'customer',
+          message: messageText,
         }
       ]);
-    }
-  }
-};
-// Fetch Pesan Chat Real-Time
-const fetchChatMessages = async (targetId: string) => {
-  const { data, error } = await supabase
-    .from('support_chats')
-    .select('*')
-    .eq('order_id', targetId)
-    .order('created_at', { ascending: true });
 
-  if (!error && data) {
-    setChatMessages(data);
-  }
-};
+      if (error) {
+        console.error('Error insert chat Supabase:', error.message);
+      }
+    } else {
+      const userMsg = {
+        id: Date.now().toString(),
+        sender_type: 'customer',
+        message: messageText,
+        created_at: new Date().toISOString()
+      };
+      setAiMessages((prev) => [...prev, userMsg]);
 
-// Trigger saat modal chat dibuka
-useEffect(() => {
-  if (activeChatOrderId) {
-    fetchChatMessages(activeChatOrderId);
-    
-    // Setup Realtime Subscription Supabase
-    const channel = supabase
-      .channel('support_chats_changes')
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'support_chats' },
-        (payload) => {
-          if (payload.new.order_id === activeChatOrderId) {
-            setChatMessages((prev) => [...prev, payload.new]);
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: messageText }),
+        });
+        const data = await res.json();
+
+        const aiReply = {
+          id: (Date.now() + 1).toString(),
+          sender_type: 'ai',
+          message: data.reply || data.message || 'Halo Kak! Layanan Laundrivery menyediakan Antar-Jemput Express & Reguler. Ada yang bisa kami bantu kembali?',
+          created_at: new Date().toISOString()
+        };
+        setAiMessages((prev) => [...prev, aiReply]);
+      } catch (err) {
+        setAiMessages((prev) => [
+          ...prev,
+          {
+            id: (Date.now() + 1).toString(),
+            sender_type: 'ai',
+            message: '⚠️ AI Assistant sedang sibuk. Silakan beralih ke tab Live CS untuk bantuan CS Admin.',
+            created_at: new Date().toISOString()
           }
-        }
-      )
-      .subscribe();
+        ]);
+      }
+    }
+  };
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }
-}, [activeChatOrderId]);
-// Load Chat CS (Aman untuk Chat Umum & Chat Per Order)
-const loadChats = async (orderId: string | null) => {
-  setActiveChatOrderId(orderId);
+  const fetchChatMessages = async (targetId: string) => {
+    const { data, error } = await supabase
+      .from('support_chats')
+      .select('*')
+      .eq('order_id', targetId)
+      .order('created_at', { ascending: true });
 
-  let query = supabase.from('support_chats').select('*');
+    if (!error && data) {
+      setChatMessages(data);
+    }
+  };
 
-  if (orderId && orderId !== 'GENERAL_CS') {
-    query = query.eq('order_id', orderId);
-  } else {
-    query = query.is('order_id', null);
-  }
+  useEffect(() => {
+    if (activeChatOrderId) {
+      fetchChatMessages(activeChatOrderId);
+      
+      const channel = supabase
+        .channel('support_chats_changes')
+        .on(
+          'postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'support_chats' },
+          (payload) => {
+            if (payload.new.order_id === activeChatOrderId) {
+              setChatMessages((prev) => [...prev, payload.new]);
+            }
+          }
+        )
+        .subscribe();
 
-  const { data, error } = await query.order('created_at', { ascending: true });
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    }
+  }, [activeChatOrderId]);
 
-  if (!error && data) {
-    setChatMessages(data);
-  }
-};
+  const loadChats = async (orderId: string | null) => {
+    setActiveChatOrderId(orderId);
+    let query = supabase.from('support_chats').select('*');
+    if (orderId && orderId !== 'GENERAL_CS') {
+      query = query.eq('order_id', orderId);
+    } else {
+      query = query.is('order_id', null);
+    }
+    const { data, error } = await query.order('created_at', { ascending: true });
+    if (!error && data) {
+      setChatMessages(data);
+    }
+  };
+
   useEffect(() => {
     async function initPWA() {
       const { data: dbOutlets } = await supabase.from('outlets').select('*');
@@ -408,25 +395,26 @@ const loadChats = async (orderId: string | null) => {
     setIsEditingAddress(false);
     alert('✅ Alamat penjemputan berhasil disimpan!');
   };
-// Ambil GPS Presisi Customer
-const handleGetCurrentLocation = () => {
-  if (!navigator.geolocation) {
-    return alert('⚠️ Browser/HP Anda tidak mendukung deteksi lokasi otomatis.');
-  }
 
-  navigator.geolocation.getCurrentPosition(
-    (pos) => {
-      const { latitude, longitude } = pos.coords;
-      setUserCoords({ lat: latitude, lon: longitude });
-      alert(`📍 Lokasi GPS berhasil didapatkan! (${latitude.toFixed(5)}, ${longitude.toFixed(5)})`);
-    },
-    (err) => {
-      console.error('Gagal ambil GPS:', err);
-      alert('⚠️ Gagal mengambil lokasi GPS. Pastikan izin lokasi/GPS di HP Anda aktif.');
-    },
-    { enableHighAccuracy: true }
-  );
-};
+  const handleGetCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      return alert('⚠️ Browser/HP Anda tidak mendukung deteksi lokasi otomatis.');
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude, longitude } = pos.coords;
+        setUserCoords({ lat: latitude, lon: longitude });
+        alert(`📍 Lokasi GPS berhasil didapatkan! (${latitude.toFixed(5)}, ${longitude.toFixed(5)})`);
+      },
+      (err) => {
+        console.error('Gagal ambil GPS:', err);
+        alert('⚠️ Gagal mengambil lokasi GPS. Pastikan izin lokasi/GPS di HP Anda aktif.');
+      },
+      { enableHighAccuracy: true }
+    );
+  };
+
   const getServiceUnitPrice = (svcName: string) => {
     const activeSvc = dynamicServices.find(s => (s.name || '').trim().toLowerCase() === (svcName || '').trim().toLowerCase());
     if (activeSvc) {
@@ -529,7 +517,6 @@ const handleGetCurrentLocation = () => {
     const nowIso = new Date().toISOString();
     const todayDateStr = nowIso.split('T')[0];
 
-    // GABUNGKAN 4 INFORMASI DETAIL CUCIAN KE DALAM CATATAN
     const detailInfo = `[INFO CUCIAN] Kantong: ${bagCount} | Cuci: ${washProcess} | Luntur: ${hasFading} | Brg Berharga: ${hasValuables}`;
     const finalNotes = notesCombined ? `${detailInfo} | ${notesCombined}` : detailInfo;
 
@@ -556,7 +543,9 @@ const handleGetCurrentLocation = () => {
       setNotes('');
       setClaimedPromo(null);
       setKiloanEstKg('3');
-      setKiloanDuration('Reguler');
+      setKiloanDuration('Reguler (3 Hari)');
+      setIsKiloanChecked(false);
+      setIsSatuanChecked(false);
       setActiveTab('home');
       fetchCustomerProfile(normPhone);
     } else {
@@ -662,20 +651,22 @@ const handleGetCurrentLocation = () => {
                   </div>
                 </button>
               </div>
-{/* FLOATING BANNER BANTUAN LIVE CS & AI */}
-<div className="bg-gradient-to-r from-indigo-600 to-purple-600 p-4 rounded-3xl text-white my-4 shadow-lg flex justify-between items-center">
-            <div>
-              <h4 className="font-black text-xs">💬 Butuh Bantuan / Tanya AI?</h4>
-              <p className="text-[10px] text-indigo-100">Hubungi CS Admin atau AI Assistant kami.</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setActiveChatOrderId('GENERAL_CS')}
-              className="bg-white text-indigo-900 font-extrabold px-3.5 py-2 rounded-xl text-xs shadow hover:bg-indigo-50 transition"
-            >
-              Mulai Chat
-            </button>
-          </div>
+
+              {/* FLOATING BANNER BANTUAN LIVE CS & AI */}
+              <div className="bg-gradient-to-r from-indigo-600 to-purple-600 p-4 rounded-3xl text-white my-4 shadow-lg flex justify-between items-center">
+                <div>
+                  <h4 className="font-black text-xs">💬 Butuh Bantuan / Tanya AI?</h4>
+                  <p className="text-[10px] text-indigo-100">Hubungi CS Admin atau AI Assistant kami.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveChatOrderId('GENERAL_CS')}
+                  className="bg-white text-indigo-900 font-extrabold px-3.5 py-2 rounded-xl text-xs shadow hover:bg-indigo-50 transition"
+                >
+                  Mulai Chat
+                </button>
+              </div>
+
               <div className="space-y-2.5 pt-1">
                 <div className="flex justify-between items-center">
                   <h3 className="text-xs font-extrabold text-slate-700 uppercase tracking-wider">⚡ Pesanan Dalam Proses ({activeOrders.length})</h3>
@@ -697,72 +688,70 @@ const handleGetCurrentLocation = () => {
                       <span className="text-slate-400 font-medium">{new Date(order.created_at).toLocaleDateString('id-ID')}</span>
                       <span className="font-black text-blue-600 text-xs">Ongkir: Rp {Number(order.delivery_fee || 0).toLocaleString('id-ID')}</span>
                     </div>
-                    {/* VISUAL PROGRESS STEPPER TRACKING REAL-TIME */}
-          <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-2xl my-2.5 space-y-2.5">
-            <div className="flex justify-between items-center">
-              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Status Pengerjaan Live</span>
-              <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-2.5 py-0.5 rounded-full border border-indigo-200">
-                {order.status || 'Dalam Antrean'}
-              </span>
-            </div>
 
-            <div className="grid grid-cols-6 gap-1 text-center pt-1">
-              {[
-                { label: 'Jemput', icon: '🚚', key: 'jemput' },
-                { label: 'Cuci', icon: '🧼', key: 'cuci' },
-                { label: 'Kering', icon: '💨', key: 'kering' },
-                { label: 'Setrika', icon: '👔', key: 'setrika' },
-                { label: 'Siap', icon: '📦', key: 'siap' },
-                { label: 'Selesai', icon: '✅', key: 'selesai' },
-              ].map((step, idx) => {
-                const currentStatus = (order.status || '').toLowerCase();
-                const isActive = currentStatus.includes(step.key);
-                return (
-                  <div key={idx} className="flex flex-col items-center">
-                    <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold transition-all ${
-                      isActive 
-                        ? 'bg-emerald-500 text-white ring-2 ring-emerald-200 scale-105' 
-                        : 'bg-slate-200 text-slate-400'
-                    }`}>
-                      {step.icon}
+                    <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-2xl my-2.5 space-y-2.5">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Status Pengerjaan Live</span>
+                        <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-2.5 py-0.5 rounded-full border border-indigo-200">
+                          {order.status || 'Dalam Antrean'}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-6 gap-1 text-center pt-1">
+                        {[
+                          { label: 'Jemput', icon: '🚚', key: 'jemput' },
+                          { label: 'Cuci', icon: '🧼', key: 'cuci' },
+                          { label: 'Kering', icon: '💨', key: 'kering' },
+                          { label: 'Setrika', icon: '👔', key: 'setrika' },
+                          { label: 'Siap', icon: '📦', key: 'siap' },
+                          { label: 'Selesai', icon: '✅', key: 'selesai' },
+                        ].map((step, idx) => {
+                          const currentStatus = (order.status || '').toLowerCase();
+                          const isActive = currentStatus.includes(step.key);
+                          return (
+                            <div key={idx} className="flex flex-col items-center">
+                              <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold transition-all ${
+                                isActive 
+                                  ? 'bg-emerald-500 text-white ring-2 ring-emerald-200 scale-105' 
+                                  : 'bg-slate-200 text-slate-400'
+                              }`}>
+                                {step.icon}
+                              </div>
+                              <span className={`text-[8px] mt-1 font-semibold ${isActive ? 'text-emerald-700 font-bold' : 'text-slate-400'}`}>
+                                {step.label}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
-                    <span className={`text-[8px] mt-1 font-semibold ${isActive ? 'text-emerald-700 font-bold' : 'text-slate-400'}`}>
-                      {step.label}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-                  {/* INDIKATOR LIVE TRACKING DRIVER */}
-          {order.status === 'Driver Menuju Lokasi' && order.driver_lat && (
-            <div className="bg-blue-50 border border-blue-200 p-3 rounded-2xl space-y-1.5 text-xs mt-2">
-              <div className="flex justify-between items-center">
-                <span className="font-extrabold text-blue-900 flex items-center gap-1">
-                  📍 Driver Sedang Menuju Lokasi
-                </span>
-                <a
-                  href={`https://maps.google.com/?q=${order.driver_lat},${order.driver_lon}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="bg-blue-600 text-white font-bold text-[10px] px-2.5 py-1 rounded-lg shadow-sm"
-                >
-                  Buka Peta Live 🗺️
-                </a>
-              </div>
-              <p className="text-[10px] text-blue-700">Posisi driver diperbarui secara otomatis.</p>
-            </div>
-          )}
 
-          {/* FOTO BUKTI PENJEMPUTAN */}
-          {order.photo_url && (
-            <div className="mt-2 rounded-xl overflow-hidden border border-slate-200">
-              <p className="text-[10px] font-bold text-slate-500 p-1.5 bg-slate-50">📸 Foto Bukti Cucian Diterima Driver:</p>
-              <img src={order.photo_url} alt="Foto Bukti Cucian" className="w-full h-28 object-cover" />
-            </div>
-          )}
-        </div>
-      ))}
+                    {order.status === 'Driver Menuju Lokasi' && order.driver_lat && (
+                      <div className="bg-blue-50 border border-blue-200 p-3 rounded-2xl space-y-1.5 text-xs mt-2">
+                        <div className="flex justify-between items-center">
+                          <span className="font-extrabold text-blue-900 flex items-center gap-1">
+                            📍 Driver Sedang Menuju Lokasi
+                          </span>
+                          <a
+                            href={`https://maps.google.com/?q=${order.driver_lat},${order.driver_lon}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="bg-blue-600 text-white font-bold text-[10px] px-2.5 py-1 rounded-lg shadow-sm"
+                          >
+                            Buka Peta Live 🗺️
+                          </a>
+                        </div>
+                        <p className="text-[10px] text-blue-700">Posisi driver diperbarui secara otomatis.</p>
+                      </div>
+                    )}
+
+                    {order.photo_url && (
+                      <div className="mt-2 rounded-xl overflow-hidden border border-slate-200">
+                        <p className="text-[10px] font-bold text-slate-500 p-1.5 bg-slate-50">📸 Foto Bukti Cucian Diterima Driver:</p>
+                        <img src={order.photo_url} alt="Foto Bukti Cucian" className="w-full h-28 object-cover" />
+                      </div>
+                    )}
+                  </div>
+                ))}
                 {activeOrders.length === 0 && (
                   <div className="bg-white border border-slate-200/80 p-8 rounded-3xl text-center text-xs text-slate-400 shadow-sm">
                     Belum ada cucian yang sedang diproses.
@@ -792,32 +781,33 @@ const handleGetCurrentLocation = () => {
                     ))}
                   </select>
                 </div>
-{/* INPUT ALAMAT PENJEMPUTAN + GPS PINPOINT */}
-<div className="space-y-1.5 mt-3">
-            <div className="flex justify-between items-center">
-              <label className="text-[10px] font-extrabold text-slate-500 uppercase">Alamat Penjemputan *</label>
-              <button
-                type="button"
-                onClick={handleGetCurrentLocation}
-                className="text-[10px] font-bold text-indigo-600 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-lg hover:bg-indigo-100 flex items-center gap-1 transition"
-              >
-                <span>📍</span>
-                <span>{userCoords ? 'GPS Terdeteksi ✓' : 'Ambil Lokasi GPS Presisi'}</span>
-              </button>
-            </div>
-            <textarea
-              value={customerAddress}
-              onChange={(e) => setCustomerAddress(e.target.value)}
-              placeholder="Ketik alamat lengkap (Jalan, No. Rumah, Patokan)..."
-              className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3 text-xs font-bold text-slate-800 focus:outline-none"
-              rows={2}
-            />
-            {userCoords && (
-              <p className="text-[9px] text-emerald-600 font-bold flex items-center gap-1">
-                <span>✓</span> Lat: {userCoords.lat.toFixed(5)}, Lon: {userCoords.lon.toFixed(5)} (Pinpoint tersimpan)
-              </p>
-            )}
-          </div>
+
+                <div className="space-y-1.5 mt-3">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[10px] font-extrabold text-slate-500 uppercase">Alamat Penjemputan *</label>
+                    <button
+                      type="button"
+                      onClick={handleGetCurrentLocation}
+                      className="text-[10px] font-bold text-indigo-600 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-lg hover:bg-indigo-100 flex items-center gap-1 transition"
+                    >
+                      <span>📍</span>
+                      <span>{userCoords ? 'GPS Terdeteksi ✓' : 'Ambil Lokasi GPS Presisi'}</span>
+                    </button>
+                  </div>
+                  <textarea
+                    value={customerAddress}
+                    onChange={(e) => setCustomerAddress(e.target.value)}
+                    placeholder="Ketik alamat lengkap (Jalan, No. Rumah, Patokan)..."
+                    className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3 text-xs font-bold text-slate-800 focus:outline-none"
+                    rows={2}
+                  />
+                  {userCoords && (
+                    <p className="text-[9px] text-emerald-600 font-bold flex items-center gap-1">
+                      <span>✓</span> Lat: {userCoords.lat.toFixed(5)}, Lon: {userCoords.lon.toFixed(5)} (Pinpoint tersimpan)
+                    </p>
+                  )}
+                </div>
+
                 <div>
                   <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Nama Lengkap Pemesan</label>
                   <input
@@ -830,7 +820,6 @@ const handleGetCurrentLocation = () => {
                   />
                 </div>
 
-                {/* PROMO BANNER FORM ORDER */}
                 <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200/80 p-3.5 rounded-2xl flex justify-between items-center text-xs">
                   <div>
                     <p className="font-extrabold text-amber-900 text-[11px]">
@@ -849,7 +838,6 @@ const handleGetCurrentLocation = () => {
                   </button>
                 </div>
 
-                {/* SINKRONISASI PAKET KILOAN POS */}
                 <div className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100 space-y-3">
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
@@ -884,7 +872,7 @@ const handleGetCurrentLocation = () => {
                             onChange={(e) => setKiloanDuration(e.target.value)}
                             className="w-full bg-amber-50 border border-amber-300 rounded-xl p-2 text-xs font-extrabold text-amber-800"
                           >
-                            <option value="Reguler">Reguler 3 Hari</option>
+                            <option value="Reguler (3 Hari)">Reguler 3 Hari</option>
                             <option value="Oneday">Oneday (+50%)</option>
                             <option value="Express">Express 6 Jam (+100%)</option>
                             <option value="Quick">Quick 3 Jam (+200%)</option>
@@ -908,7 +896,6 @@ const handleGetCurrentLocation = () => {
                   )}
                 </div>
 
-                {/* SINKRONISASI PAKET SATUAN POS */}
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
@@ -991,86 +978,82 @@ const handleGetCurrentLocation = () => {
                     </div>
                   )}
                 </div>
-                {/* INFORMASI DETAIL CUCIAN (1 - 4) */}
-          <div className="bg-slate-800/80 border border-slate-700/80 p-4 rounded-2xl space-y-3.5 my-4">
-            <h3 className="text-xs font-black tracking-wider uppercase text-cyan-400 flex items-center gap-2">
-              📋 INFORMASI DETAIL CUCIAN
-            </h3>
 
-            <div className="space-y-3 text-xs text-slate-200">
-              {/* 1. Jumlah Kantong */}
-              <div className="flex justify-between items-center">
-                <span className="font-semibold text-slate-300">1. Jumlah Kantong:</span>
-                <select
-                value={bagCount}
-                onChange={(e) => setBagCount(e.target.value)}
-                className="bg-slate-900 border border-slate-700 text-cyan-400 font-extrabold rounded-xl px-3 py-1.5 focus:outline-none"
-              >
-                <option value="">-- Pilih Jumlah Kantong --</option>
-                <option value="1 Kantong">1 Kantong</option>
-                <option value="2 Kantong">2 Kantong</option>
-                <option value="3 Kantong">3 Kantong</option>
-                <option value="4+ Kantong">4+ Kantong</option>
-              </select>
-              </div>
+                <div className="bg-slate-800/80 border border-slate-700/80 p-4 rounded-2xl space-y-3.5 my-4">
+                  <h3 className="text-xs font-black tracking-wider uppercase text-cyan-400 flex items-center gap-2">
+                    📋 INFORMASI DETAIL CUCIAN
+                  </h3>
 
-              {/* 2. Proses Cuci */}
-              <div className="flex justify-between items-center">
-                <span className="font-semibold text-slate-300">2. Proses Cuci:</span>
-                <select
-                value={washProcess}
-                onChange={(e) => setWashProcess(e.target.value)}
-                className="bg-slate-900 border border-slate-700 text-cyan-400 font-extrabold rounded-xl px-3 py-1.5 focus:outline-none"
-              >
-                <option value="">-- Pilih Proses Cuci --</option>
-                <option value="Gabung Semua">Gabung Semua</option>
-                <option value="Pisah Perkantong">Pisah Perkantong</option>
-              </select>
-              </div>
+                  <div className="space-y-3 text-xs text-slate-200">
+                    <div className="flex justify-between items-center">
+                      <span className="font-semibold text-slate-300">1. Jumlah Kantong:</span>
+                      <select
+                        value={bagCount}
+                        onChange={(e) => setBagCount(e.target.value)}
+                        className="bg-slate-900 border border-slate-700 text-cyan-400 font-extrabold rounded-xl px-3 py-1.5 focus:outline-none"
+                      >
+                        <option value="">-- Pilih Jumlah Kantong --</option>
+                        <option value="1 Kantong">1 Kantong</option>
+                        <option value="2 Kantong">2 Kantong</option>
+                        <option value="3 Kantong">3 Kantong</option>
+                        <option value="4+ Kantong">4+ Kantong</option>
+                      </select>
+                    </div>
 
-              {/* 3. Ada Pakaian Luntur? */}
-              <div className="flex justify-between items-center">
-                <span className="font-semibold text-slate-300">3. Ada Pakaian Luntur?</span>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setHasFading('Tidak')}
-                    className={`px-3 py-1 rounded-xl font-extrabold text-xs transition ${hasFading === 'Tidak' ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
-                  >
-                    Tidak
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setHasFading('Ya')}
-                    className={`px-3 py-1 rounded-xl font-extrabold text-xs transition ${hasFading === 'Ya' ? 'bg-rose-500 text-white shadow-md shadow-rose-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
-                  >
-                    Ya
-                  </button>
+                    <div className="flex justify-between items-center">
+                      <span className="font-semibold text-slate-300">2. Proses Cuci:</span>
+                      <select
+                        value={washProcess}
+                        onChange={(e) => setWashProcess(e.target.value)}
+                        className="bg-slate-900 border border-slate-700 text-cyan-400 font-extrabold rounded-xl px-3 py-1.5 focus:outline-none"
+                      >
+                        <option value="">-- Pilih Proses Cuci --</option>
+                        <option value="Gabung Semua">Gabung Semua</option>
+                        <option value="Pisah Perkantong">Pisah Perkantong</option>
+                      </select>
+                    </div>
+
+                    <div className="flex justify-between items-center">
+                      <span className="font-semibold text-slate-300">3. Ada Pakaian Luntur?</span>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setHasFading('Tidak')}
+                          className={`px-3 py-1 rounded-xl font-extrabold text-xs transition ${hasFading === 'Tidak' ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
+                        >
+                          Tidak
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setHasFading('Ya')}
+                          className={`px-3 py-1 rounded-xl font-extrabold text-xs transition ${hasFading === 'Ya' ? 'bg-rose-500 text-white shadow-md shadow-rose-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
+                        >
+                          Ya
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex justify-between items-center">
+                      <span className="font-semibold text-slate-300">4. Ada Barang Berharga?</span>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setHasValuables('Tidak')}
+                          className={`px-3 py-1 rounded-xl font-extrabold text-xs transition ${hasValuables === 'Tidak' ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
+                        >
+                          Tidak
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setHasValuables('Ya')}
+                          className={`px-3 py-1 rounded-xl font-extrabold text-xs transition ${hasValuables === 'Ya' ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
+                        >
+                          Ya
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
-              </div>
-
-              {/* 4. Ada Barang Berharga? */}
-              <div className="flex justify-between items-center">
-                <span className="font-semibold text-slate-300">4. Ada Barang Berharga?</span>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setHasValuables('Tidak')}
-                    className={`px-3 py-1 rounded-xl font-extrabold text-xs transition ${hasValuables === 'Tidak' ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
-                  >
-                    Tidak
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setHasValuables('Ya')}
-                    className={`px-3 py-1 rounded-xl font-extrabold text-xs transition ${hasValuables === 'Ya' ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
-                  >
-                    Ya
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
 
                 <input
                   type="text"
@@ -1080,7 +1063,6 @@ const handleGetCurrentLocation = () => {
                   className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3.5 text-xs text-slate-800 font-medium"
                 />
 
-                {/* RINCIAN ESTIMASI & ONGKIR */}
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-1.5 text-xs">
                   <div className="flex justify-between text-slate-500 font-medium"><span>Subtotal Kiloan:</span><span>Rp {kiloanSubtotal.toLocaleString('id-ID')}</span></div>
                   <div className="flex justify-between text-slate-500 font-medium"><span>Subtotal Satuan:</span><span>Rp {satuanSubtotal.toLocaleString('id-ID')}</span></div>
@@ -1116,46 +1098,45 @@ const handleGetCurrentLocation = () => {
                     <span>Rp {grandTotalEstimate.toLocaleString('id-ID')}</span>
                   </div>
                 </div>
-          {/* PILIHAN METODE KURIR */}
-          <div className="bg-slate-900/90 border border-slate-800 p-4 rounded-2xl space-y-3 my-4">
-            <label className="text-xs font-bold text-slate-300 block">Pilih Metode Penjemputan</label>
-            
-            <div className="grid grid-cols-2 gap-3">
-              {/* Driver Internal */}
-              <div 
-                onClick={() => setCourierType('INTERNAL')}
-                className={`p-3 rounded-xl border cursor-pointer transition ${
-                  courierType === 'INTERNAL' 
-                    ? 'bg-cyan-950/50 border-cyan-500 text-white' 
-                    : 'bg-slate-800/50 border-slate-700 text-slate-400'
-                }`}
-              >
-                <div className="text-xs font-bold mb-1">🛵 Driver Internal</div>
-                <div className="text-[10px] text-cyan-400 font-semibold">
-                  {queueCount === 0 ? '🟢 Tanpa Antrian' : `🔴 ${queueCount} Antrian`}
-                </div>
-                <div className="text-[9px] text-slate-400 mt-1">
-                  Est. Penjemputan ~{estimatedPickupMinutes} Menit
-                </div>
-              </div>
 
-              {/* Pihak Ketiga */}
-              <div 
-                onClick={() => setCourierType('THIRD_PARTY')}
-                className={`p-3 rounded-xl border cursor-pointer transition ${
-                  courierType === 'THIRD_PARTY' 
-                    ? 'bg-cyan-950/50 border-cyan-500 text-white' 
-                    : 'bg-slate-800/50 border-slate-700 text-slate-400'
-                }`}
-              >
-                <div className="text-xs font-bold mb-1">📦 Pihak Ketiga</div>
-                <div className="text-[10px] text-amber-400 font-semibold">Gojek / Grab / Lalamove</div>
-                <div className="text-[9px] text-slate-400 mt-1">
-                  Dipesankan manual oleh CS + Link Live Track
+                <div className="bg-slate-900/90 border border-slate-800 p-4 rounded-2xl space-y-3 my-4">
+                  <label className="text-xs font-bold text-slate-300 block">Pilih Metode Penjemputan</label>
+                  
+                  <div className="grid grid-cols-2 gap-3">
+                    <div 
+                      onClick={() => setCourierType('INTERNAL')}
+                      className={`p-3 rounded-xl border cursor-pointer transition ${
+                        courierType === 'INTERNAL' 
+                          ? 'bg-cyan-950/50 border-cyan-500 text-white' 
+                          : 'bg-slate-800/50 border-slate-700 text-slate-400'
+                      }`}
+                    >
+                      <div className="text-xs font-bold mb-1">🛵 Driver Internal</div>
+                      <div className="text-[10px] text-cyan-400 font-semibold">
+                        {queueCount === 0 ? '🟢 Tanpa Antrian' : `🔴 ${queueCount} Antrian`}
+                      </div>
+                      <div className="text-[9px] text-slate-400 mt-1">
+                        Est. Penjemputan ~{estimatedPickupMinutes} Menit
+                      </div>
+                    </div>
+
+                    <div 
+                      onClick={() => setCourierType('THIRD_PARTY')}
+                      className={`p-3 rounded-xl border cursor-pointer transition ${
+                        courierType === 'THIRD_PARTY' 
+                          ? 'bg-cyan-950/50 border-cyan-500 text-white' 
+                          : 'bg-slate-800/50 border-slate-700 text-slate-400'
+                      }`}
+                    >
+                      <div className="text-xs font-bold mb-1">📦 Pihak Ketiga</div>
+                      <div className="text-[10px] text-amber-400 font-semibold">Gojek / Grab / Lalamove</div>
+                      <div className="text-[9px] text-slate-400 mt-1">
+                        Dipesankan manual oleh CS + Link Live Track
+                      </div>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
-          </div>
+
                 <button
                   type="submit"
                   disabled={isSubmitting}
@@ -1322,7 +1303,6 @@ const handleGetCurrentLocation = () => {
               <h3 className="text-sm font-extrabold text-slate-900">🎁 Klaim Voucher Promo Active</h3>
               <button onClick={() => setShowPromoModal(false)} className="text-slate-400 hover:text-slate-600 font-bold">✕</button>
             </div>
-
             <div className="space-y-2.5">
               <p className="text-[10px] font-extrabold text-slate-400 uppercase">Pilih Promo Untuk Pesanan Ini:</p>
               {availablePromos.length > 0 ? (
@@ -1378,7 +1358,7 @@ const handleGetCurrentLocation = () => {
             <div>
               <h3 className="text-base font-extrabold text-slate-900">Informasi Estimasi Tagihan</h3>
               <p className="text-xs text-slate-600 mt-2 leading-relaxed font-medium">
-              Perhitungan angka ini adalah <b>estimasi sementara</b>, tagihan final akan dihitung dan dikonfirmasi ulang oleh kasir outlet setelah pakaian ditimbang dan dicek langsung di lokasi.
+                Perhitungan angka ini adalah <b>estimasi sementara</b>, tagihan final akan dihitung dan dikonfirmasi ulang oleh kasir outlet setelah pakaian ditimbang dan dicek langsung di lokasi.
               </p>
             </div>
             <button
@@ -1390,93 +1370,99 @@ const handleGetCurrentLocation = () => {
           </div>
         </div>
       )}
+
       {/* MODAL CHAT CUSTOMER SERVICE */}
       {activeChatOrderId && (
-          <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
-            <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-2xl flex flex-col h-[500px]">
-              {/* Header Modal Chat & Switcher AI/CS */}
-          <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-white">💬 Bantuan Laundrivery</span>
-              <div className="flex bg-slate-800 p-0.5 rounded-lg border border-slate-700">
-                <button
-                  type="button"
-                  onClick={() => setActiveSupportTab('cs')}
-                  className={`px-2 py-0.5 text-[10px] font-bold rounded-md transition ${
-                    activeSupportTab === 'cs' ? 'bg-cyan-600 text-white' : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  🎧 Live CS
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveSupportTab('ai')}
-                  className={`px-2 py-0.5 text-[10px] font-bold rounded-md transition ${
-                    activeSupportTab === 'ai' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  🤖 Tanya AI
-                </button>
-              </div>
-            </div>
-            <button onClick={() => setActiveChatOrderId(null)} className="text-slate-400 hover:text-white text-xs font-bold">✕</button>
-          </div>
-
-              {/* Bubble Chat Area */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-900/90">
-            {(chatMode === 'cs' ? chatMessages : aiMessages).length === 0 ? (
-              <div className="text-center text-xs text-slate-400 py-12">
-                Belum ada percakapan. Halo CS kami sekarang!
-              </div>
-            ) : (
-              (chatMode === 'cs' ? chatMessages : aiMessages).map((msg: any) => {
-                const isCustomer = msg.sender_type === 'customer';
-                const isAi = msg.sender_type === 'ai';
-
-                return (
-                  <div
-                    key={msg.id || msg.created_at}
-                    className={`flex ${isCustomer ? 'justify-end' : 'justify-start'}`}
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-2xl flex flex-col h-[500px]">
+            {/* Header Modal Chat & Switcher AI/CS */}
+            <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-white">💬 Bantuan Laundrivery</span>
+                <div className="flex bg-slate-800 p-0.5 rounded-lg border border-slate-700">
+                  <button
+                    type="button"
+                    onClick={() => setActiveSupportTab('cs')}
+                    className={`px-2 py-0.5 text-[10px] font-bold rounded-md transition ${
+                      activeSupportTab === 'cs' ? 'bg-cyan-600 text-white' : 'text-slate-400 hover:text-white'
+                    }`}
                   >
-                    <div
-                      className={`max-w-[80%] rounded-2xl px-3.5 py-2 text-xs font-medium shadow ${
-                        isCustomer
-                          ? 'bg-cyan-500 text-slate-950 rounded-br-none'
-                          : isAi
-                          ? 'bg-purple-600 text-white rounded-bl-none shadow-md'
-                          : 'bg-slate-800 text-slate-100 rounded-bl-none border border-slate-700'
-                      }`}
-                    >
-                      <p>{msg.message}</p>
-                      <span className={`text-[8px] block mt-1 ${isCustomer ? 'text-slate-900/70 text-right' : 'text-slate-400'}`}>
-                        {new Date(msg.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-
-              {/* Input Chat */}
-              <div className="p-3 border-t border-slate-800 flex gap-2">
-                <input 
-                  type="text"
-                  value={inputChat}
-                  onChange={(e) => setInputChat(e.target.value)}
-                  placeholder="Ketik pesan ke CS..."
-                  className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3 text-xs text-white focus:outline-none"
-                />
-                <button 
-                  onClick={handleSendChat}
-                  className="bg-cyan-500 hover:bg-cyan-600 text-white font-bold px-4 py-2 rounded-xl text-xs"
-                >
-                  Kirim
-                </button>
+                    🎧 Live CS
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSupportTab('ai')}
+                    className={`px-2 py-0.5 text-[10px] font-bold rounded-md transition ${
+                      activeSupportTab === 'ai' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    🤖 Tanya AI
+                  </button>
+                </div>
               </div>
+              <button onClick={() => setActiveChatOrderId(null)} className="text-slate-400 hover:text-white text-xs font-bold">✕</button>
+            </div>
+
+            {/* Bubble Chat Area */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-900/90">
+              {(activeSupportTab === 'cs' ? chatMessages : aiMessages).length === 0 ? (
+                <div className="text-center text-xs text-slate-400 py-12">
+                  Belum ada percakapan. Halo CS kami sekarang!
+                </div>
+              ) : (
+                (activeSupportTab === 'cs' ? chatMessages : aiMessages).map((msg: any) => {
+                  const isCustomer = msg.sender_type === 'customer';
+                  const isAi = msg.sender_type === 'ai';
+
+                  return (
+                    <div
+                      key={msg.id || msg.created_at}
+                      className={`flex ${isCustomer ? 'justify-end' : 'justify-start'}`}
+                    >
+                      <div
+                        className={`max-w-[80%] rounded-2xl px-3.5 py-2 text-xs font-medium shadow ${
+                          isCustomer
+                            ? 'bg-cyan-500 text-slate-950 rounded-br-none'
+                            : isAi
+                            ? 'bg-purple-600 text-white rounded-bl-none shadow-md'
+                            : 'bg-slate-800 text-slate-100 rounded-bl-none border border-slate-700'
+                        }`}
+                      >
+                        <p>{msg.message}</p>
+                        <span className={`text-[8px] block mt-1 ${isCustomer ? 'text-slate-900/70 text-right' : 'text-slate-400'}`}>
+                          {new Date(msg.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Input Chat */}
+            <div className="p-3 border-t border-slate-800 flex gap-2">
+              <input
+                type="text"
+                value={inputChat}
+                onChange={(e) => setInputChat(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSendChat()}
+                placeholder={activeSupportTab === 'cs' ? "Ketik pesan ke CS..." : "Tanya AI seputar layanan laundry..."}
+                className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3 text-xs text-white focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={handleSendChat}
+                className={`font-bold px-4 py-2 rounded-xl text-xs text-white transition ${
+                  activeSupportTab === 'cs' ? 'bg-cyan-500 hover:bg-cyan-600' : 'bg-purple-600 hover:bg-purple-700'
+                }`}
+              >
+                Kirim
+              </button>
             </div>
           </div>
-        )}
+        </div>
+      )}
+
       {/* BOTTOM NAVIGATION BAR */}
       <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/95 backdrop-blur-md border-t border-slate-200 flex justify-around p-2.5 z-50 shadow-lg">
         <button onClick={() => setActiveTab('home')} className={`flex flex-col items-center flex-1 ${activeTab === 'home' ? 'text-blue-600' : 'text-slate-400'}`}>
