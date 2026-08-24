@@ -84,7 +84,40 @@ export default function Dashboard() {
   const [historyMonthFilter, setHistoryMonthFilter] = useState('ALL');
   const [historyDateFilter, setHistoryDateFilter] = useState('');
   const [fullYearHistory, setFullYearHistory] = useState<any[]>([]);
+// State & Logic To-Do List Kendala Outlet (Real-Time)
+const [outletIssues, setOutletIssues] = useState<any[]>([]);
 
+const fetchOutletIssues = async () => {
+  const { data } = await supabase
+    .from('outlet_issues')
+    .select('*, outlets(name)')
+    .order('created_at', { ascending: false });
+  if (data) setOutletIssues(data);
+};
+
+useEffect(() => {
+  fetchOutletIssues();
+  
+  // Realtime listener untuk laporan baru dari Kasir
+  const channel = supabase
+    .channel('realtime_outlet_issues')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'outlet_issues' }, () => {
+      fetchOutletIssues();
+    })
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}, []);
+
+const handleUpdateIssueStatus = async (id: string, newStatus: string) => {
+  const updates: any = { status: newStatus };
+  if (newStatus === 'Selesai') updates.resolved_at = new Date().toISOString();
+
+  const { error } = await supabase.from('outlet_issues').update(updates).eq('id', id);
+  if (!error) fetchOutletIssues();
+};
   useEffect(() => {
     const ownerStr = localStorage.getItem('laundry_owner_user');
     if (!ownerStr) { window.location.href = '/login'; return; }
@@ -562,6 +595,77 @@ export default function Dashboard() {
 
           <button onClick={handleLogout} className="whitespace-nowrap bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold text-xs px-3 py-2 rounded-xl transition ml-1">Keluar</button>
         </div>
+        {/* WIDGET TO-DO LIST KELUHAN & KENDALA OUTLET */}
+      <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-4 shadow-sm my-4">
+        <div className="flex justify-between items-center border-b pb-3">
+          <div>
+            <h3 className="text-sm font-extrabold text-slate-900 flex items-center gap-2">
+              📋 To-Do List Keluhan & Kendala Outlet
+            </h3>
+            <p className="text-[11px] text-slate-500">Laporan realtime dari Kasir yang memerlukan tindakan Supervisor/Owner</p>
+          </div>
+          <span className="bg-rose-100 text-rose-700 font-black text-xs px-3 py-1 rounded-full">
+            {outletIssues.filter(i => i.status !== 'Selesai').length} Belum Selesai
+          </span>
+        </div>
+
+        <div className="space-y-3">
+          {outletIssues.map((issue) => (
+            <div key={issue.id} className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-xs space-y-2.5">
+              <div className="flex justify-between items-start">
+                <div>
+                  <span className="bg-blue-100 text-blue-800 font-extrabold text-[10px] px-2.5 py-0.5 rounded-md mr-2">
+                    📍 {issue.outlets?.name || 'Outlet'}
+                  </span>
+                  <span className={`font-extrabold text-[10px] px-2.5 py-0.5 rounded-md ${
+                    issue.urgency === 'Critical' ? 'bg-rose-100 text-rose-700' : issue.urgency === 'Mendesak' ? 'bg-amber-100 text-amber-700' : 'bg-slate-200 text-slate-700'
+                  }`}>
+                    {issue.urgency}
+                  </span>
+                  <h4 className="font-extrabold text-slate-900 mt-1.5 text-sm">{issue.category}</h4>
+                </div>
+                <span className={`font-black text-[10px] px-3 py-1 rounded-full border ${
+                  issue.status === 'Selesai' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'
+                }`}>
+                  {issue.status}
+                </span>
+              </div>
+
+              <p className="text-slate-700 font-medium bg-white p-3 rounded-xl border border-slate-200 leading-relaxed">
+                {issue.description}
+              </p>
+
+              <div className="flex justify-between items-center pt-2 border-t border-slate-200 text-[10px]">
+                <span className="text-slate-400 font-bold">Pelapor: {issue.reporter_name} • {new Date(issue.created_at).toLocaleString('id-ID')}</span>
+                <div className="flex gap-2">
+                  {issue.status !== 'Sedang Diproses' && issue.status !== 'Selesai' && (
+                    <button
+                      onClick={() => handleUpdateIssueStatus(issue.id, 'Sedang Diproses')}
+                      className="bg-amber-500 hover:bg-amber-600 text-white font-bold px-3 py-1.5 rounded-lg shadow-sm transition"
+                    >
+                      Proses Task
+                    </button>
+                  )}
+                  {issue.status !== 'Selesai' && (
+                    <button
+                      onClick={() => handleUpdateIssueStatus(issue.id, 'Selesai')}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1.5 rounded-lg shadow-sm transition"
+                    >
+                      ✓ Tandai Selesai
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+
+          {outletIssues.length === 0 && (
+            <div className="text-center py-6 text-slate-400 text-xs font-bold">
+              🎉 Semua aman! Belum ada laporan kendala dari kasir.
+            </div>
+          )}
+        </div>
+      </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
               <div className="bg-white border border-slate-200 p-4 md:p-6 rounded-2xl shadow-sm">
