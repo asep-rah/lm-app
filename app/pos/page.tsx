@@ -2264,11 +2264,13 @@ const deductChemicalInventory = async (orderItemName: string, qtyKgOrPcs: number
                 onChange={(e) => setIssueCategory(e.target.value)}
                 className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3 text-xs font-bold text-slate-800"
               >
-                <option value="Peralatan/Mesin">⚙️ Peralatan / Mesin Cuci / Pengering</option>
-                <option value="Stok Bahan">🧴 Stok Bahan (Detergen/Parfum/Plastik)</option>
-                <option value="Listrik/Air">⚡ Kendala Listrik / Air / Internet</option>
-                <option value="Pelanggan">👤 Kendala Pelanggan di Outlet</option>
-                <option value="Lainnya">📌 Lainnya</option>
+                <option value="Peralatan/Mesin">⚙️ Mesin Cuci / Pengering Rusak</option>
+          <option value="Stok Detergen">🧴 Stok Detergen / Softener Habis</option>
+          <option value="Stok Parfum">🌸 Stok Parfum Laundry Habis</option>
+          <option value="Stok Plastik">🛍️ Stok Plastik Packing Habis</option>
+          <option value="Listrik/Air">⚡ Kendala Listrik / Air / Internet</option>
+          <option value="Pelanggan">👤 Komplain / Kendala Pelanggan di Outlet</option>
+          <option value="Lainnya">📌 Kendala Operasional Lainnya</option>
               </select>
             </div>
 
