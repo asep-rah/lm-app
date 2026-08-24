@@ -117,46 +117,78 @@ const [depositLogs, setDepositLogs] = useState<any[]>([]);
 // Hitung Estimasi Menit Penjemputan Internal
 const estimatedPickupMinutes = (queueCount * 30) + 15;
 
-// Kirim Chat ke CS / AI (Tuntas Aman Foreign Key & Schema)
+// State Terpisah untuk Mode Chat (CS vs AI)
+const [chatMode, setChatMode] = useState<'cs' | 'ai'>('cs');
+const [aiMessages, setAiMessages] = useState<any[]>([
+  { id: '1', sender_type: 'ai', message: 'Halo! Saya AI Assistant Laundrivery. Ada yang bisa saya bantu mengenai layanan laundry?' }
+]);
+
 const handleSendChat = async () => {
   if (!inputChat.trim()) return;
-
-  // Jika chat umum, kirim order_id sebagai null agar tidak menabrak Foreign Key
-  const validOrderId = (activeChatOrderId && activeChatOrderId !== 'GENERAL_CS') 
-    ? activeChatOrderId 
-    : null;
-
   const messageText = inputChat.trim();
   setInputChat('');
 
-  // 1. Update Tampilan Instan di HP Customer (Optimistic UI)
-  const newMsg = {
-    id: Date.now().toString(),
-    order_id: validOrderId,
-    customer_phone: customerPhone || null,
-    sender_type: 'customer',
-    message: messageText,
-    created_at: new Date().toISOString()
-  };
-  setChatMessages((prev) => [...prev, newMsg]);
-
-  // 2. Simpan ke Database Supabase
-  const { error } = await supabase.from('support_chats').insert([
-    {
+  if (activeSupportTab === 'cs') {
+    // --- MODE 1: LIVE CS (SIMPAN KE SUPABASE) ---
+    const validOrderId = (activeChatOrderId && activeChatOrderId !== 'GENERAL_CS') ? activeChatOrderId : null;
+    const newMsg = {
+      id: Date.now().toString(),
       order_id: validOrderId,
       customer_phone: customerPhone || null,
       sender_type: 'customer',
       message: messageText,
-    }
-  ]);
+      created_at: new Date().toISOString()
+    };
+    setChatMessages((prev) => [...prev, newMsg]);
 
-  if (error) {
-    console.error('Error insert chat Supabase:', error.message);
-    alert(`⚠️ Gagal mengirim pesan: ${error.message}`);
+    const { error } = await supabase.from('support_chats').insert([
+      {
+        order_id: validOrderId,
+        customer_phone: customerPhone || null,
+        sender_type: 'customer',
+        message: messageText,
+      }
+    ]);
+
+    if (error) {
+      console.error('Error insert chat Supabase:', error.message);
+      alert(`⚠️ Gagal mengirim pesan: ${error.message}`);
+    }
   } else {
-    // Refresh pesan
-    if (typeof loadChats === 'function' && validOrderId) {
-      loadChats(validOrderId);
+    // --- MODE 2: TANYA AI (PANGGIL API AI) ---
+    const userMsg = {
+      id: Date.now().toString(),
+      sender_type: 'customer',
+      message: messageText,
+      created_at: new Date().toISOString()
+    };
+    setAiMessages((prev) => [...prev, userMsg]);
+
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: messageText }),
+      });
+      const data = await res.json();
+
+      const aiReply = {
+        id: (Date.now() + 1).toString(),
+        sender_type: 'ai',
+        message: data.reply || data.message || 'Maaf, AI sedang tidak dapat merespons.',
+        created_at: new Date().toISOString()
+      };
+      setAiMessages((prev) => [...prev, aiReply]);
+    } catch (err) {
+      setAiMessages((prev) => [
+        ...prev,
+        {
+          id: (Date.now() + 1).toString(),
+          sender_type: 'ai',
+          message: '⚠️ Gagal terhubung ke AI Assistant.',
+          created_at: new Date().toISOString()
+        }
+      ]);
     }
   }
 };
@@ -1392,13 +1424,15 @@ const handleGetCurrentLocation = () => {
 
               {/* Bubble Chat Area */}
           <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-900/90">
-            {chatMessages.length === 0 ? (
+            {(chatMode === 'cs' ? chatMessages : aiMessages).length === 0 ? (
               <div className="text-center text-xs text-slate-400 py-12">
                 Belum ada percakapan. Halo CS kami sekarang!
               </div>
             ) : (
-              chatMessages.map((msg: any) => {
+              (chatMode === 'cs' ? chatMessages : aiMessages).map((msg: any) => {
                 const isCustomer = msg.sender_type === 'customer';
+                const isAi = msg.sender_type === 'ai';
+
                 return (
                   <div
                     key={msg.id || msg.created_at}
@@ -1408,12 +1442,14 @@ const handleGetCurrentLocation = () => {
                       className={`max-w-[80%] rounded-2xl px-3.5 py-2 text-xs font-medium shadow ${
                         isCustomer
                           ? 'bg-cyan-500 text-slate-950 rounded-br-none'
+                          : isAi
+                          ? 'bg-purple-600 text-white rounded-bl-none shadow-md'
                           : 'bg-slate-800 text-slate-100 rounded-bl-none border border-slate-700'
                       }`}
                     >
                       <p>{msg.message}</p>
                       <span className={`text-[8px] block mt-1 ${isCustomer ? 'text-slate-900/70 text-right' : 'text-slate-400'}`}>
-                        {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {new Date(msg.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </span>
                     </div>
                   </div>
