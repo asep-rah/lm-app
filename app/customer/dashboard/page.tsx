@@ -510,6 +510,12 @@ export default function CustomerDashboardPage() {
     if (!isKiloanChecked && (!isSatuanChecked || cartSatuan.length === 0)) {
       return alert('⚠️ Pilih minimal 1 paket Kiloan atau Satuan!');
     }
+    // PENGAMAN: Blokir total pembayaran COD
+    if ((typeof paymentMethod !== 'undefined' && paymentMethod === 'COD') || (typeof paymentMethod !== 'undefined' && paymentMethod === 'Cash on Delivery')) {
+      alert('⚠️ Mohon maaf, Laundrivery saat ini hanya melayani pembayaran cashless / transfer online. Pembayaran COD tidak tersedia.');
+      setIsSubmitting(false);
+      return;
+    }
 
     setIsSubmitting(true);
     const normPhone = cleanPhone(customerPhone);
