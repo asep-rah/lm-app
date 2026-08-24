@@ -100,6 +100,35 @@ const [issueCategory, setIssueCategory] = useState('Peralatan/Mesin');
 const [issueUrgency, setIssueUrgency] = useState('Biasa');
 const [issueDescription, setIssueDescription] = useState('');
 const [isSubmittingIssue, setIsSubmittingIssue] = useState(false);
+// AUTO-FILL POS FORM DARI URL PARAMS PICKUP ORDER ONLINE
+useEffect(() => {
+  if (typeof window !== 'undefined') {
+    const params = new URLSearchParams(window.location.search);
+    const nameParam = params.get('name');
+    const phoneParam = params.get('phone');
+    const serviceParam = params.get('service');
+    const weightParam = params.get('weight');
+    const pickupIdParam = params.get('pickup_id');
+
+    if (phoneParam) {
+      if (typeof setCustomerPhone === 'function') setCustomerPhone(phoneParam);
+      setActiveTab('pos'); 
+    }
+    if (nameParam && typeof setCustomerName === 'function') {
+      setCustomerName(nameParam);
+    }
+    if (serviceParam && typeof setServiceType === 'function') {
+      setServiceType(serviceParam);
+      if (typeof setSelectedServiceInput === 'function') setSelectedServiceInput(serviceParam);
+    }
+    if (weightParam && typeof setInputWeight === 'function') {
+      setInputWeight(weightParam);
+    }
+    if (pickupIdParam && typeof setSelectedPickupId === 'function') {
+      setSelectedPickupId(pickupIdParam);
+    }
+  }
+}, []);
 // Handler Submit Setoran Kasir
 const handleSubmitDeposit = async () => {
   const amount = parseFloat(depositAmount) || 0;
@@ -1767,8 +1796,16 @@ const deductChemicalInventory = async (orderItemName: string, qtyKgOrPcs: number
 
               <div className="grid grid-cols-2 gap-2">
                 <div><label className="block text-[10px] font-bold text-slate-500 mb-1">Nomor WhatsApp Pelanggan</label><input type="tel" placeholder="Ketik 08..." value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} className="w-full border border-indigo-200 bg-indigo-50 text-indigo-800 rounded-xl px-3 py-3 text-xs md:text-sm font-bold" /></div>
-                <div><label className="block text-[10px] font-bold text-slate-500 mb-1">Nama Pelanggan (Otomatis)</label><input type="text" placeholder="Ketik Nama" value={customerName} onChange={(e) => setCustomerName(e.target.value)} className="w-full border rounded-xl px-3 py-3 text-xs md:text-sm" required /></div>
-              </div>
+                <div>
+            <label className="block text-[10px] font-bold text-slate-500 mb-1">Nama Pelanggan (Otomatis)</label>
+            <input
+              type="text"
+              placeholder="Nama Pelanggan (Otomatis)"
+              value={customerName}
+              onChange={(e) => setCustomerName(e.target.value)}
+              className="w-full border border-slate-300 rounded-xl p-2.5 text-xs text-slate-900 bg-white"
+            />
+          </div>
 
               {customerDeposit !== null && (
                 <div className={`p-2.5 rounded-xl text-xs font-bold flex justify-between border ${customerDeposit > 0 ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
