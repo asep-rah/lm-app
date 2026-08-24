@@ -117,17 +117,13 @@ const [depositLogs, setDepositLogs] = useState<any[]>([]);
 // Hitung Estimasi Menit Penjemputan Internal
 const estimatedPickupMinutes = (queueCount * 30) + 15;
 
-// Kirim Chat ke CS / AI
+// Kirim Chat ke CS / AI (Bebas Error Schema Database)
 const handleSendChat = async () => {
   if (!inputChat.trim()) return;
 
   const currentTargetId = activeChatOrderId || 'GENERAL_CS';
   const messageText = inputChat.trim();
   setInputChat('');
-
-  // Safe values untuk menghindari NULL error Supabase
-  const safePhone = customerData?.phone || customerPhone || 'CUSTOMER';
-  const safeName = customerData?.name || customerData?.full_name || 'Pelanggan';
 
   // Update tampilan lokal secara instan (Optimistic UI)
   const newMsg = {
@@ -139,22 +135,22 @@ const handleSendChat = async () => {
   };
   setChatMessages((prev) => [...prev, newMsg]);
 
-  // Insert ke Supabase
+  // Insert ke Supabase (menggunakan kolom baku)
   const { error } = await supabase.from('support_chats').insert([
     {
       order_id: currentTargetId,
-      customer_phone: safePhone,
-      customer_name: safeName,
       sender_type: 'customer',
       message: messageText,
     }
   ]);
 
   if (error) {
-    console.error('Error insert chat Supabase:', error.message, error.details);
+    console.error('Error insert chat Supabase:', error.message);
     alert(`⚠️ Gagal mengirim pesan: ${error.message}`);
   } else {
-    fetchChatMessages(currentTargetId);
+    if (typeof fetchChatMessages === 'function') {
+      fetchChatMessages(currentTargetId);
+    }
   }
 };
 // Fetch Pesan Chat Real-Time
@@ -747,7 +743,32 @@ const handleGetCurrentLocation = () => {
                     ))}
                   </select>
                 </div>
-
+{/* INPUT ALAMAT PENJEMPUTAN + GPS PINPOINT */}
+<div className="space-y-1.5 mt-3">
+            <div className="flex justify-between items-center">
+              <label className="text-[10px] font-extrabold text-slate-500 uppercase">Alamat Penjemputan *</label>
+              <button
+                type="button"
+                onClick={handleGetCurrentLocation}
+                className="text-[10px] font-bold text-indigo-600 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-lg hover:bg-indigo-100 flex items-center gap-1 transition"
+              >
+                <span>📍</span>
+                <span>{userCoords ? 'GPS Terdeteksi ✓' : 'Ambil Lokasi GPS Presisi'}</span>
+              </button>
+            </div>
+            <textarea
+              value={customerAddress}
+              onChange={(e) => setCustomerAddress(e.target.value)}
+              placeholder="Ketik alamat lengkap (Jalan, No. Rumah, Patokan)..."
+              className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3 text-xs font-bold text-slate-800 focus:outline-none"
+              rows={2}
+            />
+            {userCoords && (
+              <p className="text-[9px] text-emerald-600 font-bold flex items-center gap-1">
+                <span>✓</span> Lat: {userCoords.lat.toFixed(5)}, Lon: {userCoords.lon.toFixed(5)} (Pinpoint tersimpan)
+              </p>
+            )}
+          </div>
                 <div>
                   <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Nama Lengkap Pemesan</label>
                   <input
