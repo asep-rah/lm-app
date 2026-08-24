@@ -75,7 +75,10 @@ export default function AdminPickupsPage() {
   const handleUpdateStatus = async (id: string, newStatus: string) => {
     const { error } = await supabase
       .from('pickup_orders')
-      .update({ status: newStatus })
+      .update({ 
+        status: newStatus,
+        updated_at: new Date().toISOString()
+      })
       .eq('id', id);
 
     if (!error) {
