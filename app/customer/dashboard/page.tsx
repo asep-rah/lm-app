@@ -81,7 +81,9 @@ export default function CustomerDashboardPage() {
   const [claimedPromo, setClaimedPromo] = useState<any>(null);
   const [showPromoModal, setShowPromoModal] = useState(false);
   const [showEstimateInfoModal, setShowEstimateInfoModal] = useState(false);
-
+  const [latestCreatedOrder, setLatestCreatedOrder] = useState<any>(null);
+  const [showOrderSuccessModal, setShowOrderSuccessModal] = useState(false);
+  const [pendingCashierInvoice, setPendingCashierInvoice] = useState<any>(null);
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -548,10 +550,14 @@ export default function CustomerDashboardPage() {
       created_at: nowIso
     };
 
-    const { error } = await supabase.from('pickup_orders').insert([payload]);
+    const { data: insertedData, error } = await supabase.from('pickup_orders').insert([payload]).select();
 
-    if (!error) {
-      alert('✅ PESANAN BERHASIL TERKIRIM KE KASIR POS!\nDriver/Kasir kami akan segera memproses penjemputan.');
+    if (!error && insertedData && insertedData.length > 0) {
+      // Simpan data order terbaru & buka Modal Live Tracking Success
+      setLatestCreatedOrder(insertedData[0]);
+      setShowOrderSuccessModal(true);
+      
+      // Reset form
       setCartSatuan([]);
       setNotes('');
       setClaimedPromo(null);
@@ -559,10 +565,12 @@ export default function CustomerDashboardPage() {
       setKiloanDuration('Reguler (3 Hari)');
       setIsKiloanChecked(false);
       setIsSatuanChecked(false);
+      
+      // Smooth Switch ke tab Beranda
       setActiveTab('home');
       fetchCustomerProfile(normPhone);
     } else {
-      alert('❌ Gagal membuat pesanan: ' + error.message);
+      alert('❌ Gagal membuat pesanan: ' + (error?.message || 'Koneksi bermasalah'));
     }
     setIsSubmitting(false);
   };
@@ -1475,7 +1483,29 @@ export default function CustomerDashboardPage() {
           </div>
         </div>
       )}
-
+{/* MODAL SUCCESS ORDER REDIRECT (SMOOTH UX FLOW) */}
+{showOrderSuccessModal && latestCreatedOrder && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl text-center">
+            <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center text-3xl mx-auto font-black shadow-inner">
+              ✓
+            </div>
+            <div>
+              <h3 className="text-base font-extrabold text-slate-900">Pesanan Terkirim ke Kasir!</h3>
+              <p className="text-xs text-slate-500 mt-1.5 leading-relaxed font-medium">
+                No. Pesanan: <b className="text-slate-900">{latestCreatedOrder.order_number}</b><br/>
+                Driver & Kasir outlet kami sedang memproses penjemputan ke lokasi Anda.
+              </p>
+            </div>
+            <button
+              onClick={() => setShowOrderSuccessModal(false)}
+              className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold py-3.5 rounded-2xl text-xs uppercase shadow-md transition"
+            >
+              Lihat Status Live Tracking 🚀
+            </button>
+          </div>
+        </div>
+      )}
       {/* BOTTOM NAVIGATION BAR */}
       <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/95 backdrop-blur-md border-t border-slate-200 flex justify-around p-2.5 z-50 shadow-lg">
         <button onClick={() => setActiveTab('home')} className={`flex flex-col items-center flex-1 ${activeTab === 'home' ? 'text-blue-600' : 'text-slate-400'}`}>
