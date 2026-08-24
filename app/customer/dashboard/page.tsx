@@ -117,15 +117,20 @@ const [depositLogs, setDepositLogs] = useState<any[]>([]);
 // Hitung Estimasi Menit Penjemputan Internal
 const estimatedPickupMinutes = (queueCount * 30) + 15;
 
-// Kirim Chat ke CS / AI (Bebas Error Schema Database)
+// Kirim Chat ke CS / AI (Fix UUID Format Constraint)
 const handleSendChat = async () => {
   if (!inputChat.trim()) return;
 
-  const currentTargetId = activeChatOrderId || 'GENERAL_CS';
+  // Gunakan UUID Nil jika tidak ada order_id spesifik
+  const DEFAULT_GENERAL_UUID = '00000000-0000-0000-0000-000000000000';
+  const currentTargetId = activeChatOrderId && activeChatOrderId !== 'GENERAL_CS' 
+    ? activeChatOrderId 
+    : DEFAULT_GENERAL_UUID;
+
   const messageText = inputChat.trim();
   setInputChat('');
 
-  // Update tampilan lokal secara instan (Optimistic UI)
+  // Update tampilan lokal instan (Optimistic UI)
   const newMsg = {
     id: Date.now().toString(),
     order_id: currentTargetId,
@@ -135,7 +140,7 @@ const handleSendChat = async () => {
   };
   setChatMessages((prev) => [...prev, newMsg]);
 
-  // Insert ke Supabase (menggunakan kolom baku)
+  // Insert ke Supabase
   const { error } = await supabase.from('support_chats').insert([
     {
       order_id: currentTargetId,
