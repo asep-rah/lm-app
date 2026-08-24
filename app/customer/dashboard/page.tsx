@@ -794,18 +794,6 @@ const handleGetCurrentLocation = () => {
                   />
                 </div>
 
-                <div>
-                  <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Alamat Penjemputan</label>
-                  <textarea
-                    placeholder="Ketik alamat lengkap lokasi penjemputan..."
-                    value={customerAddress}
-                    onChange={(e) => setCustomerAddress(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3.5 text-xs text-slate-800 font-medium"
-                    rows={2}
-                    required
-                  />
-                </div>
-
                 {/* PROMO BANNER FORM ORDER */}
                 <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200/80 p-3.5 rounded-2xl flex justify-between items-center text-xs">
                   <div>
@@ -860,10 +848,10 @@ const handleGetCurrentLocation = () => {
                             onChange={(e) => setKiloanDuration(e.target.value)}
                             className="w-full bg-amber-50 border border-amber-300 rounded-xl p-2 text-xs font-extrabold text-amber-800"
                           >
-                            <option value="Reguler (3 Hari)">Reguler 3 Hari</option>
-                            <option value="Oneday (1 Hari / 24 Jam)">Oneday (+50%)</option>
-                            <option value="Express (6 Jam)">Express 6 Jam (+100%)</option>
-                            <option value="Quick (3 Jam)">Quick 3 Jam (+200%)</option>
+                            <option value="Reguler">Reguler 3 Hari</option>
+                            <option value="Oneday">Oneday (+50%)</option>
+                            <option value="Express">Express 6 Jam (+100%)</option>
+                            <option value="Quick">Quick 3 Jam (+200%)</option>
                           </select>
                         </div>
                         <div>
@@ -872,10 +860,7 @@ const handleGetCurrentLocation = () => {
                             type="number"
                             min="3"
                             value={kiloanEstKg}
-                            onChange={(e) => {
-                              const val = parseFloat(e.target.value) || 0;
-                              setKiloanEstKg(val < 3 ? '3' : e.target.value);
-                            }}
+                            onChange={(e) => setKiloanEstKg(e.target.value)}
                             className="w-full bg-white border border-blue-200 rounded-xl p-2 text-xs font-extrabold text-blue-700"
                           />
                         </div>
@@ -1003,7 +988,7 @@ const handleGetCurrentLocation = () => {
               >
                 <option value="">-- Pilih Proses Cuci --</option>
                 <option value="Gabung Semua">Gabung Semua</option>
-                <option value="Pisah Warna Khusus">Pisah Warna Khusus</option>
+                <option value="Pisah Perkantong">Pisah Perkantong</option>
               </select>
               </div>
 
@@ -1182,11 +1167,13 @@ const handleGetCurrentLocation = () => {
                 </div>
 
                 <a
-                  href={`https://wa.me/${targetAdminWa}?text=Halo%20Admin%20Kasir,%20saya%20pelanggan%20${customerData.name}%20(${customerPhone})%20ingin%20Top-Up%20Deposit%20Member.`}
+                  href={`https://wa.me/6281234567890?text=${encodeURIComponent('Halo Kasir, saya ingin konfirmasi Top Up Saldo Deposit.')}`}
                   target="_blank"
-                  className="block w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-4 rounded-2xl text-xs uppercase shadow-lg shadow-blue-200 transition"
+                  rel="noopener noreferrer"
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-2xl text-xs shadow flex items-center justify-center gap-2 transition"
                 >
-                  💬 Hubungi Kasir via WhatsApp ({currentOutletObj?.name || 'Admin'})
+                  <span>💬</span>
+                  <span>HUBUNGI ADMIN VIA WHATSAPP (BRIWASH ASIA AFRIKA)</span>
                 </a>
               </div>
 

@@ -21,69 +21,88 @@ export default function CSDashboard() {
   const [drivers, setDrivers] = useState<any[]>([]);
   const [assignedDriverMap, setAssignedDriverMap] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
-// State Live Chat CS & Link Tracking Kurir Pihak Ketiga
-const [activeChatOrder, setActiveChatOrder] = useState<any | null>(null);
-const [chatMessages, setChatMessages] = useState<any[]>([]);
-const [inputCsChat, setInputCsChat] = useState<string>('');
-const [trackingUrlInput, setTrackingUrlInput] = useState<Record<string, string>>({});
 
-// Load Pesan Chat CS
-const loadCsChats = async (orderId: string) => {
-  const { data } = await supabase
-    .from('support_chats')
-    .select('*')
-    .eq('order_id', orderId)
-    .order('created_at', { ascending: true });
-  setChatMessages(data || []);
-};
+  const [activeChatOrder, setActiveChatOrder] = useState<any | null>(null);
+  const [chatMessages, setChatMessages] = useState<any[]>([]);
+  const [inputCsChat, setInputCsChat] = useState<string>('');
+  const [trackingUrlInput, setTrackingUrlInput] = useState<Record<string, string>>({});
 
-// Kirim Pesan CS ke Customer
-const handleSendCsChat = async () => {
-  if (!inputCsChat.trim() || !activeChatOrder) return;
-  await supabase.from('support_chats').insert([
-    {
-      order_id: activeChatOrder.id,
-      sender_type: 'cs',
-      message: inputCsChat.trim()
+  const loadCsChats = async (targetOrder: any) => {
+    setActiveChatOrder(targetOrder);
+    const orderId = typeof targetOrder === 'object' ? targetOrder?.id : targetOrder;
+
+    let query = supabase.from('support_chats').select('*');
+    if (orderId) {
+      query = query.eq('order_id', orderId);
+    } else {
+      query = query.is('order_id', null);
     }
-  ]);
-  setInputCsChat('');
-  loadCsChats(activeChatOrder.id);
-};
 
-// Simpan Link Live Tracking Pihak Ketiga
-const handleSaveTrackingUrl = async (orderId: string) => {
-  const url = trackingUrlInput[orderId];
-  if (!url || !url.trim()) return alert('Masukkan URL Tracking terlebih dahulu!');
+    const { data } = await query.order('created_at', { ascending: true });
+    setChatMessages(data || []);
+  };
 
-  const { error } = await supabase
-    .from('pickup_orders')
-    .update({ 
-      third_party_tracking_url: url.trim(),
-      status: 'Driver Menuju Lokasi'
-    })
-    .eq('id', orderId);
+  const handleSendCsChat = async () => {
+    if (!inputCsChat.trim()) return;
 
-  if (!error) {
-    alert('✅ Link Live Tracking berhasil dikirim ke customer!');
-    loadCSData();
-  } else {
-    alert('❌ Gagal menyimpan URL tracking: ' + error.message);
-  }
-};
-  // Load Data Master, Transaksi & Driver
+    const orderId = typeof activeChatOrder === 'object' ? activeChatOrder?.id : activeChatOrder;
+    const msgText = inputCsChat.trim();
+    setInputCsChat('');
+
+    const newMsg = {
+      id: Date.now().toString(),
+      order_id: orderId || null,
+      sender_type: 'cs',
+      message: msgText,
+      created_at: new Date().toISOString()
+    };
+    setChatMessages((prev) => [...prev, newMsg]);
+
+    const { error } = await supabase.from('support_chats').insert([
+      {
+        order_id: orderId || null,
+        sender_type: 'cs',
+        message: msgText,
+      }
+    ]);
+
+    if (error) {
+      console.error('Error kirim CS chat:', error.message);
+      alert(`⚠️ Gagal mengirim balasan CS: ${error.message}`);
+    } else {
+      loadCsChats(activeChatOrder);
+    }
+  };
+
+  const handleSaveTrackingUrl = async (orderId: string) => {
+    const url = trackingUrlInput[orderId];
+    if (!url || !url.trim()) return alert('Masukkan URL Tracking terlebih dahulu!');
+
+    const { error } = await supabase
+      .from('pickup_orders')
+      .update({ 
+        third_party_tracking_url: url.trim(),
+        status: 'Driver Menuju Lokasi'
+      })
+      .eq('id', orderId);
+
+    if (!error) {
+      alert('✅ Link Live Tracking berhasil dikirim ke customer!');
+      loadCSData();
+    } else {
+      alert('❌ Gagal menyimpan URL tracking: ' + error.message);
+    }
+  };
+
   const loadCSData = async () => {
     setIsLoading(true);
 
-    // 1. Fetch Outlets
     const { data: outletData } = await supabase.from('outlets').select('*');
     if (outletData) setOutlets(outletData);
 
-    // 2. Fetch Drivers (Karyawan dengan role driver)
     const { data: driverData } = await supabase.from('employees').select('*').eq('role', 'driver');
     if (driverData) setDrivers(driverData);
 
-    // 3. Fetch Pickup Orders (Layanan Antar-Jemput)
     let pkpQuery = supabase
       .from('pickup_orders')
       .select('*, outlets(name), customer_addresses(*)')
@@ -95,7 +114,6 @@ const handleSaveTrackingUrl = async (orderId: string) => {
     const { data: pkpData } = await pkpQuery;
     if (pkpData) setPickups(pkpData);
 
-    // 4. Fetch Transactions (Resi POS)
     let txQuery = supabase
       .from('transactions')
       .select('*, outlets(name)')
@@ -108,7 +126,6 @@ const handleSaveTrackingUrl = async (orderId: string) => {
     const { data: txData } = await txQuery;
     if (txData) setTransactions(txData);
 
-    // 5. Fetch Transactions yang Menunggu Konfirmasi Customer / CS
     let confQuery = supabase
       .from('transactions')
       .select('*, outlets(name)')
@@ -126,11 +143,10 @@ const handleSaveTrackingUrl = async (orderId: string) => {
 
   useEffect(() => {
     loadCSData();
-    const interval = setInterval(loadCSData, 10000); // Auto-refresh tiap 10 detik
+    const interval = setInterval(loadCSData, 10000);
     return () => clearInterval(interval);
   }, [selectedOutlet]);
 
-  // KONTROL CS: PENUGASAN DRIVER KE LOKASI CUSTOMER
   const handleAssignDriver = async (pickupId: string) => {
     const driverName = assignedDriverMap[pickupId];
     if (!driverName) return alert('⚠️ Pilih driver terlebih dahulu dari daftar!');
@@ -148,7 +164,6 @@ const handleSaveTrackingUrl = async (orderId: string) => {
     }
   };
 
-  // Template Pesan WA Otomatis
   const openWhatsApp = (phone: string, textMessage: string) => {
     if (!phone) return alert('⚠️ Nomor WhatsApp pelanggan tidak ditemukan!');
     let cleanPhone = phone.trim().replace(/\D/g, '');
@@ -189,7 +204,6 @@ const handleSaveTrackingUrl = async (orderId: string) => {
     }
   };
 
-  // Filter Search
   const filteredConfirmations = pendingConfirmations.filter(
     (t) =>
       t.receipt_number?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -213,7 +227,6 @@ const handleSaveTrackingUrl = async (orderId: string) => {
     <div className="min-h-screen bg-slate-100 text-slate-800 p-4 md:p-8 font-sans">
       <div className="max-w-7xl mx-auto space-y-6">
         
-        {/* HEADER CS */}
         <div className="bg-slate-900 text-white rounded-3xl p-6 md:p-8 shadow-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b-4 border-blue-600">
           <div>
             <h1 className="text-2xl md:text-3xl font-black tracking-tight flex items-center gap-3">
@@ -232,7 +245,6 @@ const handleSaveTrackingUrl = async (orderId: string) => {
           </div>
         </div>
 
-        {/* FILTER BAR */}
         <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-col md:flex-row gap-3 justify-between items-center">
           <div className="flex bg-slate-100 p-1 rounded-xl w-full md:w-auto overflow-x-auto">
             <button
@@ -287,7 +299,6 @@ const handleSaveTrackingUrl = async (orderId: string) => {
 
         {isLoading && <p className="text-center font-bold text-slate-500 animate-pulse">Memuat data CS...</p>}
 
-        {/* TAB 1: ORDER PICKUP (PENUGASAN DRIVER DENGAN DROPDOWN KHUSUS CS) */}
         {activeTab === 'pickups' && (
           <div className="space-y-4">
             <div className="flex justify-between items-center">
@@ -327,7 +338,6 @@ const handleSaveTrackingUrl = async (orderId: string) => {
                       <p>Ongkir PP: <b>Rp {Number(p.delivery_fee || 0).toLocaleString('id-ID')}</b></p>
                     </div>
 
-                    {/* BLOK KHUSUS CS UNTUK INSTRUKSUSI / UTUS DRIVER */}
                     <div className="bg-indigo-50/70 border border-indigo-200 p-3 rounded-2xl space-y-2">
                       <label className="text-[10px] font-black text-indigo-900 block uppercase">
                         👔 Instruksi CS: Tugaskan Driver
@@ -359,24 +369,80 @@ const handleSaveTrackingUrl = async (orderId: string) => {
                       )}
                     </div>
 
+                    <div className="bg-slate-50 p-2.5 rounded-xl space-y-2 border border-slate-200">
+                      <div className="flex items-center justify-between">
+                        <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${
+                          p.courier_type === 'THIRD_PARTY'
+                            ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                            : 'bg-cyan-100 text-cyan-800 border border-cyan-300'
+                        }`}>
+                          {p.courier_type === 'THIRD_PARTY' ? '📦 Kurir Pihak Ketiga' : '🛵 Driver Internal'}
+                        </span>
+
+                        <button
+                          type="button"
+                          onClick={() => loadCsChats(p)}
+                          className="bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold px-2.5 py-1 rounded-lg flex items-center gap-1 shadow transition"
+                        >
+                          <span>💬</span>
+                          <span>Chat CS Live</span>
+                        </button>
+                      </div>
+
+                      {p.courier_type === 'THIRD_PARTY' && (
+                        <div className="mt-2 bg-amber-50/80 border border-amber-200 p-2 rounded-lg space-y-1">
+                          <label className="text-[9px] font-bold text-amber-900 block">Link Live Track (Grab/Gojek):</label>
+                          {p.third_party_tracking_url ? (
+                            <a
+                              href={p.third_party_tracking_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-[10px] text-blue-600 underline font-semibold truncate block"
+                            >
+                              {p.third_party_tracking_url}
+                            </a>
+                          ) : (
+                            <div className="flex gap-1">
+                              <input
+                                type="url"
+                                placeholder="https://..."
+                                value={trackingUrlInput[p.id] || ''}
+                                onChange={(e) => setTrackingUrlInput({ ...trackingUrlInput, [p.id]: e.target.value })}
+                                className="flex-1 text-[10px] bg-white border border-amber-300 rounded-lg p-1 focus:outline-none"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleSaveTrackingUrl(p.id)}
+                                className="bg-amber-600 hover:bg-amber-700 text-white font-bold text-[9px] px-2 py-1 rounded-lg"
+                              >
+                                Kirim
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
                     <button
+                      type="button"
                       onClick={() => handleSendPickupConfirm(p)}
-                      className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs shadow flex items-center justify-center gap-2 transition"
+                      className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs shadow flex items-center justify-center gap-1 mt-2"
                     >
-                      <span>💬 Chat WA Konfirmasi Jemput</span>
+                      <span>💬</span>
+                      <span>Chat WA Konfirmasi Jemput</span>
                     </button>
                   </div>
                 );
               })}
-
               {filteredPickups.length === 0 && (
-                <p className="text-xs text-slate-400 col-span-full text-center py-8">Tidak ada order penjemputan.</p>
+                <p className="text-xs text-slate-400 col-span-full text-center py-8">
+                  Tidak ada order penjemputan.
+                </p>
               )}
             </div>
           </div>
         )}
 
-        {/* TAB 2: PERLU KONFIRMASI (SELISIH TIMBANGAN) */}
         {activeTab === 'confirmations' && (
           <div className="space-y-4">
             <h2 className="text-sm font-black text-slate-700 uppercase tracking-wider">
@@ -433,7 +499,6 @@ const handleSaveTrackingUrl = async (orderId: string) => {
           </div>
         )}
 
-        {/* TAB 3: TRANSAKSI POS & KONFIRMASI TAGIHAN */}
         {activeTab === 'transactions' && (
           <div className="space-y-4">
             <h2 className="text-sm font-black text-slate-700 uppercase tracking-wider">
@@ -513,6 +578,62 @@ const handleSaveTrackingUrl = async (orderId: string) => {
           </div>
         )}
 
+        {activeChatOrder && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
+            <div className="bg-white border border-slate-200 w-full max-w-md rounded-2xl flex flex-col h-[500px] shadow-2xl overflow-hidden">
+              <div className="p-3 bg-slate-900 text-white flex items-center justify-between">
+                <div>
+                  <h3 className="font-bold text-sm">CS Live Chat</h3>
+                  <p className="text-[10px] text-slate-300">
+                    {activeChatOrder.customer_phone} ({activeChatOrder.order_number})
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveChatOrder(null)}
+                  className="text-slate-400 hover:text-white font-bold text-sm px-2"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="flex-1 p-3 overflow-y-auto space-y-2 bg-slate-50">
+                {chatMessages.map((msg) => (
+                  <div
+                    key={msg.id}
+                    className={`p-2.5 rounded-xl text-xs max-w-[80%] ${
+                      msg.sender_type === 'cs'
+                        ? 'bg-blue-600 text-white rounded-br-none ml-auto'
+                        : 'bg-white border border-slate-200 text-slate-800 rounded-bl-none shadow-sm'
+                    }`}
+                  >
+                    <p>{msg.message}</p>
+                    <span className="text-[9px] text-slate-400 mt-1 block text-right">
+                      {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="p-3 border-t bg-white flex gap-2">
+                <input
+                  type="text"
+                  value={inputCsChat}
+                  onChange={(e) => setInputCsChat(e.target.value)}
+                  placeholder="Ketik pesan CS ke customer..."
+                  className="flex-1 border border-slate-300 rounded-xl px-3 text-xs focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={handleSendCsChat}
+                  className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-4 py-2 rounded-xl text-xs"
+                >
+                  Kirim
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
