@@ -1787,7 +1787,7 @@ const deductChemicalInventory = async (orderItemName: string, qtyKgOrPcs: number
           <button onClick={() => setActiveTab('workflow')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'workflow' ? 'bg-amber-500 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>⚙️ Kerja ({activeOrders.length})</button>
           <button onClick={() => setActiveTab('pickup')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'pickup' ? 'bg-blue-600 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>🛍️ Ambil ({pickupOrders.length})</button>
           <button onClick={() => setActiveTab('member')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'member' ? 'bg-purple-600 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>💳 Member</button>
-          <button onClick={() => setActiveTab('expense')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'expense' ? 'bg-rose-500 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>💸 Keluar</button>
+          <button onClick={() => setActiveTab('expense')} className={`flex-1 py-1.5 px-2 rounded-xl text-[10px] font-bold ${activeTab === 'expense' ? 'bg-rose-500 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>💸 Pengeluaran & 🚨 Kendala</button>
           <button onClick={() => setActiveTab('performance')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'performance' ? 'bg-indigo-600 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>📊 Gaji</button>
         </div>
 
@@ -2149,106 +2149,138 @@ const deductChemicalInventory = async (orderItemName: string, qtyKgOrPcs: number
             </div>
           )}
 
-          {activeTab === 'expense' && (
-            <div className="space-y-6">
-              {/* TOMBOL PEMICU SETORAN CASH */}
-          <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-xl flex justify-between items-center mb-4">
-            <div>
-              <h4 className="font-bold text-xs text-emerald-900">📲 Setoran Cash Outlet via Wallet/QRIS</h4>
-              <p className="text-[10px] text-emerald-700">Top-up cash via Indomaret/Alfamart/m-Banking lalu setor ke QRIS Meja Kasir</p>
-            </div>
-            <button
-              onClick={() => setShowDepositModal(true)}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-2 rounded-xl text-xs shadow transition whitespace-nowrap"
-            >
-              Setor Sekarang
-            </button>
+{activeTab === 'expense' && (
+  <div className="space-y-6">
+    {/* FORM PENGAJUAN PENGELUARAN OPERASIONAL */}
+    <div className="bg-white border rounded-2xl p-4 space-y-3 shadow-sm">
+      <h3 className="text-xs font-bold text-rose-600 border-b pb-2">💸 Pengajuan Pengeluaran Kas</h3>
+      <form onSubmit={handleExpenseSubmit} className="space-y-3">
+        <div>
+          <label className="block text-[10px] font-bold text-slate-500 mb-1">Kategori Pengeluaran</label>
+          <select 
+            value={expCategory} 
+            onChange={(e) => setExpCategory(e.target.value)}
+            className="w-full border border-slate-300 rounded-xl p-2.5 text-xs bg-white"
+          >
+            <option value="Operasional">Operasional (Detergen/Plastik/BBM)</option>
+            <option value="Maintenance">Maintenance / Service Mesin</option>
+            <option value="Lainnya">Pengeluaran Lainnya</option>
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-[10px] font-bold text-slate-500 mb-1">Nominal (Rp)</label>
+          <input
+            type="number"
+            placeholder="Nominal Rp"
+            value={expAmount}
+            onChange={(e) => setExpAmount(e.target.value)}
+            className="w-full border border-slate-300 rounded-xl p-2.5 text-xs text-rose-600 font-bold"
+            required
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="block text-[10px] font-bold text-slate-500 mb-1">Bank Tujuan</label>
+            <input
+              type="text"
+              placeholder="BRI / BCA"
+              value={expBank}
+              onChange={(e) => setExpBank(e.target.value)}
+              className="w-full border border-slate-300 rounded-xl p-2.5 text-xs"
+              required
+            />
           </div>
-          <form onSubmit={handleExpenseSubmit} className="space-y-3 border rounded-xl p-4 shadow-sm bg-white">
-  <h3 className="text-xs font-bold text-rose-600 border-b pb-2">💸 Pengeluaran Kas</h3>
+          <div>
+            <label className="block text-[10px] font-bold text-slate-500 mb-1">No. Rekening</label>
+            <input
+              type="text"
+              placeholder="No. Rekening"
+              value={expAccountNo}
+              onChange={(e) => setExpAccountNo(e.target.value)}
+              className="w-full border border-slate-300 rounded-xl p-2.5 text-xs"
+              required
+            />
+          </div>
+        </div>
 
-  <div>
-    <label className="block text-[10px] font-bold text-slate-500 mb-1">Kategori Pengeluaran</label>
-    <select 
-      value={expCategory} 
-      onChange={(e) => setExpCategory(e.target.value)}
-      className="w-full border border-slate-300 rounded-xl p-2.5 text-xs bg-white"
-    >
-      <option value="Operasional">Operasional (Detergen/Plastik/BBM)</option>
-      <option value="Maintenance">Maintenance / Service Mesin</option>
-      <option value="Lainnya">Pengeluaran Lainnya</option>
-    </select>
-  </div>
+        <div>
+          <label className="block text-[10px] font-bold text-slate-500 mb-1">Nama Pemilik Rekening</label>
+          <input
+            type="text"
+            placeholder="Nama Atas Nama Rekening"
+            value={expAccountName}
+            onChange={(e) => setExpAccountName(e.target.value)}
+            className="w-full border border-slate-300 rounded-xl p-2.5 text-xs"
+            required
+          />
+        </div>
 
-  <div>
-    <label className="block text-[10px] font-bold text-slate-500 mb-1">Nominal (Rp)</label>
-    <input
-      type="number"
-      placeholder="Nominal Rp"
-      value={expAmount}
-      onChange={(e) => setExpAmount(e.target.value)}
-      className="w-full border border-slate-300 rounded-xl p-2.5 text-xs text-rose-600 font-bold"
-      required
-    />
-  </div>
+        <div>
+          <label className="block text-[10px] font-bold text-slate-500 mb-1">Deskripsi / Catatan Beli</label>
+          <input
+            type="text"
+            placeholder="Misal: Beli 2 Jerigen Detergen"
+            value={expDesc}
+            onChange={(e) => setExpDesc(e.target.value)}
+            className="w-full border border-slate-300 rounded-xl p-2.5 text-xs"
+            required
+          />
+        </div>
 
-  <div className="grid grid-cols-2 gap-2">
-    <div>
-      <label className="block text-[10px] font-bold text-slate-500 mb-1">Bank Tujuan</label>
-      <input
-        type="text"
-        placeholder="BRI / BCA"
-        value={expBank}
-        onChange={(e) => setExpBank(e.target.value)}
-        className="w-full border border-slate-300 rounded-xl p-2.5 text-xs"
-        required
-      />
+        <button
+          type="submit"
+          disabled={isSubmitting}
+          className="w-full bg-rose-600 hover:bg-rose-700 text-white font-bold py-3 rounded-xl text-xs shadow-md"
+        >
+          {isSubmitting ? 'Mengirim Pengajuan...' : 'KIRIM PENGAJUAN PENGELUARAN'}
+        </button>
+      </form>
     </div>
-    <div>
-      <label className="block text-[10px] font-bold text-slate-500 mb-1">No. Rekening</label>
-      <input
-        type="text"
-        placeholder="No. Rekening"
-        value={expAccountNo}
-        onChange={(e) => setExpAccountNo(e.target.value)}
-        className="w-full border border-slate-300 rounded-xl p-2.5 text-xs"
-        required
-      />
+
+    {/* FORM LAPORKAN KENDALA OUTLET */}
+    <div className="bg-white border rounded-2xl p-4 space-y-3 shadow-sm">
+      <h3 className="text-xs font-bold text-amber-600 border-b pb-2">🚨 Laporkan Kendala Outlet</h3>
+      <form onSubmit={handleIssueSubmit} className="space-y-3">
+        <div>
+          <label className="block text-[10px] font-bold text-slate-500 mb-1">Kategori Kendala</label>
+          <select
+            value={issueCategory}
+            onChange={(e) => setIssueCategory(e.target.value)}
+            className="w-full border border-slate-300 rounded-xl p-2.5 text-xs bg-white"
+          >
+            <option value="Kerusakan Alat">Kerusakan Mesin / Alat Outlet</option>
+            <option value="Ketersediaan Stok">Bahan Baku / Deterjen Habis</option>
+            <option value="Komplain Pelanggan">Komplain Pelanggan Berat</option>
+            <option value="Kendala Listrik/Air">Gangguan Listrik / Air</option>
+            <option value="Lainnya">Masalah Lainnya</option>
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-[10px] font-bold text-slate-500 mb-1">Detail Kendala</label>
+          <textarea
+            rows={3}
+            placeholder="Jelaskan detail masalah di outlet..."
+            value={issueDescription}
+            onChange={(e) => setIssueDescription(e.target.value)}
+            className="w-full border border-slate-300 rounded-xl p-2.5 text-xs"
+            required
+          />
+        </div>
+
+        <button
+          type="submit"
+          disabled={isSubmitting}
+          className="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 rounded-xl text-xs shadow-md"
+        >
+          {isSubmitting ? 'Mengirim Laporan...' : 'KIRIM LAPORAN KENDALA'}
+        </button>
+      </form>
     </div>
   </div>
-
-  <div>
-    <label className="block text-[10px] font-bold text-slate-500 mb-1">Nama Pemilik Rekening</label>
-    <input
-      type="text"
-      placeholder="Nama Pemilik Rekening"
-      value={expAccountName}
-      onChange={(e) => setExpAccountName(e.target.value)}
-      className="w-full border border-slate-300 rounded-xl p-2.5 text-xs"
-      required
-    />
-  </div>
-
-  <div>
-    <label className="block text-[10px] font-bold text-slate-500 mb-1">Deskripsi / Catatan Beli</label>
-    <input
-      type="text"
-      placeholder="Misal: Beli 2 Jerigen Detergen"
-      value={expDesc}
-      onChange={(e) => setExpDesc(e.target.value)}
-      className="w-full border border-slate-300 rounded-xl p-2.5 text-xs"
-      required
-    />
-  </div>
-
-  <button
-    type="submit"
-    disabled={isSubmitting}
-    className="w-full bg-rose-600 hover:bg-rose-700 text-white font-bold py-3 rounded-xl text-xs shadow-md"
-  >
-    {isSubmitting ? 'Mengirim Pengajuan...' : 'KIRIM PENGAJUAN PENGELUARAN'}
-  </button>
-</form>
+)}
               <form onSubmit={handleAddStock} className="space-y-3 border rounded-xl p-4 shadow-sm">
                 <h3 className="text-xs font-bold text-indigo-600 border-b pb-2">📦 Tambah Stok</h3>
                 <select value={stockItem} onChange={(e) => setStockItem(e.target.value)} className="w-full border rounded-xl px-3 py-3 text-xs md:text-sm"><option value="Detergen Premium (ml)">Detergen Premium</option><option value="Parfum Lavender (ml)">Parfum Lavender</option></select>
