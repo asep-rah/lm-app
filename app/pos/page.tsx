@@ -94,6 +94,12 @@ const [proofUrl, setProofUrl] = useState('');
 const [showClosingModal, setShowClosingModal] = useState(false);
 const [physicalCashCount, setPhysicalCashCount] = useState('');
 const [closingNotes, setClosingNotes] = useState('');
+// State Form Kendala / Keluhan POS Kasir
+const [showIssueModal, setShowIssueModal] = useState(false);
+const [issueCategory, setIssueCategory] = useState('Peralatan/Mesin');
+const [issueUrgency, setIssueUrgency] = useState('Biasa');
+const [issueDescription, setIssueDescription] = useState('');
+const [isSubmittingIssue, setIsSubmittingIssue] = useState(false);
 // Handler Submit Setoran Kasir
 const handleSubmitDeposit = async () => {
   const amount = parseFloat(depositAmount) || 0;
@@ -684,7 +690,32 @@ useEffect(() => {
       supabase.removeChannel(subscription);
     };
   }, [selectedOutlet]);
+// Handler Submit Laporan Kendala POS Kasir ke To-Do List Supervisor
+const handleSubmitIssue = async (e: React.FormEvent) => {
+  e.preventDefault();
+  if (!issueDescription.trim()) return alert('⚠️ Tuliskan deskripsi kendala!');
 
+  setIsSubmittingIssue(true);
+  const { error } = await supabase.from('outlet_issues').insert([
+    {
+      outlet_id: selectedOutlet || null,
+      reporter_name: employeeName || 'Kasir Outlet',
+      category: issueCategory,
+      urgency: issueUrgency,
+      description: issueDescription.trim(),
+      status: 'Perlu Penanganan'
+    }
+  ]);
+
+  if (!error) {
+    alert('✅ Laporan kendala berhasil dikirim ke To-Do List Supervisor!');
+    setIssueDescription('');
+    setShowIssueModal(false);
+  } else {
+    alert('❌ Gagal mengirim laporan: ' + error.message);
+  }
+  setIsSubmittingIssue(false);
+};
   useEffect(() => {
     async function checkCustDeposit() {
       const normalizedPhone = cleanPhone(customerPhone);
@@ -2193,6 +2224,13 @@ const deductChemicalInventory = async (orderItemName: string, qtyKgOrPcs: number
                 ) : !todayAttendance.check_out ? (
                   <div className="flex flex-col gap-3">
                     <div className="bg-emerald-50 text-emerald-800 px-3 py-2 rounded-lg text-xs font-bold border border-emerald-200">✅ Sudah Absen Masuk: {new Date(todayAttendance.check_in).toLocaleTimeString('id-ID')} WIB</div>
+                    <button
+                  type="button"
+                  onClick={() => setShowIssueModal(true)}
+                  className="w-full bg-rose-500 hover:bg-rose-600 text-white font-extrabold py-2.5 rounded-xl text-xs shadow transition flex items-center justify-center gap-1.5 mb-2"
+                >
+                  ⚠️ Laporkan Kendala Outlet
+                </button>
                     <button 
                   type="button" 
                   onClick={() => setShowClosingModal(true)} 
@@ -2208,6 +2246,74 @@ const deductChemicalInventory = async (orderItemName: string, qtyKgOrPcs: number
                   </div>
                 )}
               </div>
+              {/* MODAL LAPORKAN KENDALA OUTLET (POS KASIR) */}
+      {showIssueModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <form onSubmit={handleSubmitIssue} className="bg-white rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+            <div className="flex justify-between items-center border-b pb-3">
+              <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                🚨 Laporkan Kendala Outlet
+              </h3>
+              <button type="button" onClick={() => setShowIssueModal(false)} className="text-slate-400 font-bold">✕</button>
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Kategori Kendala</label>
+              <select
+                value={issueCategory}
+                onChange={(e) => setIssueCategory(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3 text-xs font-bold text-slate-800"
+              >
+                <option value="Peralatan/Mesin">⚙️ Peralatan / Mesin Cuci / Pengering</option>
+                <option value="Stok Bahan">🧴 Stok Bahan (Detergen/Parfum/Plastik)</option>
+                <option value="Listrik/Air">⚡ Kendala Listrik / Air / Internet</option>
+                <option value="Pelanggan">👤 Kendala Pelanggan di Outlet</option>
+                <option value="Lainnya">📌 Lainnya</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Tingkat Urgensi</label>
+              <div className="grid grid-cols-3 gap-2">
+                {['Biasa', 'Mendesak', 'Critical'].map((urg) => (
+                  <button
+                    key={urg}
+                    type="button"
+                    onClick={() => setIssueUrgency(urg)}
+                    className={`py-2 rounded-xl text-xs font-extrabold border transition ${
+                      issueUrgency === urg
+                        ? urg === 'Critical' ? 'bg-rose-600 text-white border-rose-600' : urg === 'Mendesak' ? 'bg-amber-500 text-white border-amber-500' : 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-slate-50 text-slate-600 border-slate-200'
+                    }`}
+                  >
+                    {urg}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Deskripsi Masalah</label>
+              <textarea
+                rows={3}
+                value={issueDescription}
+                onChange={(e) => setIssueDescription(e.target.value)}
+                placeholder="Jelaskan detail kendala yang terjadi di outlet..."
+                className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3 text-xs font-bold text-slate-800 focus:outline-none"
+                required
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={isSubmittingIssue}
+              className="w-full bg-rose-600 hover:bg-rose-700 text-white font-extrabold py-3.5 rounded-2xl text-xs uppercase shadow-md transition"
+            >
+              {isSubmittingIssue ? 'Mengirim...' : 'Kirim Laporan ke Supervisor 🚀'}
+            </button>
+          </form>
+        </div>
+      )}
               {/* MODAL BLIND CASH COUNT CLOSING SHIFT */}
       {showClosingModal && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
