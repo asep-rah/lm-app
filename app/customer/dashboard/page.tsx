@@ -125,7 +125,11 @@ const handleSendChat = async () => {
   const messageText = inputChat.trim();
   setInputChat('');
 
-  // Update langsung ke tampilan lokal (Optimistic UI)
+  // Safe values untuk menghindari NULL error Supabase
+  const safePhone = customerData?.phone || customerPhone || 'CUSTOMER';
+  const safeName = customerData?.name || customerData?.full_name || 'Pelanggan';
+
+  // Update tampilan lokal secara instan (Optimistic UI)
   const newMsg = {
     id: Date.now().toString(),
     order_id: currentTargetId,
@@ -135,22 +139,22 @@ const handleSendChat = async () => {
   };
   setChatMessages((prev) => [...prev, newMsg]);
 
-  // Simpan ke database Supabase
+  // Insert ke Supabase
   const { error } = await supabase.from('support_chats').insert([
     {
       order_id: currentTargetId,
-      customer_phone: customerPhone || 'CUSTOMER',
-      customer_name: customerData?.name || 'Customer',
+      customer_phone: safePhone,
+      customer_name: safeName,
       sender_type: 'customer',
       message: messageText,
     }
   ]);
 
   if (error) {
-    console.error('Gagal kirim chat:', error.message);
-    alert('⚠️ Gagal mengirim pesan. Silakan coba lagi.');
+    console.error('Error insert chat Supabase:', error.message, error.details);
+    alert(`⚠️ Gagal mengirim pesan: ${error.message}`);
   } else {
-    loadChats(currentTargetId);
+    fetchChatMessages(currentTargetId);
   }
 };
 // Fetch Pesan Chat Real-Time
