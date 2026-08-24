@@ -160,7 +160,10 @@ export default function CustomerDashboardPage() {
         const res = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: messageText }),
+          body: JSON.stringify({ 
+            message: messageText,
+            customerPhone: customerPhone || '' // Kirim nomor HP customer ke API
+          }),
         });
         const data = await res.json();
 
@@ -202,13 +205,21 @@ export default function CustomerDashboardPage() {
       fetchChatMessages(activeChatOrderId);
       
       const channel = supabase
-        .channel('support_chats_changes')
+        .channel('support_chats_realtime')
         .on(
           'postgres_changes',
           { event: 'INSERT', schema: 'public', table: 'support_chats' },
           (payload) => {
-            if (payload.new.order_id === activeChatOrderId) {
-              setChatMessages((prev) => [...prev, payload.new]);
+            const newMsg = payload.new;
+            // Baca pesan dari CS jika order_id cocok ATAU nomor WA cocok
+            const isMatchingOrder = activeChatOrderId !== 'GENERAL_CS' && newMsg.order_id === activeChatOrderId;
+            const isMatchingPhone = cleanPhone(newMsg.customer_phone) === cleanPhone(customerPhone);
+
+            if (isMatchingOrder || isMatchingPhone) {
+              setChatMessages((prev) => {
+                if (prev.some((m) => m.id === newMsg.id)) return prev;
+                return [...prev, newMsg];
+              });
             }
           }
         )
@@ -218,7 +229,7 @@ export default function CustomerDashboardPage() {
         supabase.removeChannel(channel);
       };
     }
-  }, [activeChatOrderId]);
+  }, [activeChatOrderId, customerPhone]);
 
   const loadChats = async (orderId: string | null) => {
     setActiveChatOrderId(orderId);

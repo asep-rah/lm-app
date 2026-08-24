@@ -41,11 +41,14 @@ export default function AdminPickupsPage() {
       .select('*')
       .order('created_at', { ascending: false });
 
-    // 🔒 FILTER STRICT: Jika Kasir ATAU selectedOutlet terisi & bukan 'ALL'
-    if (savedRole === 'kasir' && activeOutletId && activeOutletId !== 'ALL') {
-      query = query.eq('outlet_id', activeOutletId);
-    } else if (activeOutletId && activeOutletId !== 'ALL') {
-      query = query.eq('outlet_id', activeOutletId);
+    // 4. FILTER STRICT: Ambil role & outlet kasir dari localStorage
+    const userRole = localStorage.getItem('userRole') || localStorage.getItem('role') || savedRole;
+    const currentOutlet = selectedOutlet || activeOutletId || localStorage.getItem('outlet_id');
+
+    if (userRole === 'kasir' && currentOutlet && currentOutlet !== 'ALL') {
+      query = query.eq('outlet_id', currentOutlet);
+    } else if (selectedOutlet && selectedOutlet !== 'ALL') {
+      query = query.eq('outlet_id', selectedOutlet);
     }
 
     const { data, error } = await query;
