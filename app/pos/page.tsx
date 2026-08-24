@@ -1153,9 +1153,26 @@ const handleSubmitIssue = async (e: React.FormEvent) => {
   };
 
   const handleExpenseSubmit = async (e: React.FormEvent) => {
-    e.preventDefault(); if (!selectedOutlet || !expAmount) return; setIsSubmitting(true);
-    await supabase.from('expenses').insert([{ outlet_id: selectedOutlet, category: expCategory, amount: Number(expAmount), description: expDesc }]);
-    setExpAmount(''); setExpDesc(''); setSuccessMsg('✅ Pengeluaran Dicatat!'); refreshData(); setTimeout(() => setSuccessMsg(''), 3000); setIsSubmitting(false);
+    e.preventDefault();
+    if (!selectedOutlet || !expAmount) return;
+    setIsSubmitting(true);
+    await supabase.from('expenses').insert([{
+      outlet_id: selectedOutlet,
+      category: expCategory,
+      amount: Number(expAmount),
+      description: expDesc,
+      status: 'PENDING_SUPERVISOR',
+      beneficiary_bank: expBank || 'BRI',
+      beneficiary_account_no: expAccountNo || '',
+      beneficiary_account_name: expAccountName || '',
+      submitted_by: employeeName || 'Kasir'
+    }]);
+    setExpAmount('');
+    setExpDesc('');
+    setSuccessMsg('✅ Pengajuan Pengeluaran Berhasil Terkirim ke Supervisor!');
+    refreshData();
+    setTimeout(() => setSuccessMsg(''), 3000);
+    setIsSubmitting(false);
   };
 
   const handleAddStock = async (e: React.FormEvent) => {

@@ -118,6 +118,19 @@ const handleUpdateIssueStatus = async (id: string, newStatus: string) => {
   const { error } = await supabase.from('outlet_issues').update(updates).eq('id', id);
   if (!error) fetchOutletIssues();
 };
+// Fungsi Supervisor Menyetujui Pengajuan Pengeluaran
+const handleApproveExpense = async (expenseId: string) => {
+  const { error } = await supabase
+    .from('expenses')
+    .update({ 
+      status: 'APPROVED_SUPERVISOR'
+    })
+    .eq('id', expenseId);
+
+  if (!error) {
+    alert('✅ Pengajuan disetujui! Data otomatis diteruskan ke Admin Ops untuk pembayaran via CMS BRI.');
+  }
+};
   useEffect(() => {
     const ownerStr = localStorage.getItem('laundry_owner_user');
     if (!ownerStr) { window.location.href = '/login'; return; }
@@ -1147,7 +1160,53 @@ const handleUpdateIssueStatus = async (id: string, newStatus: string) => {
                 </div>
               </div>
             )}
-
+{/* WIDGET APPROVAL PENGELUARAN SUPERVISOR */}
+<div className="bg-white border rounded-2xl p-4 md:p-6 space-y-4 mb-6">
+        <h3 className="font-bold text-slate-800 text-sm md:text-lg flex items-center gap-2">
+          💸 Pengajuan Pengeluaran Ops (Menunggu Approval)
+        </h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-[10px] md:text-xs whitespace-nowrap">
+            <thead className="bg-slate-50 border-b">
+              <tr>
+                <th className="p-3">Tanggal</th>
+                <th className="p-3">Kategori</th>
+                <th className="p-3">Deskripsi</th>
+                <th className="p-3">Nominal</th>
+                <th className="p-3">Rekening Tujuan</th>
+                <th className="p-3 text-right">Aksi</th>
+              </tr>
+            </thead>
+            <tbody>
+              {fullYearHistory
+                .filter((item: any) => item.status === 'PENDING_SUPERVISOR' || item.beneficiary_account_no)
+                .map((exp: any) => (
+                  <tr key={exp.id} className="border-b hover:bg-slate-50">
+                    <td className="p-3">{new Date(exp.created_at).toLocaleDateString('id-ID')}</td>
+                    <td className="p-3 font-bold">{exp.category}</td>
+                    <td className="p-3">{exp.description}</td>
+                    <td className="p-3 font-bold text-rose-600">Rp {Number(exp.amount).toLocaleString('id-ID')}</td>
+                    <td className="p-3">
+                      {exp.beneficiary_bank} - {exp.beneficiary_account_no} a.n {exp.beneficiary_account_name}
+                    </td>
+                    <td className="p-3 text-right">
+                      {exp.status === 'PENDING_SUPERVISOR' ? (
+                        <button
+                          onClick={() => handleApproveExpense(exp.id)}
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1.5 rounded-lg text-xs"
+                        >
+                          ✓ Setujui Pengajuan
+                        </button>
+                      ) : (
+                        <span className="text-slate-400 italic">{exp.status}</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
             {activeTab === 'delete_requests' && (
               <div className="bg-white border rounded-2xl p-4 md:p-6 space-y-4">
                 <h3 className="font-bold text-rose-600 text-sm md:text-lg">🗑️ Permintaan Hapus Transaksi</h3>
