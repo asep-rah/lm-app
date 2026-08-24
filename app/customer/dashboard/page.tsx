@@ -365,7 +365,25 @@ const loadChats = async (orderId: string) => {
     setIsEditingAddress(false);
     alert('✅ Alamat penjemputan berhasil disimpan!');
   };
+// Ambil GPS Presisi Customer
+const handleGetCurrentLocation = () => {
+  if (!navigator.geolocation) {
+    return alert('⚠️ Browser/HP Anda tidak mendukung deteksi lokasi otomatis.');
+  }
 
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      const { latitude, longitude } = pos.coords;
+      setUserCoords({ lat: latitude, lon: longitude });
+      alert(`📍 Lokasi GPS berhasil didapatkan! (${latitude.toFixed(5)}, ${longitude.toFixed(5)})`);
+    },
+    (err) => {
+      console.error('Gagal ambil GPS:', err);
+      alert('⚠️ Gagal mengambil lokasi GPS. Pastikan izin lokasi/GPS di HP Anda aktif.');
+    },
+    { enableHighAccuracy: true }
+  );
+};
   const getServiceUnitPrice = (svcName: string) => {
     const activeSvc = dynamicServices.find(s => (s.name || '').trim().toLowerCase() === (svcName || '').trim().toLowerCase());
     if (activeSvc) {

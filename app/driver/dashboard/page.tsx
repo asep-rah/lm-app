@@ -105,16 +105,19 @@ export default function DriverDashboard() {
   };
 
   const handleOpenMaps = (order: any) => {
-    // Ambil alamat dari semua kemungkinan kolom database
+    // 1. Jika ada koordinat GPS presisi (lat & lon)
+    if (order.lat && order.lon) {
+      return window.open(`https://www.google.com/maps/dir/?api=1&destination=${order.lat},${order.lon}`, '_blank');
+    }
+
+    // 2. Fallback pencarian teks alamat
     const targetAddress = order.notes || order.address || order.customer_address || '';
 
     if (!targetAddress || targetAddress === 'Belum diisi' || targetAddress.trim() === '') {
       return alert('Alamat lokasi pelanggan belum diatur.');
     }
 
-    // Bersihkan teks "Alamat: " jika ada prefiks tambahan
     const cleanAddress = targetAddress.replace(/^Alamat:\s*/i, '').trim();
-
     const query = encodeURIComponent(cleanAddress);
     const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${query}`;
     window.open(mapsUrl, '_blank');
