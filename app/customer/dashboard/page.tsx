@@ -189,15 +189,17 @@ export default function CustomerDashboardPage() {
   };
 
   const fetchChatMessages = async (targetId: string) => {
-    const { data, error } = await supabase
-      .from('support_chats')
-      .select('*')
-      .eq('order_id', targetId)
-      .order('created_at', { ascending: true });
+    let query = supabase.from('support_chats').select('*');
 
-    if (!error && data) {
-      setChatMessages(data);
+    if (targetId === 'GENERAL_CS') {
+      const norm = cleanPhone(customerPhone);
+      query = query.or(`customer_phone.eq.${norm},customer_phone.eq.${customerPhone}`);
+    } else {
+      query = query.eq('order_id', targetId);
     }
+
+    const { data } = await query.order('created_at', { ascending: true });
+    if (data) setChatMessages(data);
   };
 
   useEffect(() => {
