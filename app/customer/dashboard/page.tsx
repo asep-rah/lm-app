@@ -117,20 +117,79 @@ const [depositLogs, setDepositLogs] = useState<any[]>([]);
 // Hitung Estimasi Menit Penjemputan Internal
 const estimatedPickupMinutes = (queueCount * 30) + 15;
 
-// Kirim Chat ke CS
+// Kirim Chat ke CS / AI
 const handleSendChat = async () => {
-  if (!inputChat.trim() || !activeChatOrderId) return;
-  await supabase.from('support_chats').insert([
+  if (!inputChat.trim()) return;
+
+  const currentTargetId = activeChatOrderId || 'GENERAL_CS';
+  const messageText = inputChat.trim();
+  setInputChat('');
+
+  // Update langsung ke tampilan lokal (Optimistic UI)
+  const newMsg = {
+    id: Date.now().toString(),
+    order_id: currentTargetId,
+    sender_type: 'customer',
+    message: messageText,
+    created_at: new Date().toISOString()
+  };
+  setChatMessages((prev) => [...prev, newMsg]);
+
+  // Simpan ke database Supabase
+  const { error } = await supabase.from('support_chats').insert([
     {
-      order_id: activeChatOrderId,
+      order_id: currentTargetId,
+      customer_phone: customerPhone || 'CUSTOMER',
+      customer_name: customerData?.name || 'Customer',
       sender_type: 'customer',
-      message: inputChat.trim()
+      message: messageText,
     }
   ]);
-  setInputChat('');
-  loadChats(activeChatOrderId);
+
+  if (error) {
+    console.error('Gagal kirim chat:', error.message);
+    alert('⚠️ Gagal mengirim pesan. Silakan coba lagi.');
+  } else {
+    loadChats(currentTargetId);
+  }
+};
+// Fetch Pesan Chat Real-Time
+const fetchChatMessages = async (targetId: string) => {
+  const { data, error } = await supabase
+    .from('support_chats')
+    .select('*')
+    .eq('order_id', targetId)
+    .order('created_at', { ascending: true });
+
+  if (!error && data) {
+    setChatMessages(data);
+  }
 };
 
+// Trigger saat modal chat dibuka
+useEffect(() => {
+  if (activeChatOrderId) {
+    fetchChatMessages(activeChatOrderId);
+    
+    // Setup Realtime Subscription Supabase
+    const channel = supabase
+      .channel('support_chats_changes')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'support_chats' },
+        (payload) => {
+          if (payload.new.order_id === activeChatOrderId) {
+            setChatMessages((prev) => [...prev, payload.new]);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }
+}, [activeChatOrderId]);
 // Load Chat CS
 const loadChats = async (orderId: string) => {
   setActiveChatOrderId(orderId);
@@ -1285,29 +1344,36 @@ const loadChats = async (orderId: string) => {
           </div>
 
               {/* Bubble Chat Area */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                {chatMessages.length === 0 ? (
-                  <div className="text-center text-xs text-slate-500 py-10">Belum ada percakapan. Halo CS kami sekarang!</div>
-                ) : (
-                  chatMessages.map((msg) => (
-                    <div 
-                      key={msg.id} 
-                      className={`flex flex-col ${msg.sender_type === 'customer' ? 'items-end' : 'items-start'}`}
+          <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-900/90">
+            {chatMessages.length === 0 ? (
+              <div className="text-center text-xs text-slate-400 py-12">
+                Belum ada percakapan. Halo CS kami sekarang!
+              </div>
+            ) : (
+              chatMessages.map((msg: any) => {
+                const isCustomer = msg.sender_type === 'customer';
+                return (
+                  <div
+                    key={msg.id || msg.created_at}
+                    className={`flex ${isCustomer ? 'justify-end' : 'justify-start'}`}
+                  >
+                    <div
+                      className={`max-w-[80%] rounded-2xl px-3.5 py-2 text-xs font-medium shadow ${
+                        isCustomer
+                          ? 'bg-cyan-500 text-slate-950 rounded-br-none'
+                          : 'bg-slate-800 text-slate-100 rounded-bl-none border border-slate-700'
+                      }`}
                     >
-                      <div className={`p-2.5 rounded-xl text-xs max-w-[80%] ${
-                        msg.sender_type === 'customer' 
-                          ? 'bg-cyan-600 text-white rounded-br-none' 
-                          : 'bg-slate-800 text-slate-200 rounded-bl-none'
-                      }`}>
-                        {msg.message}
-                      </div>
-                      <span className="text-[9px] text-slate-500 mt-1">
+                      <p>{msg.message}</p>
+                      <span className={`text-[8px] block mt-1 ${isCustomer ? 'text-slate-900/70 text-right' : 'text-slate-400'}`}>
                         {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </span>
                     </div>
-                  ))
-                )}
-              </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
 
               {/* Input Chat */}
               <div className="p-3 border-t border-slate-800 flex gap-2">
