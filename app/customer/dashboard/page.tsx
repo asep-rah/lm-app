@@ -117,33 +117,32 @@ const [depositLogs, setDepositLogs] = useState<any[]>([]);
 // Hitung Estimasi Menit Penjemputan Internal
 const estimatedPickupMinutes = (queueCount * 30) + 15;
 
-// Kirim Chat ke CS / AI (Fix UUID Format Constraint)
+// Kirim Chat ke CS / AI (Tuntas Aman Foreign Key & Schema)
 const handleSendChat = async () => {
   if (!inputChat.trim()) return;
 
-  // Gunakan UUID Nil jika tidak ada order_id spesifik
-  const DEFAULT_GENERAL_UUID = '00000000-0000-0000-0000-000000000000';
-  const currentTargetId = activeChatOrderId && activeChatOrderId !== 'GENERAL_CS' 
+  // Jika chat umum, kirim order_id sebagai null agar tidak menabrak Foreign Key
+  const validOrderId = (activeChatOrderId && activeChatOrderId !== 'GENERAL_CS') 
     ? activeChatOrderId 
-    : DEFAULT_GENERAL_UUID;
+    : null;
 
   const messageText = inputChat.trim();
   setInputChat('');
 
-  // Update tampilan lokal instan (Optimistic UI)
+  // 1. Update Tampilan Instan di HP Customer (Optimistic UI)
   const newMsg = {
     id: Date.now().toString(),
-    order_id: currentTargetId,
+    order_id: validOrderId,
     sender_type: 'customer',
     message: messageText,
     created_at: new Date().toISOString()
   };
   setChatMessages((prev) => [...prev, newMsg]);
 
-  // Insert ke Supabase
+  // 2. Simpan ke Database Supabase
   const { error } = await supabase.from('support_chats').insert([
     {
-      order_id: currentTargetId,
+      order_id: validOrderId,
       sender_type: 'customer',
       message: messageText,
     }
@@ -153,8 +152,9 @@ const handleSendChat = async () => {
     console.error('Error insert chat Supabase:', error.message);
     alert(`⚠️ Gagal mengirim pesan: ${error.message}`);
   } else {
-    if (typeof fetchChatMessages === 'function') {
-      fetchChatMessages(currentTargetId);
+    // Refresh pesan
+    if (typeof loadChats === 'function' && validOrderId) {
+      loadChats(validOrderId);
     }
   }
 };
@@ -195,15 +195,23 @@ useEffect(() => {
     };
   }
 }, [activeChatOrderId]);
-// Load Chat CS
-const loadChats = async (orderId: string) => {
+// Load Chat CS (Aman untuk Chat Umum & Chat Per Order)
+const loadChats = async (orderId: string | null) => {
   setActiveChatOrderId(orderId);
-  const { data } = await supabase
-    .from('support_chats')
-    .select('*')
-    .eq('order_id', orderId)
-    .order('created_at', { ascending: true });
-  setChatMessages(data || []);
+
+  let query = supabase.from('support_chats').select('*');
+
+  if (orderId && orderId !== 'GENERAL_CS') {
+    query = query.eq('order_id', orderId);
+  } else {
+    query = query.is('order_id', null);
+  }
+
+  const { data, error } = await query.order('created_at', { ascending: true });
+
+  if (!error && data) {
+    setChatMessages(data);
+  }
 };
   useEffect(() => {
     async function initPWA() {
