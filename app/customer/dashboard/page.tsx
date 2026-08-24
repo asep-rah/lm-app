@@ -133,6 +133,7 @@ const handleSendChat = async () => {
   const newMsg = {
     id: Date.now().toString(),
     order_id: validOrderId,
+    customer_phone: customerPhone || null,
     sender_type: 'customer',
     message: messageText,
     created_at: new Date().toISOString()
@@ -143,6 +144,7 @@ const handleSendChat = async () => {
   const { error } = await supabase.from('support_chats').insert([
     {
       order_id: validOrderId,
+      customer_phone: customerPhone || null,
       sender_type: 'customer',
       message: messageText,
     }
@@ -521,6 +523,8 @@ const handleGetCurrentLocation = () => {
       setCartSatuan([]);
       setNotes('');
       setClaimedPromo(null);
+      setKiloanEstKg('3');
+      setKiloanDuration('Reguler');
       setActiveTab('home');
       fetchCustomerProfile(normPhone);
     } else {

@@ -22,17 +22,25 @@ export default function CSDashboard() {
   const [assignedDriverMap, setAssignedDriverMap] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
 
+  // State Live Chat CS & Link Tracking Kurir Pihak Ketiga
   const [activeChatOrder, setActiveChatOrder] = useState<any | null>(null);
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [inputCsChat, setInputCsChat] = useState<string>('');
   const [trackingUrlInput, setTrackingUrlInput] = useState<Record<string, string>>({});
 
+  // Load Pesan Chat CS (Mendukung Order ID & Chat Berdasarkan No HP Customer)
   const loadCsChats = async (targetOrder: any) => {
     setActiveChatOrder(targetOrder);
-    const orderId = typeof targetOrder === 'object' ? targetOrder?.id : targetOrder;
+    const orderId = typeof targetOrder === 'object' ? targetOrder?.id : null;
+    const phone = typeof targetOrder === 'object' ? (targetOrder?.customer_phone || targetOrder?.phone) : targetOrder;
 
     let query = supabase.from('support_chats').select('*');
-    if (orderId) {
+
+    if (phone && orderId) {
+      query = query.or(`order_id.eq.${orderId},customer_phone.eq.${phone}`);
+    } else if (phone) {
+      query = query.eq('customer_phone', phone);
+    } else if (orderId) {
       query = query.eq('order_id', orderId);
     } else {
       query = query.is('order_id', null);
@@ -42,16 +50,19 @@ export default function CSDashboard() {
     setChatMessages(data || []);
   };
 
+  // Kirim Pesan CS ke Customer (Simpan Phone & Order ID)
   const handleSendCsChat = async () => {
     if (!inputCsChat.trim()) return;
 
-    const orderId = typeof activeChatOrder === 'object' ? activeChatOrder?.id : activeChatOrder;
+    const phone = typeof activeChatOrder === 'object' ? activeChatOrder?.customer_phone : activeChatOrder;
+    const orderId = typeof activeChatOrder === 'object' ? activeChatOrder?.id : null;
     const msgText = inputCsChat.trim();
     setInputCsChat('');
 
     const newMsg = {
       id: Date.now().toString(),
       order_id: orderId || null,
+      customer_phone: phone || null,
       sender_type: 'cs',
       message: msgText,
       created_at: new Date().toISOString()
@@ -61,6 +72,7 @@ export default function CSDashboard() {
     const { error } = await supabase.from('support_chats').insert([
       {
         order_id: orderId || null,
+        customer_phone: phone || null,
         sender_type: 'cs',
         message: msgText,
       }
@@ -74,6 +86,7 @@ export default function CSDashboard() {
     }
   };
 
+  // Simpan Link Live Tracking Pihak Ketiga
   const handleSaveTrackingUrl = async (orderId: string) => {
     const url = trackingUrlInput[orderId];
     if (!url || !url.trim()) return alert('Masukkan URL Tracking terlebih dahulu!');
@@ -94,6 +107,7 @@ export default function CSDashboard() {
     }
   };
 
+  // Load Data Master, Transaksi & Driver
   const loadCSData = async () => {
     setIsLoading(true);
 
@@ -227,6 +241,7 @@ export default function CSDashboard() {
     <div className="min-h-screen bg-slate-100 text-slate-800 p-4 md:p-8 font-sans">
       <div className="max-w-7xl mx-auto space-y-6">
         
+        {/* HEADER CS */}
         <div className="bg-slate-900 text-white rounded-3xl p-6 md:p-8 shadow-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b-4 border-blue-600">
           <div>
             <h1 className="text-2xl md:text-3xl font-black tracking-tight flex items-center gap-3">
@@ -242,9 +257,29 @@ export default function CSDashboard() {
             <button onClick={loadCSData} className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2.5 px-4 rounded-xl transition text-xs shadow-md">
               🔄 REFRESH
             </button>
+            <button
+              onClick={async () => {
+                const { data } = await supabase
+                  .from('support_chats')
+                  .select('customer_phone')
+                  .not('customer_phone', 'is', null)
+                  .order('created_at', { ascending: false })
+                  .limit(1);
+
+                if (data && data.length > 0) {
+                  loadCsChats({ customer_phone: data[0].customer_phone, order_number: 'Chat Umum' });
+                } else {
+                  alert('Belum ada chat umum masuk.');
+                }
+              }}
+              className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs shadow-md transition"
+            >
+              💬 Chat CS Masuk
+            </button>
           </div>
         </div>
 
+        {/* FILTER BAR */}
         <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-col md:flex-row gap-3 justify-between items-center">
           <div className="flex bg-slate-100 p-1 rounded-xl w-full md:w-auto overflow-x-auto">
             <button
@@ -299,6 +334,7 @@ export default function CSDashboard() {
 
         {isLoading && <p className="text-center font-bold text-slate-500 animate-pulse">Memuat data CS...</p>}
 
+        {/* TAB 1: ORDER PICKUP */}
         {activeTab === 'pickups' && (
           <div className="space-y-4">
             <div className="flex justify-between items-center">
@@ -443,6 +479,7 @@ export default function CSDashboard() {
           </div>
         )}
 
+        {/* TAB 2: PERLU KONFIRMASI */}
         {activeTab === 'confirmations' && (
           <div className="space-y-4">
             <h2 className="text-sm font-black text-slate-700 uppercase tracking-wider">
@@ -499,6 +536,7 @@ export default function CSDashboard() {
           </div>
         )}
 
+        {/* TAB 3: TRANSAKSI POS */}
         {activeTab === 'transactions' && (
           <div className="space-y-4">
             <h2 className="text-sm font-black text-slate-700 uppercase tracking-wider">
@@ -578,6 +616,7 @@ export default function CSDashboard() {
           </div>
         )}
 
+        {/* MODAL LIVE CHAT CS DENGAN CUSTOMER */}
         {activeChatOrder && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
             <div className="bg-white border border-slate-200 w-full max-w-md rounded-2xl flex flex-col h-[500px] shadow-2xl overflow-hidden">
@@ -585,7 +624,7 @@ export default function CSDashboard() {
                 <div>
                   <h3 className="font-bold text-sm">CS Live Chat</h3>
                   <p className="text-[10px] text-slate-300">
-                    {activeChatOrder.customer_phone} ({activeChatOrder.order_number})
+                    {activeChatOrder.customer_phone || activeChatOrder.phone || 'Customer'} ({activeChatOrder.order_number || 'Umum'})
                   </p>
                 </div>
                 <button
