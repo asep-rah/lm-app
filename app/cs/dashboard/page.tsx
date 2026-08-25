@@ -370,10 +370,45 @@ export default function CSDashboard() {
 
                     <div className="bg-slate-50 p-2.5 rounded-xl text-[10px] space-y-1 text-slate-700">
                       <p>Layanan: <b>{p.service_type}</b></p>
-                      <p>Estimasi: <b>{p.estimated_weight} Kg ({p.bag_count} Kantong)</b></p>
+                      <p>Estimasi: <b>{p.estimated_weight} Kg</b> ({p.bag_count} Kantong)</p>
                       <p>Ongkir PP: <b>Rp {Number(p.delivery_fee || 0).toLocaleString('id-ID')}</b></p>
                     </div>
-
+{/* DOKUMENTASI FOTO REAL-TIME DRIVER UNTUK CS */}
+<div className="p-2.5 bg-slate-100/80 rounded-xl border border-slate-200 mt-2 space-y-2">
+  <p className="text-[10px] font-extrabold text-slate-700 flex items-center gap-1">
+    📸 Foto Bukti Driver
+  </p>
+  <div className="grid grid-cols-2 gap-2">
+    <div>
+      <span className="text-[9px] font-bold text-slate-500 block mb-0.5">1. Di Rumah Customer</span>
+      {(p.photo_pickup_url || p.pickup_photo) ? (
+        <a href={p.photo_pickup_url || p.pickup_photo} target="_blank" rel="noreferrer">
+          <img 
+            src={p.photo_pickup_url || p.pickup_photo} 
+            className="w-full h-20 object-cover rounded-lg border border-slate-300 hover:opacity-90 transition-opacity" 
+            alt="Foto Ambil"
+          />
+        </a>
+      ) : (
+        <div className="h-20 bg-slate-200/60 rounded-lg flex items-center justify-center text-[9px] text-slate-400 italic">Belum Ada</div>
+      )}
+    </div>
+    <div>
+      <span className="text-[9px] font-bold text-slate-500 block mb-0.5">2. Sampai Outlet</span>
+      {(p.photo_outlet_url || p.outlet_photo) ? (
+        <a href={p.photo_outlet_url || p.outlet_photo} target="_blank" rel="noreferrer">
+          <img 
+            src={p.photo_outlet_url || p.outlet_photo} 
+            className="w-full h-20 object-cover rounded-lg border border-slate-300 hover:opacity-90 transition-opacity" 
+            alt="Foto Outlet"
+          />
+        </a>
+      ) : (
+        <div className="h-20 bg-slate-200/60 rounded-lg flex items-center justify-center text-[9px] text-slate-400 italic">Belum Ada</div>
+      )}
+    </div>
+  </div>
+</div>
                     <div className="bg-indigo-50/70 border border-indigo-200 p-3 rounded-2xl space-y-2">
                       <label className="text-[10px] font-black text-indigo-900 block uppercase">
                         👔 Instruksi CS: Tugaskan Driver

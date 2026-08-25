@@ -702,57 +702,83 @@ export default function CustomerDashboardPage() {
                   <button onClick={() => setActiveTab('history')} className="text-[11px] font-bold text-blue-600">Lihat Semua</button>
                 </div>
 
-                {activeOrders.map((order) => (
-                  <div key={order.id} className="bg-white border border-slate-200 rounded-2xl p-4 text-xs space-y-2.5 shadow-sm">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <h4 className="font-extrabold text-slate-900 text-sm">{order.service_type}</h4>
-                        <p className="text-[10px] text-slate-500 font-medium mt-0.5">{order.notes || '-'}</p>
-                      </div>
-                      <span className="bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-extrabold px-3 py-1 rounded-full">
-                        {order.status}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center pt-2 border-t border-slate-100 text-[10px]">
-                      <span className="text-slate-400 font-medium">{new Date(order.created_at).toLocaleDateString('id-ID')}</span>
-                      <span className="font-black text-blue-600 text-xs">Ongkir: Rp {Number(order.delivery_fee || 0).toLocaleString('id-ID')}</span>
-                    </div>
+                 {/* PEMISAHAN LOGIKA BERANDA VS RIWAYAT & TRACKER LIVE */}
+          {(() => {
+            // 1. BERANDA: Hanya tampilkan pesanan yang masih dalam penjemputan driver
+            const berandaOrders = activeOrders.filter((o: any) =>
+              ['Jemput', 'Menuju Lokasi', 'Diambil Driver', 'Tiba di Outlet'].includes(o.status)
+            );
 
-                    <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-2xl my-2.5 space-y-2.5">
-                      <div className="flex justify-between items-center">
-                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Status Pengerjaan Live</span>
-                        <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-2.5 py-0.5 rounded-full border border-indigo-200">
-                          {order.status || 'Dalam Antrean'}
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-6 gap-1 text-center pt-1">
-                        {[
-                          { label: 'Jemput', icon: '🚚', key: 'jemput' },
-                          { label: 'Cuci', icon: '🧼', key: 'cuci' },
-                          { label: 'Kering', icon: '💨', key: 'kering' },
-                          { label: 'Setrika', icon: '👔', key: 'setrika' },
-                          { label: 'Siap', icon: '📦', key: 'siap' },
-                          { label: 'Selesai', icon: '✅', key: 'selesai' },
-                        ].map((step, idx) => {
-                          const currentStatus = (order.status || '').toLowerCase();
-                          const isActive = currentStatus.includes(step.key);
-                          return (
-                            <div key={idx} className="flex flex-col items-center">
-                              <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold transition-all ${
-                                isActive 
-                                  ? 'bg-emerald-500 text-white ring-2 ring-emerald-200 scale-105' 
-                                  : 'bg-slate-200 text-slate-400'
-                              }`}>
-                                {step.icon}
-                              </div>
-                              <span className={`text-[8px] mt-1 font-semibold ${isActive ? 'text-emerald-700 font-bold' : 'text-slate-400'}`}>
-                                {step.label}
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
+            // 2. RIWAYAT: Masuk ke sini setelah terkonfirmasi Kasir (Bisa diklik & lacak cuci s.d. selesai)
+            const riwayatOrders = activeOrders.filter((o: any) =>
+              ['Diterima', 'Sortir', 'Mencuci', 'Pengeringan', 'Setrika', 'Siap', 'Selesai'].includes(o.status)
+            );
+
+            const displayOrders = activeTab === 'home' || activeTab === 'beranda' ? berandaOrders : riwayatOrders;
+
+            return displayOrders.map((order: any) => {
+              const currentStatus = (order.status || '').toLowerCase();
+              const stages = [
+                { label: 'Jemput', icon: '🛺', match: ['jemput', 'diterima', 'baru', 'tiba'] },
+                { label: 'Cuci', icon: '🧼', match: ['cuci', 'mencuci', 'sortir'] },
+                { label: 'Kering', icon: '💨', match: ['kering', 'pengeringan'] },
+                { label: 'Setrika', icon: '👔', match: ['setrika', 'gosok'] },
+                { label: 'Siap', icon: '📦', match: ['siap', 'packing'] },
+                { label: 'Selesai', icon: '✅', match: ['selesai', 'diambil'] }
+              ];
+
+              let activeIndex = stages.findIndex(s => s.match.some(m => currentStatus.includes(m)));
+              if (activeIndex === -1) activeIndex = 0;
+
+              return (
+                <div
+                  key={order.id}
+                  onClick={() => setSelectedOrder(order)}
+                  className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm mb-3 cursor-pointer hover:border-blue-300 transition"
+                >
+                  <div className="flex justify-between items-start mb-2">
+                    <div>
+                      <h3 className="font-bold text-slate-800 text-sm">{order.service_type || 'Layanan Laundry'}</h3>
+                      <p className="text-[10px] text-slate-400">{order.created_at || 'Baru Saja'}</p>
                     </div>
+                    <span className="text-xs font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full">
+                      {order.status}
+                    </span>
+                  </div>
+
+                  {/* Tracker 4 Tahap Driver (Untuk Tab Beranda) */}
+                  {(activeTab === 'home' || activeTab === 'beranda') ? (
+                    <div className="grid grid-cols-4 gap-1 text-center text-[9px] font-bold mt-3 pt-2 border-t border-slate-100">
+                      <div className={`p-1.5 rounded-lg ${currentStatus.includes('jemput') || currentStatus.includes('menuju') ? 'bg-blue-600 text-white animate-pulse' : 'bg-slate-100 text-slate-400'}`}>1. Menuju Lokasi</div>
+                      <div className={`p-1.5 rounded-lg ${currentStatus.includes('diambil') ? 'bg-blue-600 text-white animate-pulse' : 'bg-slate-100 text-slate-400'}`}>2. Cucian Diambil</div>
+                      <div className={`p-1.5 rounded-lg ${currentStatus.includes('tiba') ? 'bg-blue-600 text-white animate-pulse' : 'bg-slate-100 text-slate-400'}`}>3. Driver Tiba</div>
+                      <div className="p-1.5 rounded-lg bg-emerald-100 text-emerald-700">4. Terkonfirmasi</div>
+                    </div>
+                  ) : (
+                    /* Tracker 6 Tahap Outlet (Untuk Tab Riwayat) */
+                    <div className="grid grid-cols-6 gap-1 text-center pt-2 mt-2 border-t border-slate-100">
+                      {stages.map((step, idx) => {
+                        const isPassedOrActive = idx <= activeIndex;
+                        const isActiveNow = idx === activeIndex;
+                        return (
+                          <div key={idx} className="flex flex-col items-center">
+                            <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold transition-all ${
+                              isActiveNow ? 'bg-blue-600 text-white ring-2 ring-blue-300 scale-110 animate-pulse' : isPassedOrActive ? 'bg-emerald-500 text-white shadow-sm' : 'bg-slate-200 text-slate-400'
+                            }`}>
+                              {step.icon}
+                            </div>
+                            <span className={`text-[8px] mt-1 font-semibold ${isActiveNow ? 'text-blue-600 font-bold' : isPassedOrActive ? 'text-slate-700' : 'text-slate-400'}`}>
+                              {step.label}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            });
+          })()}
 
                     {order.status === 'Driver Menuju Lokasi' && order.driver_lat && (
                       <div className="bg-blue-50 border border-blue-200 p-3 rounded-2xl space-y-1.5 text-xs mt-2">
@@ -1213,14 +1239,14 @@ export default function CustomerDashboardPage() {
                 </div>
 
                 <a
-                  href={`https://wa.me/6281234567890?text=${encodeURIComponent('Halo Kasir, saya ingin konfirmasi Top Up Saldo Deposit.')}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-2xl text-xs shadow flex items-center justify-center gap-2 transition"
-                >
-                  <span>💬</span>
-                  <span>HUBUNGI ADMIN VIA WHATSAPP (BRIWASH ASIA AFRIKA)</span>
-                </a>
+                href={`https://wa.me/${(selectedOutlet?.phone || '6281234567890').replace(/[^0-9]/g, '').replace(/^0/, '62')}?text=${encodeURIComponent(`Halo Admin ${selectedOutlet?.name || ''}, saya ingin konfirmasi Top Up Saldo Deposit.`)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-2xl text-xs shadow flex items-center justify-center gap-2"
+              >
+                <span>💬</span>
+                <span>HUBUNGI ADMIN VIA WHATSAPP ({selectedOutlet?.name || 'OUTLET'})</span>
+              </a>
               </div>
 
               <div className="space-y-2">

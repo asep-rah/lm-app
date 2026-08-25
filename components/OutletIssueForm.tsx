@@ -6,29 +6,53 @@ export default function OutletIssueForm({ selectedOutlet, employeeName }: { sele
   const [issueDescription, setIssueDescription] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [msg, setMsg] = useState('');
+  const [mediaFile, setMediaFile] = useState<File | null>(null);
 
   const handleIssueSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedOutlet || !issueDescription) return;
     setIsSubmitting(true);
-    
-    const { error } = await supabase.from('outlet_issues').insert([{
-      outlet_id: selectedOutlet,
-      category: issueCategory,
-      description: issueDescription,
-      reporter_name: employeeName || 'Kasir',
-      status: 'Sedang Diproses',
-      created_at: new Date().toISOString()
-    }]);
 
-    if (!error) {
+    try {
+      let mediaUrl = '';
+      // Upload media ke Supabase Storage jika ada file terpilih
+      if (mediaFile) {
+        const fileExt = mediaFile.name.split('.').pop();
+        const fileName = `issue_${Date.now()}.${fileExt}`;
+        const { error: uploadErr } = await supabase.storage
+          .from('outlet-issues')
+          .upload(fileName, mediaFile);
+
+        if (!uploadErr) {
+          const { data: urlData } = supabase.storage
+            .from('outlet-issues')
+            .getPublicUrl(fileName);
+          mediaUrl = urlData.publicUrl;
+        }
+      }
+
+      // Pastikan outlet_id di-convert jika dikirim angka ("18" -> dihindari error UUID)
+      const { error } = await supabase.from('outlet_issues').insert([{
+        outlet_id: typeof selectedOutlet === 'object' ? (selectedOutlet as any).id : selectedOutlet,
+        category: issueCategory,
+        description: issueDescription,
+        reporter_name: employeeName || 'Kasir',
+        status: 'Sedang Diproses',
+        media_url: mediaUrl,
+        created_at: new Date().toISOString()
+      }]);
+
+      if (error) throw error;
+
       setIssueDescription('');
+      setMediaFile(null);
       setMsg('✅ Laporan kendala berhasil dikirim!');
       setTimeout(() => setMsg(''), 3000);
-    } else {
+    } catch (error: any) {
       alert('❌ Gagal mengirim: ' + error.message);
+    } finally {
+      setIsSubmitting(false);
     }
-    setIsSubmitting(false);
   };
 
   return (
@@ -62,7 +86,17 @@ export default function OutletIssueForm({ selectedOutlet, employeeName }: { sele
             required
           />
         </div>
-
+        <div>
+          <label className="block text-[10px] font-bold text-slate-500 mb-1">
+            📸 Lampirkan Foto / Video Bukti Kendala (Opsional)
+          </label>
+          <input
+            type="file"
+            accept="image/*,video/*"
+            onChange={(e) => setMediaFile(e.target.files?.[0] || null)}
+            className="w-full text-xs text-slate-500 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-amber-50 file:text-amber-700 hover:file:bg-amber-100 cursor-pointer"
+          />
+        </div>
         <button
           type="submit"
           disabled={isSubmitting}

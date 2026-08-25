@@ -1345,7 +1345,7 @@ export default function Dashboard() {
                         const svcPrice = isGlobal ? svc.price : outletOverrides[settingViewOutlet]?.[svc.id]?.price ?? svc.price;
                         const svcComms = isGlobal ? svc.commissions : outletOverrides[settingViewOutlet]?.[svc.id]?.commissions || svc.commissions;
                         return (
-                          <div key={svc.id} className={`border rounded-xl p-3 md:p-4 ${isGlobal ? 'bg-slate-50' : 'bg-indigo-50'}`}>
+                          <div key={svc.id} className={'border rounded-xl p-3 md:p-4 ' + (isGlobal ? 'bg-slate-50 border-slate-200' : 'bg-indigo-50/30 border-indigo-200')}>
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
                               <div><label className="text-[10px] md:text-xs font-semibold text-slate-500 mb-1 block">Nama Layanan</label><input type="text" value={svc.name} onChange={(e) => updateService(svc.id, 'name', e.target.value)} disabled={!isGlobal} className="w-full border rounded-lg p-2 text-xs md:text-sm font-bold" /></div>
                               <div className="grid grid-cols-2 md:grid-cols-2 gap-2 md:col-span-2">

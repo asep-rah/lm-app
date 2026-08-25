@@ -1,5 +1,5 @@
 'use client';
-
+import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
 import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
@@ -1263,7 +1263,7 @@ const handleCompleteTask = async (taskId: string) => {
           </div>
         )}
       </div>
-            {activeTab === 'delete_requests' && (
+      {activeTab === 'delete_requests' && (
               <div className="bg-white border rounded-2xl p-4 md:p-6 space-y-4">
                 <h3 className="font-bold text-rose-600 text-sm md:text-lg">🗑️ Permintaan Hapus Transaksi</h3>
                 {deleteRequests.map((req) => (
@@ -1281,6 +1281,11 @@ const handleCompleteTask = async (taskId: string) => {
                   </div>
                 ))}
               </div>
+            )}
+
+            {/* TAB KPI MONITORING 7 ROLE */}
+            {activeTab === 'kpi' && (
+              <KpiRoleMonitoring />
             )}
           </>
         )}

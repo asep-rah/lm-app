@@ -1172,23 +1172,30 @@ const deductChemicalInventory = async (orderItemName: string, qtyKgOrPcs: number
     }
   }
 };
-  const handleUpdateStatus = async (order: any, nextStatus: string) => {
+const handleUpdateStatus = async (order: any, nextStatus: string) => {
+  try {
     setIsSubmitting(true);
+    const s = nextStatus.toLowerCase();
     const updateObj: any = { status: nextStatus };
-    const s = (nextStatus || '').toLowerCase();
-    if (s.includes('cuci')) {
-      updateObj.by_cuci = employeeName;
-      // Otomatis potong stok Deterjen & Parfum berdasarkan takaran layanan
-      deductChemicalInventory(order.service_type || order.item_name || '', parseFloat(order.weight_kg || order.qty || 1), selectedOutlet);
-    }
+
+    // Potong stok Deterjen & Parfum berdasarkan takaran layanan
+    await deductChemicalInventory(
+      order.service_type || order.item_name || '',
+      parseFloat(order.weight_kg || order.qty || 1),
+      selectedOutlet
+    );
+
+    // Catat nama karyawan yang mengerjakan tiap tahap
     if (s.includes('sortir')) updateObj.by_sortir = employeeName;
     else if (s.includes('cuci')) updateObj.by_cuci = employeeName;
     else if (s.includes('kering')) updateObj.by_kering = employeeName;
     else if (s.includes('setrika')) updateObj.by_setrika = employeeName;
     else if (s.includes('pack')) updateObj.by_packing = employeeName;
 
+    // 1. Update ke Supabase database
     await supabase.from('transactions').update(updateObj).eq('id', order.id);
 
+    // 2. Catat ke work_logs jika bukan status akhir
     if (nextStatus !== 'Siap Diambil' && nextStatus !== 'Selesai') {
       await supabase.from('work_logs').insert([{
         transaction_id: order.id,
@@ -1200,11 +1207,16 @@ const deductChemicalInventory = async (orderItemName: string, qtyKgOrPcs: number
       }]);
     }
 
-    setSuccessMsg(`✅ Update ke: ${nextStatus}`);
+    // 3. Notifikasi sukses & Refresh data tampilan POS & Customer
+    setSuccessMsg(`Update ke: ${nextStatus}`);
     await refreshData();
     setTimeout(() => setSuccessMsg(''), 2000);
+  } catch (err) {
+    console.error('Gagal update status:', err);
+  } finally {
     setIsSubmitting(false);
-  };
+  }
+};
 
   const handleSubmitRack = async () => {
     if (!selectedOrderForRack) return; setIsSubmitting(true);
@@ -2037,6 +2049,22 @@ const deductChemicalInventory = async (orderItemName: string, qtyKgOrPcs: number
                       </button>
                     </div>
                   </div>
+                 {/* 📸 FOTO BUKTI SERAH TERIMA DRIVER DI OUTLET */}
+                 {order.photo_outlet_url && (
+                    <div className="p-2 bg-purple-50 border border-purple-200 rounded-xl my-2">
+                      <p className="text-[10px] font-bold text-purple-700 mb-1 flex items-center gap-1">
+                        📸 Bukti Driver Tiba di Outlet
+                      </p>
+                      <a href={order.photo_outlet_url} target="_blank" rel="noreferrer">
+                        <img 
+                          src={order.photo_outlet_url} 
+                          alt="Foto Tiba di Outlet"
+                          className="w-full h-28 object-cover rounded-lg hover:opacity-90 transition-opacity cursor-pointer" 
+                        />
+                      </a>
+                    </div>
+                  )}
+
                   <div className="pt-1 border-t">{renderNextStepButton(order)}</div>
                 </div>
               ))}
