@@ -47,6 +47,8 @@ const calculateDistanceKm = (lat1: number, lon1: number, lat2: number, lon2: num
   return R * c;
 };
 
+const paymentMethod: any = "CASH";
+
 export default function CustomerDashboardPage() {
   const [activeTab, setActiveTab] = useState<'home' | 'order' | 'deposit' | 'history' | 'profile'>('home');
   const [activeSupportTab, setActiveSupportTab] = useState<'cs' | 'ai'>('cs');

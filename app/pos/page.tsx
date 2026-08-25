@@ -100,35 +100,6 @@ const [issueCategory, setIssueCategory] = useState('Peralatan/Mesin');
 const [issueUrgency, setIssueUrgency] = useState('Biasa');
 const [issueDescription, setIssueDescription] = useState('');
 const [isSubmittingIssue, setIsSubmittingIssue] = useState(false);
-// AUTO-FILL POS FORM DARI URL PARAMS PICKUP ORDER ONLINE
-useEffect(() => {
-  if (typeof window !== 'undefined') {
-    const params = new URLSearchParams(window.location.search);
-    const nameParam = params.get('name');
-    const phoneParam = params.get('phone');
-    const serviceParam = params.get('service');
-    const weightParam = params.get('weight');
-    const pickupIdParam = params.get('pickup_id');
-
-    if (phoneParam) {
-      if (typeof setCustomerPhone === 'function') setCustomerPhone(phoneParam);
-      setActiveTab('pos'); 
-    }
-    if (nameParam && typeof setCustomerName === 'function') {
-      setCustomerName(nameParam);
-    }
-    if (serviceParam && typeof setServiceType === 'function') {
-      setServiceType(serviceParam);
-      if (typeof setSelectedServiceInput === 'function') setSelectedServiceInput(serviceParam);
-    }
-    if (weightParam && typeof setInputWeight === 'function') {
-      setInputWeight(weightParam);
-    }
-    if (pickupIdParam && typeof setSelectedPickupId === 'function') {
-      setSelectedPickupId(pickupIdParam);
-    }
-  }
-}, []);
 // Handler Submit Setoran Kasir
 const handleSubmitDeposit = async () => {
   const amount = parseFloat(depositAmount) || 0;
@@ -383,12 +354,6 @@ useEffect(() => {
   const [expCategory, setExpCategory] = useState('');
   const [expAmount, setExpAmount] = useState('');
   const [expDesc, setExpDesc] = useState('');
-  const [expBank, setExpBank] = useState('BRI');
-  const [expAccountNo, setExpAccountNo] = useState('');
-  const [expAccountName, setExpAccountName] = useState('');
-
-  const [issueCategory, setIssueCategory] = useState('Kerusakan Alat');
-  const [issueDescription, setIssueDescription] = useState('');
   const [stockItem, setStockItem] = useState('Detergen Premium (ml)');
   const [stockAddAmount, setStockAddAmount] = useState('');
 
@@ -1159,53 +1124,11 @@ const handleSubmitIssue = async (e: React.FormEvent) => {
   };
 
   const handleExpenseSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedOutlet || !expAmount) return;
-    setIsSubmitting(true);
-    await supabase.from('expenses').insert([{
-      outlet_id: selectedOutlet,
-      category: expCategory,
-      amount: Number(expAmount),
-      description: expDesc,
-      status: 'PENDING_SUPERVISOR',
-      beneficiary_bank: expBank || 'BRI',
-      beneficiary_account_no: expAccountNo || '',
-      beneficiary_account_name: expAccountName || '',
-      submitted_by: employeeName || 'Kasir'
-    }]);
-    setExpAmount('');
-    setExpDesc('');
-    setExpBank('BRI');
-    setExpAccountNo('');
-    setExpAccountName('');
-    setSuccessMsg('✅ Pengajuan Pengeluaran Berhasil Terkirim ke Supervisor!');
-    refreshData();
-    setTimeout(() => setSuccessMsg(''), 3000);
-    setIsSubmitting(false);
+    e.preventDefault(); if (!selectedOutlet || !expAmount) return; setIsSubmitting(true);
+    await supabase.from('expenses').insert([{ outlet_id: selectedOutlet, category: expCategory, amount: Number(expAmount), description: expDesc }]);
+    setExpAmount(''); setExpDesc(''); setSuccessMsg('✅ Pengeluaran Dicatat!'); refreshData(); setTimeout(() => setSuccessMsg(''), 3000); setIsSubmitting(false);
   };
-// Handler Kirim Laporan Kendala Outlet
-const handleIssueSubmit = async (e: React.FormEvent) => {
-  e.preventDefault();
-  if (!selectedOutlet || !issueDescription) return;
-  setIsSubmitting(true);
-  const { error } = await supabase.from('outlet_issues').insert([{
-    outlet_id: selectedOutlet,
-    category: issueCategory,
-    description: issueDescription,
-    reporter_name: employeeName || 'Kasir',
-    status: 'Sedang Diproses',
-    created_at: new Date().toISOString()
-  }]);
 
-  if (!error) {
-    setIssueDescription('');
-    setSuccessMsg('✅ Laporan kendala berhasil dikirim ke Supervisor!');
-    setTimeout(() => setSuccessMsg(''), 3000);
-  } else {
-    alert('❌ Gagal mengirim laporan: ' + error.message);
-  }
-  setIsSubmitting(false);
-};
   const handleAddStock = async (e: React.FormEvent) => {
     e.preventDefault(); if (!selectedOutlet || !stockAddAmount) return; setIsSubmitting(true);
     const { data: invData } = await supabase.from('inventory').select('*').eq('outlet_id', selectedOutlet).eq('item_name', stockItem).single();
@@ -1787,7 +1710,7 @@ const deductChemicalInventory = async (orderItemName: string, qtyKgOrPcs: number
           <button onClick={() => setActiveTab('workflow')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'workflow' ? 'bg-amber-500 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>⚙️ Kerja ({activeOrders.length})</button>
           <button onClick={() => setActiveTab('pickup')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'pickup' ? 'bg-blue-600 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>🛍️ Ambil ({pickupOrders.length})</button>
           <button onClick={() => setActiveTab('member')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'member' ? 'bg-purple-600 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>💳 Member</button>
-          <button onClick={() => setActiveTab('expense')} className={`flex-1 py-1.5 px-2 rounded-xl text-[10px] font-bold ${activeTab === 'expense' ? 'bg-rose-500 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>💸 Pengeluaran & 🚨 Kendala</button>
+          <button onClick={() => setActiveTab('expense')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'expense' ? 'bg-rose-500 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>💸 Keluar</button>
           <button onClick={() => setActiveTab('performance')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'performance' ? 'bg-indigo-600 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>📊 Gaji</button>
         </div>
 
@@ -1844,16 +1767,8 @@ const deductChemicalInventory = async (orderItemName: string, qtyKgOrPcs: number
 
               <div className="grid grid-cols-2 gap-2">
                 <div><label className="block text-[10px] font-bold text-slate-500 mb-1">Nomor WhatsApp Pelanggan</label><input type="tel" placeholder="Ketik 08..." value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} className="w-full border border-indigo-200 bg-indigo-50 text-indigo-800 rounded-xl px-3 py-3 text-xs md:text-sm font-bold" /></div>
-                <div>
-            <label className="block text-[10px] font-bold text-slate-500 mb-1">Nama Pelanggan (Otomatis)</label>
-            <input
-              type="text"
-              placeholder="Nama Pelanggan (Otomatis)"
-              value={customerName}
-              onChange={(e) => setCustomerName(e.target.value)}
-              className="w-full border border-slate-300 rounded-xl p-2.5 text-xs text-slate-900 bg-white"
-            />
-          </div>
+                <div><label className="block text-[10px] font-bold text-slate-500 mb-1">Nama Pelanggan (Otomatis)</label><input type="text" placeholder="Ketik Nama" value={customerName} onChange={(e) => setCustomerName(e.target.value)} className="w-full border rounded-xl px-3 py-3 text-xs md:text-sm" required /></div>
+              </div>
 
               {customerDeposit !== null && (
                 <div className={`p-2.5 rounded-xl text-xs font-bold flex justify-between border ${customerDeposit > 0 ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
@@ -2149,138 +2064,28 @@ const deductChemicalInventory = async (orderItemName: string, qtyKgOrPcs: number
             </div>
           )}
 
-{activeTab === 'expense' && (
-  <div className="space-y-6">
-    {/* FORM PENGAJUAN PENGELUARAN OPERASIONAL */}
-    <div className="bg-white border rounded-2xl p-4 space-y-3 shadow-sm">
-      <h3 className="text-xs font-bold text-rose-600 border-b pb-2">💸 Pengajuan Pengeluaran Kas</h3>
-      <form onSubmit={handleExpenseSubmit} className="space-y-3">
-        <div>
-          <label className="block text-[10px] font-bold text-slate-500 mb-1">Kategori Pengeluaran</label>
-          <select 
-            value={expCategory} 
-            onChange={(e) => setExpCategory(e.target.value)}
-            className="w-full border border-slate-300 rounded-xl p-2.5 text-xs bg-white"
-          >
-            <option value="Operasional">Operasional (Detergen/Plastik/BBM)</option>
-            <option value="Maintenance">Maintenance / Service Mesin</option>
-            <option value="Lainnya">Pengeluaran Lainnya</option>
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-[10px] font-bold text-slate-500 mb-1">Nominal (Rp)</label>
-          <input
-            type="number"
-            placeholder="Nominal Rp"
-            value={expAmount}
-            onChange={(e) => setExpAmount(e.target.value)}
-            className="w-full border border-slate-300 rounded-xl p-2.5 text-xs text-rose-600 font-bold"
-            required
-          />
-        </div>
-
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label className="block text-[10px] font-bold text-slate-500 mb-1">Bank Tujuan</label>
-            <input
-              type="text"
-              placeholder="BRI / BCA"
-              value={expBank}
-              onChange={(e) => setExpBank(e.target.value)}
-              className="w-full border border-slate-300 rounded-xl p-2.5 text-xs"
-              required
-            />
+          {activeTab === 'expense' && (
+            <div className="space-y-6">
+              {/* TOMBOL PEMICU SETORAN CASH */}
+          <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-xl flex justify-between items-center mb-4">
+            <div>
+              <h4 className="font-bold text-xs text-emerald-900">📲 Setoran Cash Outlet via Wallet/QRIS</h4>
+              <p className="text-[10px] text-emerald-700">Top-up cash via Indomaret/Alfamart/m-Banking lalu setor ke QRIS Meja Kasir</p>
+            </div>
+            <button
+              onClick={() => setShowDepositModal(true)}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-2 rounded-xl text-xs shadow transition whitespace-nowrap"
+            >
+              Setor Sekarang
+            </button>
           </div>
-          <div>
-            <label className="block text-[10px] font-bold text-slate-500 mb-1">No. Rekening</label>
-            <input
-              type="text"
-              placeholder="No. Rekening"
-              value={expAccountNo}
-              onChange={(e) => setExpAccountNo(e.target.value)}
-              className="w-full border border-slate-300 rounded-xl p-2.5 text-xs"
-              required
-            />
-          </div>
-        </div>
-
-        <div>
-          <label className="block text-[10px] font-bold text-slate-500 mb-1">Nama Pemilik Rekening</label>
-          <input
-            type="text"
-            placeholder="Nama Atas Nama Rekening"
-            value={expAccountName}
-            onChange={(e) => setExpAccountName(e.target.value)}
-            className="w-full border border-slate-300 rounded-xl p-2.5 text-xs"
-            required
-          />
-        </div>
-
-        <div>
-          <label className="block text-[10px] font-bold text-slate-500 mb-1">Deskripsi / Catatan Beli</label>
-          <input
-            type="text"
-            placeholder="Misal: Beli 2 Jerigen Detergen"
-            value={expDesc}
-            onChange={(e) => setExpDesc(e.target.value)}
-            className="w-full border border-slate-300 rounded-xl p-2.5 text-xs"
-            required
-          />
-        </div>
-
-        <button
-          type="submit"
-          disabled={isSubmitting}
-          className="w-full bg-rose-600 hover:bg-rose-700 text-white font-bold py-3 rounded-xl text-xs shadow-md"
-        >
-          {isSubmitting ? 'Mengirim Pengajuan...' : 'KIRIM PENGAJUAN PENGELUARAN'}
-        </button>
-      </form>
-    </div>
-
-    {/* FORM LAPORKAN KENDALA OUTLET */}
-    <div className="bg-white border rounded-2xl p-4 space-y-3 shadow-sm">
-      <h3 className="text-xs font-bold text-amber-600 border-b pb-2">🚨 Laporkan Kendala Outlet</h3>
-      <form onSubmit={handleIssueSubmit} className="space-y-3">
-        <div>
-          <label className="block text-[10px] font-bold text-slate-500 mb-1">Kategori Kendala</label>
-          <select
-            value={issueCategory}
-            onChange={(e) => setIssueCategory(e.target.value)}
-            className="w-full border border-slate-300 rounded-xl p-2.5 text-xs bg-white"
-          >
-            <option value="Kerusakan Alat">Kerusakan Mesin / Alat Outlet</option>
-            <option value="Ketersediaan Stok">Bahan Baku / Deterjen Habis</option>
-            <option value="Komplain Pelanggan">Komplain Pelanggan Berat</option>
-            <option value="Kendala Listrik/Air">Gangguan Listrik / Air</option>
-            <option value="Lainnya">Masalah Lainnya</option>
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-[10px] font-bold text-slate-500 mb-1">Detail Kendala</label>
-          <textarea
-            rows={3}
-            placeholder="Jelaskan detail masalah di outlet..."
-            value={issueDescription}
-            onChange={(e) => setIssueDescription(e.target.value)}
-            className="w-full border border-slate-300 rounded-xl p-2.5 text-xs"
-            required
-          />
-        </div>
-
-        <button
-          type="submit"
-          disabled={isSubmitting}
-          className="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 rounded-xl text-xs shadow-md"
-        >
-          {isSubmitting ? 'Mengirim Laporan...' : 'KIRIM LAPORAN KENDALA'}
-        </button>
-      </form>
-    </div>
-  </div>
-)}
+              <form onSubmit={handleExpenseSubmit} className="space-y-3 border rounded-xl p-4 shadow-sm">
+                <h3 className="text-xs font-bold text-rose-600 border-b pb-2">💸 Pengeluaran Kas</h3>
+                <select value={expCategory} onChange={(e) => setExpCategory(e.target.value)} className="w-full border rounded-xl px-3 py-3 text-xs md:text-sm">{settings?.coas?.map((c: string, i: number) => <option key={i} value={c}>{c}</option>)}</select>
+                <input type="number" placeholder="Nominal Rp" value={expAmount} onChange={(e) => setExpAmount(e.target.value)} className="w-full border rounded-xl px-3 py-3 text-lg font-bold text-rose-600" required />
+                <input type="text" placeholder="Catatan Beli" value={expDesc} onChange={(e) => setExpDesc(e.target.value)} className="w-full border rounded-xl px-3 py-3 text-xs md:text-sm" required />
+                <button type="submit" disabled={isSubmitting} className="w-full bg-rose-600 text-white font-bold py-3.5 rounded-xl text-sm">SIMPAN</button>
+              </form>
               <form onSubmit={handleAddStock} className="space-y-3 border rounded-xl p-4 shadow-sm">
                 <h3 className="text-xs font-bold text-indigo-600 border-b pb-2">📦 Tambah Stok</h3>
                 <select value={stockItem} onChange={(e) => setStockItem(e.target.value)} className="w-full border rounded-xl px-3 py-3 text-xs md:text-sm"><option value="Detergen Premium (ml)">Detergen Premium</option><option value="Parfum Lavender (ml)">Parfum Lavender</option></select>

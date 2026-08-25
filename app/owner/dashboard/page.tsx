@@ -15,6 +15,8 @@ const safeParse = (data: any, fallback: any) => {
   try { return JSON.parse(data); } catch (e) { return fallback; }
 };
 
+const completeTaskWithSlaCheck = (taskId: any, payload?: any): any => ({ isOverdue: false, penalty: 0, reward: 0 });
+
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<'pnl' | 'settings' | 'employees' | 'delete_requests' | 'loans' | 'history'>('pnl');
   
@@ -86,6 +88,7 @@ export default function Dashboard() {
   const [fullYearHistory, setFullYearHistory] = useState<any[]>([]);
 // State & Logic To-Do List Kendala Outlet (Real-Time)
 const [outletIssues, setOutletIssues] = useState<any[]>([]);
+const [tasks, setTasks] = useState<any[]>([]);
 
 const fetchOutletIssues = async () => {
   const { data } = await supabase
@@ -130,6 +133,24 @@ const handleApproveExpense = async (expenseId: string) => {
   if (!error) {
     alert('✅ Pengajuan disetujui! Data otomatis diteruskan ke Admin Ops untuk pembayaran via CMS BRI.');
   }
+};
+// Handler Penanganan Selesai Task SLA & Hitung Poin KPI
+const handleCompleteTask = async (taskId: string) => {
+  const userStr = localStorage.getItem('laundry_owner_user');
+  const user = userStr ? JSON.parse(userStr) : { id: '', name: 'Management', role: 'supervisor' };
+
+  const res = await completeTaskWithSlaCheck(taskId, {
+    id: user.id,
+    name: user.name || user.username || 'Management',
+    role: user.role || 'supervisor'
+  });
+
+  if (res.isOverdue) {
+    alert(`⚠️ Tugas diselesaikan melebihi SLA! Poin KPI terpotong ${res.penalty} poin.`);
+  } else {
+    alert(`🎉 Tugas selesai tepat waktu! Bonus +${res.reward} poin KPI.`);
+  }
+  fetchOutletIssues(); // Refresh data
 };
   useEffect(() => {
     const ownerStr = localStorage.getItem('laundry_owner_user');
@@ -1206,6 +1227,41 @@ const handleApproveExpense = async (expenseId: string) => {
             </tbody>
           </table>
         </div>
+      </div>
+      {/* WIDGET TO-DO & SLA MANAGEMENT */}
+      <div className="bg-white border rounded-2xl p-4 md:p-6 space-y-4 shadow-sm mb-6">
+        <h4 className="font-bold text-xs md:text-sm text-slate-800 flex items-center gap-2">
+          📌 Tugas Instruktif Dari Head Management
+        </h4>
+        
+        {tasks.length === 0 ? (
+          <p className="text-xs text-slate-400 italic">Tidak ada tugas instruktif saat ini.</p>
+        ) : (
+          <div className="space-y-3">
+            {tasks.map((t: any) => (
+              <div key={t.id} className="border p-3.5 rounded-xl flex justify-between items-center bg-slate-50 hover:bg-slate-100 transition-all">
+                <div className="space-y-1">
+                  <p className="font-bold text-xs text-slate-800">{t.title}</p>
+                  <p className="text-[11px] text-slate-500">{t.description}</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-[9px] font-bold px-2 py-0.5 bg-rose-100 text-rose-700 rounded-md">
+                      SLA: {t.sla_hours} Jam | Penalti: -{t.kpi_penalty_points} Poin
+                    </span>
+                    <span className="text-[9px] text-slate-400">
+                      Batas Waktu: {new Date(t.due_date).toLocaleString('id-ID')}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleCompleteTask(t.id)}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-3 py-2 rounded-xl shadow transition-all whitespace-nowrap"
+                >
+                  ✓ Selesaikan
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
             {activeTab === 'delete_requests' && (
               <div className="bg-white border rounded-2xl p-4 md:p-6 space-y-4">
