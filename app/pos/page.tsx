@@ -84,22 +84,26 @@ export default function POSPage() {
   const [outletOverrides, setOutletOverrides] = useState<any>({});
   const [receiptTerms, setReceiptTerms] = useState('');
   const [settings, setSettings] = useState<any>(null);
+
 // State Fitur Setoran Cash via Digital Wallet & QRIS Meja Kasir
 const [showDepositModal, setShowDepositModal] = useState(false);
 const [depositAmount, setDepositAmount] = useState('');
 const [depositMethod, setDepositMethod] = useState<'INDOMARET_ALFAMART' | 'MBANKING_PERSONAL'>('INDOMARET_ALFAMART');
 const [adminFee, setAdminFee] = useState('');
 const [proofUrl, setProofUrl] = useState('');
+
 // State Closing Shift / Blind Cash Count
 const [showClosingModal, setShowClosingModal] = useState(false);
 const [physicalCashCount, setPhysicalCashCount] = useState('');
 const [closingNotes, setClosingNotes] = useState('');
+
 // State Form Kendala / Keluhan POS Kasir
 const [showIssueModal, setShowIssueModal] = useState(false);
 const [issueCategory, setIssueCategory] = useState('Peralatan/Mesin');
 const [issueUrgency, setIssueUrgency] = useState('Biasa');
 const [issueDescription, setIssueDescription] = useState('');
 const [isSubmittingIssue, setIsSubmittingIssue] = useState(false);
+
 // Handler Submit Setoran Kasir
 const handleSubmitDeposit = async () => {
   const amount = parseFloat(depositAmount) || 0;
@@ -138,6 +142,7 @@ const handleSubmitDeposit = async () => {
   setAdminFee('');
   setProofUrl('');
 };
+
 // Handler Submit Closing Shift & Blind Cash Count
 const handleSubmitClosingShift = async () => {
   const physicalAmount = parseFloat(physicalCashCount);
@@ -197,6 +202,7 @@ const handleSubmitClosingShift = async () => {
   // Jalankan Absen Pulang
   handleClockOut();
 };
+
 // State Kasbon Terintegrasi (Limit 60% Hari Kerja & Surat Piutang)
 const [loanAmount, setLoanAmount] = useState('');
 const [loanReason, setLoanReason] = useState('');
@@ -212,6 +218,7 @@ const daysWorked = 10; // Default fallback akumulasi hari masuk kerja bulan berj
 const dailySalary = (empBasicSalary || 1300000) / 26;
 const accumulatedSalary = dailySalary * daysWorked;
 const maxAutoLoan = Math.floor(accumulatedSalary * 0.6);
+
 // Load Master COA dari Supabase
 useEffect(() => {
   const fetchCoa = async () => {
@@ -323,6 +330,7 @@ const handleReportIncident = async (e: React.FormEvent) => {
   const [memberName, setMemberName] = useState('');
   const [memberPackage, setMemberPackage] = useState('Silver');
   const [memberOrderType, setMemberOrderType] = useState<'Offline' | 'Online'>('Offline');
+
 // AUTO-FILL POS FORM DARI URL QUERY PARAMS (ANTREAN PENJEMPUTAN)
 useEffect(() => {
   if (typeof window === 'undefined') return;
@@ -463,6 +471,7 @@ useEffect(() => {
   const handleRemoveFromCart = (id: string) => {
     setCartItems(cartItems.filter(item => item.id !== id));
   };
+
   // FITUR C: TARIK DATA PENJEMPUTAN DRIVER LANGSUNG KE FORM POS
   const handleImportPickupOrder = (pickup: any) => {
     setCustomerName(pickup.customer_name || 'Pelanggan Online');
@@ -690,6 +699,7 @@ useEffect(() => {
       supabase.removeChannel(subscription);
     };
   }, [selectedOutlet]);
+
 // Handler Submit Laporan Kendala POS Kasir ke To-Do List Supervisor
 const handleSubmitIssue = async (e: React.FormEvent) => {
   e.preventDefault();
@@ -1136,7 +1146,7 @@ const handleSubmitIssue = async (e: React.FormEvent) => {
     setStockAddAmount(''); setSuccessMsg(`✅ Stok Ditambah!`); refreshData(); setTimeout(() => setSuccessMsg(''), 3000); setIsSubmitting(false);
   };
 // Helper Hitung & Deduct Stok Bahan Baku (Deterjen & Parfum)
-const deductChemicalInventory = async (orderItemName: string, qtyKgOrPcs: number, outletId: string) => {
+  const deductChemicalInventory = async (orderItemName: string, qtyKgOrPcs: number, outletId: string) => {
   let detergentMl = 0;
   let perfumeMl = 0;
   const name = (orderItemName || '').toLowerCase();
@@ -1172,11 +1182,14 @@ const deductChemicalInventory = async (orderItemName: string, qtyKgOrPcs: number
     }
   }
 };
-const handleUpdateStatus = async (order: any, nextStatus: string) => {
+
+  const handleStatusChange = async (order: any, nextStatus: string) => {
   try {
-    setIsSubmitting(true);
-    const s = nextStatus.toLowerCase();
     const updateObj: any = { status: nextStatus };
+    const s = nextStatus.toLowerCase();
+  
+  // Update ke database Supabase agar kasir & customer tersinkronkan
+  await supabase.from('orders').update({ status: nextStatus }).eq('id', order.id);
 
     // Potong stok Deterjen & Parfum berdasarkan takaran layanan
     await deductChemicalInventory(
@@ -1211,6 +1224,7 @@ const handleUpdateStatus = async (order: any, nextStatus: string) => {
     setSuccessMsg(`Update ke: ${nextStatus}`);
     await refreshData();
     setTimeout(() => setSuccessMsg(''), 2000);
+    setIsSubmitting(true);
   } catch (err) {
     console.error('Gagal update status:', err);
   } finally {
@@ -1244,7 +1258,7 @@ const handleUpdateStatus = async (order: any, nextStatus: string) => {
     if (currentStatus === 'Diterima' || currentStatus === 'Baru') {
       return (
         <button
-          onClick={() => handleUpdateStatus(order, 'Sortir')}
+          onClick={() => handleStatusChange(order, 'Sortir')}
           className="w-full bg-purple-600 hover:bg-purple-700 text-white text-xs font-black py-2.5 rounded-xl shadow-md transition"
         >
           🔍 Mulai Sortir
@@ -1255,7 +1269,7 @@ const handleUpdateStatus = async (order: any, nextStatus: string) => {
     if (currentStatus === 'Sortir') {
       return (
         <button
-          onClick={() => handleUpdateStatus(order, 'Mencuci')}
+          onClick={() => handleStatusChange(order, 'Mencuci')}
           className="w-full bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-black py-2.5 rounded-xl shadow-md transition"
         >
           🧼 Mulai Cuci
@@ -1266,7 +1280,7 @@ const handleUpdateStatus = async (order: any, nextStatus: string) => {
     if (currentStatus === 'Mencuci') {
       return (
         <button
-          onClick={() => handleUpdateStatus(order, 'Pengeringan')}
+          onClick={() => handleStatusChange(order, 'Pengeringan')}
           className="w-full bg-amber-500 hover:bg-amber-600 text-white text-xs font-black py-2.5 rounded-xl shadow-md transition"
         >
           🔥 Mulai Pengeringan
@@ -1277,7 +1291,7 @@ const handleUpdateStatus = async (order: any, nextStatus: string) => {
     if (currentStatus === 'Pengeringan') {
       return (
         <button
-          onClick={() => handleUpdateStatus(order, 'Setrika')}
+          onClick={() => handleStatusChange(order, 'Setrika')}
           className="w-full bg-orange-500 hover:bg-orange-600 text-white text-xs font-black py-2.5 rounded-xl shadow-md transition"
         >
           👔 Mulai Setrika

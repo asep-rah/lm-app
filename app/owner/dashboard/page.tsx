@@ -1,5 +1,4 @@
 'use client';
-import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
 import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
@@ -1283,12 +1282,15 @@ const handleCompleteTask = async (taskId: string) => {
               </div>
             )}
 
-            {/* TAB KPI MONITORING 7 ROLE */}
+                        {/* TAB KPI MONITORING 7 ROLE — dinonaktifkan sementara
             {activeTab === 'kpi' && (
               <KpiRoleMonitoring />
             )}
+            */}
+
           </>
         )}
+
       </div>
     </div>
   );

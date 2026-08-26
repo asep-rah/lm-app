@@ -111,8 +111,8 @@ export default function CustomerDashboardPage() {
     };
     fetchQueue();
   }, []);
-
   const [activeOrders, setActiveOrders] = useState<any[]>([]);
+  const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const [completedOrders, setCompletedOrders] = useState<any[]>([]);
   const [depositLogs, setDepositLogs] = useState<any[]>([]);
 
@@ -715,7 +715,13 @@ export default function CustomerDashboardPage() {
             );
 
             const displayOrders = activeTab === 'home' || activeTab === 'beranda' ? berandaOrders : riwayatOrders;
-
+            if (displayOrders.length === 0) {
+              return (
+                <div className="bg-white border border-slate-200/80 p-8 rounded-3xl text-center text-xs text-slate-400 shadow-sm">
+                  Belum ada cucian yang sedang diproses.
+                </div>
+              );
+            }
             return displayOrders.map((order: any) => {
               const currentStatus = (order.status || '').toLowerCase();
               const stages = [
@@ -775,12 +781,7 @@ export default function CustomerDashboardPage() {
                       })}
                     </div>
                   )}
-                </div>
-              );
-            });
-          })()}
-
-                    {order.status === 'Driver Menuju Lokasi' && order.driver_lat && (
+                  {order.status === 'Driver Menuju Lokasi' && order.driver_lat && (
                       <div className="bg-blue-50 border border-blue-200 p-3 rounded-2xl space-y-1.5 text-xs mt-2">
                         <div className="flex justify-between items-center">
                           <span className="font-extrabold text-blue-900 flex items-center gap-1">
@@ -804,14 +805,12 @@ export default function CustomerDashboardPage() {
                         <p className="text-[10px] font-bold text-slate-500 p-1.5 bg-slate-50">📸 Foto Bukti Cucian Diterima Driver:</p>
                         <img src={order.photo_url} alt="Foto Bukti Cucian" className="w-full h-28 object-cover" />
                       </div>
-                    )}
-                  </div>
-                ))}
-                {activeOrders.length === 0 && (
-                  <div className="bg-white border border-slate-200/80 p-8 rounded-3xl text-center text-xs text-slate-400 shadow-sm">
-                    Belum ada cucian yang sedang diproses.
-                  </div>
-                )}
+                                  )}
+            </div>
+              );
+            });
+          })()}
+       
               </div>
             </div>
           )}
@@ -1239,13 +1238,13 @@ export default function CustomerDashboardPage() {
                 </div>
 
                 <a
-                href={`https://wa.me/${(selectedOutlet?.phone || '6281234567890').replace(/[^0-9]/g, '').replace(/^0/, '62')}?text=${encodeURIComponent(`Halo Admin ${selectedOutlet?.name || ''}, saya ingin konfirmasi Top Up Saldo Deposit.`)}`}
+                href={`https://wa.me/${(currentOutletObj?.phonee || '6281234567890').replace(/[^0-9]/g, '').replace(/^0/, '62')}?text=${encodeURIComponent(`Halo Admin ${currentOutletObj?.name || ''}, saya ingin konfirmasi Top Up Saldo Deposit.`)}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-2xl text-xs shadow flex items-center justify-center gap-2"
               >
                 <span>💬</span>
-                <span>HUBUNGI ADMIN VIA WHATSAPP ({selectedOutlet?.name || 'OUTLET'})</span>
+                <span>HUBUNGI ADMIN VIA WHATSAPP ({currentOutletObj?.name || 'OUTLET'})</span>
               </a>
               </div>
 
