@@ -1228,48 +1228,59 @@ const handleSubmitIssue = async (e: React.FormEvent) => {
   }
 };
 
-  const handleStatusChange = async (order: any, nextStatus: string) => {
+const handleStatusChange = async (order: any, nextStatus: string) => {
+  setIsSubmitting(true);
   try {
     const updateObj: any = { status: nextStatus };
     const s = nextStatus.toLowerCase();
-  
-  // Update ke database Supabase agar kasir & customer tersinkronkan
-  await supabase.from('orders').update({ status: nextStatus }).eq('id', order.id);
-
-    // Potong stok Deterjen & Parfum berdasarkan takaran layanan
-    await deductChemicalInventory(
-      order.service_type || order.item_name || '',
-      parseFloat(order.weight_kg || order.qty || 1),
-      selectedOutlet
-    );
 
     // Catat nama karyawan yang mengerjakan tiap tahap
     if (s.includes('sortir')) updateObj.by_sortir = employeeName;
     else if (s.includes('cuci')) updateObj.by_cuci = employeeName;
     else if (s.includes('kering')) updateObj.by_kering = employeeName;
-    else if (s.includes('setrika')) updateObj.by_setrika = employeeName;
+    else if (s.includes('setrika') || s.includes('gosok')) updateObj.by_setrika = employeeName;
     else if (s.includes('pack')) updateObj.by_packing = employeeName;
 
-    // 1. Update ke Supabase database
-    await supabase.from('transactions').update(updateObj).eq('id', order.id);
+    // 1. Update ke Supabase database (tabel transactions & orders)
+    const { error: err1 } = await supabase
+      .from('transactions')
+      .update(updateObj)
+      .eq('id', order.id);
 
-    // 2. Catat ke work_logs jika bukan status akhir
-    if (nextStatus !== 'Siap Diambil' && nextStatus !== 'Selesai') {
-      await supabase.from('work_logs').insert([{
-        transaction_id: order.id,
-        employee_name: employeeName,
-        stage: nextStatus,
-        weight_kg: Number(order.weight_kg) || 0,
-        pcs_count: Number(order.pcs_count) || 0,
-        service_type: order.service_type || ''
-      }]);
+    if (err1) {
+      await supabase.from('orders').update(updateObj).eq('id', order.id);
     }
 
-    // 3. Notifikasi sukses & Refresh data tampilan POS & Customer
+    // 2. Potong stok Deterjen & Parfum (bungkus try-catch terpisah agar status tetap update jika stok error)
+    try {
+      await deductChemicalInventory(
+        order.service_type || order.item_name || '',
+        parseFloat(order.weight_kg || order.qty || 1),
+        selectedOutlet
+      );
+    } catch (chemErr) {
+      console.warn('Gagal potong stok kimia:', chemErr);
+    }
+
+    // 3. Catat ke work_logs jika bukan status akhir
+    if (nextStatus !== 'Siap Diambil' && nextStatus !== 'Selesai') {
+      try {
+        await supabase.from('work_logs').insert([{
+          transaction_id: order.id,
+          employee_name: employeeName,
+          stage: nextStatus,
+          weight_kg: Number(order.weight_kg) || 0,
+          pcs_count: Number(order.pcs_count) || 0,
+          service_type: order.service_type || ''
+        }]);
+      } catch (logErr) {}
+    }
+
+    // 4. Notifikasi sukses & Refresh data tampilan POS & Customer
     setSuccessMsg(`Update ke: ${nextStatus}`);
     await refreshData();
     setTimeout(() => setSuccessMsg(''), 2000);
-    setIsSubmitting(true);
+
   } catch (err) {
     console.error('Gagal update status:', err);
   } finally {
