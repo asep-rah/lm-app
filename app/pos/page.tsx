@@ -1,6 +1,8 @@
 'use client';
+export const dynamic = 'force-dynamic';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
 
@@ -64,7 +66,7 @@ const getEstDate = (createdDateStr: string, durationStr: string) => {
   });
 };
 
-export default function POSPage() {
+export function POSContent() {
   const [activeTab, setActiveTab] = useState<'pos' | 'workflow' | 'pickup' | 'member' | 'expense' | 'performance'>('pos');
 
   const [employeeId, setEmployeeId] = useState('');
@@ -103,6 +105,49 @@ const [issueCategory, setIssueCategory] = useState('Peralatan/Mesin');
 const [issueUrgency, setIssueUrgency] = useState('Biasa');
 const [issueDescription, setIssueDescription] = useState('');
 const [isSubmittingIssue, setIsSubmittingIssue] = useState(false);
+
+// --- AUTO FETCH DETAIL ORDER CUSTOMER DARI URL PICKUP_ID ---
+const searchParams = useSearchParams();
+const pickupId = searchParams.get('pickup_id');
+const [customerOrder, setCustomerOrder] = useState<any>(null);
+
+// State untuk 10 detail order jika belum terdefinisi di POS
+const [address, setAddress] = useState('');
+const [selectedDuration, setSelectedDuration] = useState('Reguler');
+const [bagCount, setBagCount] = useState('1');
+const [washProcess, setWashProcess] = useState('Pisah');
+const [hasFading, setHasFading] = useState(false);
+const [hasValuables, setHasValuables] = useState(false);
+
+useEffect(() => {
+  if (pickupId) {
+    const fetchPickupDetail = async () => {
+      const { data } = await supabase
+        .from('pickup_requests')
+        .select('*')
+        .eq('id', pickupId)
+        .single();
+
+      if (data) {
+        setCustomerOrder(data);
+        
+        // Pengisian aman mengikuti variabel yang ada di POS
+        if (typeof setCustomerName === 'function') setCustomerName(data.customer_name || '');
+        if (typeof setCustomerPhone === 'function') setCustomerPhone(data.customer_phone || '');
+        if (typeof setNotes === 'function') setNotes(data.notes || '');
+        
+        setAddress(data.address || '');
+        setSelectedDuration(data.duration || 'Reguler');
+        setBagCount(data.bag_count || '1');
+        setWashProcess(data.wash_process || 'Pisah');
+        setHasFading(Boolean(data.has_fading));
+        setHasValuables(Boolean(data.has_valuables));
+      }
+    };
+
+    fetchPickupDetail();
+  }
+}, [pickupId]);
 
 // Handler Submit Setoran Kasir
 const handleSubmitDeposit = async () => {
@@ -2569,5 +2614,12 @@ const handleSubmitIssue = async (e: React.FormEvent) => {
         </div>
       </div>
     </>
+  );
+}
+export default function POSPage() {
+  return (
+    <Suspense fallback={<div className="p-4 text-center text-xs">Loading POS...</div>}>
+      <POSContent />
+    </Suspense>
   );
 }
