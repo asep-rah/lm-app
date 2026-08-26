@@ -519,15 +519,22 @@ useEffect(() => {
 
   // FITUR C: TARIK DATA PENJEMPUTAN DRIVER LANGSUNG KE FORM POS
   const handleImportPickupOrder = (pickup: any) => {
+    setCustomerOrder(pickup); // Simpan objek lengkap untuk menampilkan kartu 10 item
     setCustomerName(pickup.customer_name || 'Pelanggan Online');
     setCustomerPhone(pickup.customer_phone || pickup.phone_number || '');
     setOrderType('Online');
+    if (typeof setAddress === 'function') setAddress(pickup.address || '');
+    if (typeof setSelectedDuration === 'function') setSelectedDuration(pickup.duration || 'Reguler (3 Hari)');
+    if (typeof setBagCount === 'function') setBagCount(pickup.bag_count || '1');
+    if (typeof setWashProcess === 'function') setWashProcess(pickup.wash_process || 'Pisah');
+    if (typeof setHasFading === 'function') setHasFading(Boolean(pickup.has_fading));
+    if (typeof setHasValuables === 'function') setHasValuables(Boolean(pickup.has_valuables));
     setServiceType(pickup.service_type || 'Cuci Kering Gosok');
     setWeightKg(pickup.estimated_weight ? String(pickup.estimated_weight) : '3');
     setDeliveryFee(pickup.delivery_fee ? String(pickup.delivery_fee) : '0');
     setNotes(pickup.notes || '');
     setActiveTab('pos');
-    alert('✅ Data penjemputan driver berhasil ditarik ke Form POS!');
+    alert('✅ 10 Data lengkap penjemputan berhasil ditarik ke Form POS!');
   };
 
   const handleOpenDetailModal = async (tx: any) => {
@@ -1241,15 +1248,10 @@ const handleStatusChange = async (order: any, nextStatus: string) => {
     else if (s.includes('setrika') || s.includes('gosok')) updateObj.by_setrika = employeeName;
     else if (s.includes('pack')) updateObj.by_packing = employeeName;
 
-    // 1. Update ke Supabase database (tabel transactions & orders)
-    const { error: err1 } = await supabase
-      .from('transactions')
-      .update(updateObj)
-      .eq('id', order.id);
-
-    if (err1) {
-      await supabase.from('orders').update(updateObj).eq('id', order.id);
-    }
+    // 1. Update ke Supabase database (tabel transactions, orders, DAN pickup_requests)
+    await supabase.from('transactions').update(updateObj).eq('id', order.id);
+    await supabase.from('orders').update(updateObj).eq('id', order.id);
+    await supabase.from('pickup_requests').update(updateObj).eq('id', order.id);
 
     // 2. Potong stok Deterjen & Parfum (bungkus try-catch terpisah agar status tetap update jika stok error)
     try {

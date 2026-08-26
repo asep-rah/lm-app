@@ -184,7 +184,16 @@ const handleCompleteTask = async (taskId: string) => {
 
       const { data: attLogs } = await supabase.from('attendance_logs').select('*').order('created_at', { ascending: false }).limit(200);
       if (attLogs) setAttendances(attLogs);
+      
+// Fetch data pengajuan hapus dari kasir untuk approval Owner
+const { data: delData } = await supabase
+.from('delete_requests')
+.select('*')
+.order('created_at', { ascending: false });
 
+if (delData && typeof setDeleteRequests === 'function') {
+setDeleteRequests(delData);
+}
       let loadedSupMap = {};
       const { data: settings } = await supabase.from('app_settings').select('*').eq('id', 1).single();
       if (settings) {
@@ -1180,6 +1189,48 @@ const handleCompleteTask = async (taskId: string) => {
                 </div>
               </div>
             )}
+
+            {/* MODAL / TAB APPROVAL HAPUS ORDERAN (REKONSILIASI KASIR) */}
+      {deleteRequests && deleteRequests.length > 0 && (
+        <div className="bg-rose-900/10 border border-rose-500/30 p-4 rounded-2xl mb-6 shadow-sm">
+          <h3 className="text-rose-600 font-bold text-sm mb-3 flex items-center gap-2">
+            <span>⚠️</span> PERMINTAAN PEMBATALAN NOTA (REKONSILIASI KASIR)
+          </h3>
+          <div className="space-y-2">
+            {deleteRequests.map((req: any) => (
+              <div key={req.id} className="bg-white p-3 rounded-xl border border-rose-100 flex justify-between items-center text-xs shadow-sm">
+                <div>
+                  <div className="font-bold text-slate-800">{req.customer_name} (ID: {req.transaction_id})</div>
+                  <div className="text-slate-500">Alasan: <span className="text-rose-600 font-semibold">{req.reason}</span> | Pemohon: {req.requested_by}</div>
+                </div>
+                <div className="flex gap-2">
+                  <button 
+                    onClick={async () => {
+                      await supabase.from('transactions').delete().eq('id', req.transaction_id);
+                      await supabase.from('delete_requests').delete().eq('id', req.id);
+                      alert('Nota disetujui untuk dihapus.');
+                      location.reload();
+                    }}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg font-bold transition">
+                    Setujui Hapus
+                  </button>
+                  <button 
+                    onClick={async () => {
+                      await supabase.from('transactions').update({ delete_requested: false }).eq('id', req.transaction_id);
+                      await supabase.from('delete_requests').delete().eq('id', req.id);
+                      alert('Pengajuan hapus ditolak.');
+                      location.reload();
+                    }}
+                    className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-3 py-1.5 rounded-lg font-semibold transition">
+                    Tolak
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      
 {/* WIDGET APPROVAL PENGELUARAN SUPERVISOR */}
 <div className="bg-white border rounded-2xl p-4 md:p-6 space-y-4 mb-6">
         <h3 className="font-bold text-slate-800 text-sm md:text-lg flex items-center gap-2">
