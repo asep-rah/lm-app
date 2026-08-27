@@ -371,27 +371,35 @@ export default function CustomerDashboardPage() {
         setCustomerData({ name: customerName || 'Pelanggan', deposit_balance: 0 });
       }
 
-      const { data: pickupOrders } = await supabase
-  .from('pickup_orders')
-  .select('*')
-  .order('created_at', { ascending: false });
+      // Normalisasi format nomor HP (08xx atau 62xx)
+    const altNorm = norm.startsWith('62')
+    ? '0' + norm.slice(2)
+    : norm.startsWith('0')
+    ? '62' + norm.slice(1)
+    : norm;
 
-const filteredPickups = (pickupOrders || []).filter((o: any) => {
-  const p = o.phone_number || o.customer_phone || o.phone || '';
-  return cleanPhone(p) === norm;
-});
+  // Tarik data pickup_orders langsung dengan query database
+  const { data: pickupOrders } = await supabase
+    .from('pickup_orders')
+    .select('*')
+    .or(`customer_phone.eq.${norm},customer_phone.eq.${altNorm},phone_number.eq.${norm},phone_number.eq.${altNorm}`)
+    .order('created_at', { ascending: false });
 
-const { data: posTransactions } = await supabase
-  .from('transactions')
-  .select('*')
-  .eq('customer_phone', norm)
-  .order('created_at', { ascending: false });
+  // Tarik data transactions langsung dengan query database
+  const { data: posTransactions } = await supabase
+    .from('transactions')
+    .select('*')
+    .or(`customer_phone.eq.${norm},customer_phone.eq.${altNorm}`)
+    .order('created_at', { ascending: false });
 
-// Gabungkan kedua data agar pesanan baru langsung muncul di live tracking Beranda
-setActiveOrders([...filteredPickups, ...(posTransactions || [])]);
+  const activePickups = pickupOrders || [];
+  const activeTxs = posTransactions || [];
+
+  // Tampilkan pesanan aktif langsung ke Beranda
+  setActiveOrders([...activePickups, ...activeTxs]);
 
       let historyArr: any[] = [];
-      filteredPickups.filter((o: any) => o.status === 'Selesai' || o.status === 'Batal').forEach((o: any) => {
+      activePickups.filter((o: any) => o.status === 'Selesai' || o.status === 'Batal').forEach((o: any) => {
         historyArr.push({ id: o.id, type: 'Online Order', title: o.service_type, detail: o.notes || '', price: o.delivery_fee || 0, date: o.created_at, status: o.status });
       });
       posTransactions?.forEach((t: any) => {
