@@ -1272,56 +1272,50 @@ const handleSubmitIssue = async (e: React.FormEvent) => {
   }
 };
 
-const handleStatusChange = async (order: any, nextStatus: string) => {
+const handleStatusChange = async (order: any, targetStatus: string) => {
   setIsSubmitting(true);
   try {
-    const updateObj: any = { status: nextStatus };
-    const s = nextStatus.toLowerCase();
+    const updatePayload = { 
+      status: targetStatus,
+      updated_at: new Date().toISOString()
+    };
 
-    // Catat nama karyawan yang mengerjakan tiap tahap
-    if (s.includes('sortir')) updateObj.by_sortir = employeeName;
-    else if (s.includes('cuci')) updateObj.by_cuci = employeeName;
-    else if (s.includes('kering')) updateObj.by_kering = employeeName;
-    else if (s.includes('setrika') || s.includes('gosok')) updateObj.by_setrika = employeeName;
-    else if (s.includes('pack')) updateObj.by_packing = employeeName;
+    // 1. Update tabel transactions
+    const { error: txErr } = await supabase
+      .from('transactions')
+      .update(updatePayload)
+      .eq('id', order.id);
 
-    // 1. Update ke Supabase database (tabel transactions, orders, DAN pickup_orders)
-    await supabase.from('transactions').update(updateObj).eq('id', order.id);
-    await supabase.from('orders').update(updateObj).eq('id', order.id);
-    await supabase.from('pickup_orders').update(updateObj).eq('id', order.id);
+    if (txErr) console.error('Error updating transaction:', txErr);
 
-    // 2. Potong stok Deterjen & Parfum (bungkus try-catch terpisah agar status tetap update jika stok error)
-    try {
-      await deductChemicalInventory(
-        order.service_type || order.item_name || '',
-        parseFloat(order.weight_kg || order.qty || 1),
-        selectedOutlet
-      );
-    } catch (chemErr) {
-      console.warn('Gagal potong stok kimia:', chemErr);
+    // 2. Update tabel pickup_orders (jika berasal dari penjemputan app)
+    const pickupId = order.pickup_id || order.id;
+    if (pickupId) {
+      await supabase
+        .from('pickup_orders')
+        .update(updatePayload)
+        .eq('id', pickupId);
     }
 
-    // 3. Catat ke work_logs jika bukan status akhir
-    if (nextStatus !== 'Siap Diambil' && nextStatus !== 'Selesai') {
-      try {
-        await supabase.from('work_logs').insert([{
-          transaction_id: order.id,
-          employee_name: employeeName,
-          stage: nextStatus,
-          weight_kg: Number(order.weight_kg) || 0,
-          pcs_count: Number(order.pcs_count) || 0,
-          service_type: order.service_type || ''
-        }]);
-      } catch (logErr) {}
+   // 3. Optional: Kurangi stok bahan kimia secara aman tanpa memblokir UI
+   try {
+    if (typeof deductChemicalInventory === 'function') {
+      const itemName = order.service_name || order.service_type || 'Laundry';
+      const qty = Number(order.weight_kg || order.quantity || 1);
+      const outlet = order.outlet_name || selectedOutlet || 'Main Outlet';
+      await deductChemicalInventory(itemName, qty, outlet);
     }
+  } catch (chemErr) {
+    console.warn('Inventory deduction skipped or failed:', chemErr);
+  }
 
-    // 4. Notifikasi sukses & Refresh data tampilan POS & Customer
-    setSuccessMsg(`Update ke: ${nextStatus}`);
+  // 4. Refresh data agar UI langsung ter-update
+  if (typeof refreshData === 'function') {
     await refreshData();
-    setTimeout(() => setSuccessMsg(''), 2000);
-
+  }
   } catch (err) {
-    console.error('Gagal update status:', err);
+    console.error('Failed to change status:', err);
+    alert('Gagal memperbarui status. Silakan coba lagi.');
   } finally {
     setIsSubmitting(false);
   }
@@ -1369,62 +1363,82 @@ const handleStatusChange = async (order: any, nextStatus: string) => {
   };
 
   const renderNextStepButton = (order: any) => {
-    const currentStatus = order.status || 'Diterima';
+    const s = (order.status || 'Diterima').toLowerCase();
 
-    if (currentStatus === 'Diterima' || currentStatus === 'Baru') {
+    // TAHAP 1: Diterima / Baru / Penjemputan -> Lanjut ke SORTIR
+    if (s === 'diterima' || s === 'baru' || s === 'penjemputan' || s === 'menunggu cuci') {
       return (
         <button
           onClick={() => handleStatusChange(order, 'Sortir')}
-          className="w-full bg-purple-600 hover:bg-purple-700 text-white text-xs font-black py-2.5 rounded-xl shadow-md transition"
+          disabled={isSubmitting}
+          className="w-full bg-slate-700 hover:bg-slate-800 text-white text-xs font-black py-2.5 rounded-xl shadow transition"
         >
           🔍 Mulai Sortir
         </button>
       );
     }
 
-    if (currentStatus === 'Sortir') {
+    // TAHAP 2: Sortir -> Lanjut ke MENCUCI
+    if (s.includes('sortir')) {
       return (
         <button
           onClick={() => handleStatusChange(order, 'Mencuci')}
-          className="w-full bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-black py-2.5 rounded-xl shadow-md transition"
+          disabled={isSubmitting}
+          className="w-full bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-black py-2.5 rounded-xl shadow transition"
         >
-          🧼 Mulai Cuci
+          🧺 Mulai Mencuci
         </button>
       );
     }
 
-    if (currentStatus === 'Mencuci') {
+    // TAHAP 3: Mencuci / Cuci -> Lanjut ke MENGERINGKAN
+    if (s.includes('cuci') || s.includes('mencuci')) {
       return (
         <button
-          onClick={() => handleStatusChange(order, 'Pengeringan')}
-          className="w-full bg-amber-500 hover:bg-amber-600 text-white text-xs font-black py-2.5 rounded-xl shadow-md transition"
+          onClick={() => handleStatusChange(order, 'Mengeringkan')}
+          disabled={isSubmitting}
+          className="w-full bg-amber-500 hover:bg-amber-600 text-white text-xs font-black py-2.5 rounded-xl shadow transition"
         >
-          🔥 Mulai Pengeringan
+          🔥 Mulai Mengeringkan
         </button>
       );
     }
 
-    if (currentStatus === 'Pengeringan') {
+    // TAHAP 4: Mengeringkan / Kering -> Lanjut ke MENGGOSOK / SETRIKA
+    if (s.includes('kering') || s.includes('pengeringan') || s.includes('mengeringkan')) {
       return (
         <button
-          onClick={() => handleStatusChange(order, 'Setrika')}
-          className="w-full bg-orange-500 hover:bg-orange-600 text-white text-xs font-black py-2.5 rounded-xl shadow-md transition"
+          onClick={() => handleStatusChange(order, 'Menggosok / Setrika')}
+          disabled={isSubmitting}
+          className="w-full bg-purple-600 hover:bg-purple-700 text-white text-xs font-black py-2.5 rounded-xl shadow transition"
         >
-          👔 Mulai Setrika
+          👔 Mulai Menggosok / Setrika
         </button>
       );
     }
 
-    if (currentStatus === 'Setrika') {
+    // TAHAP 5: Menggosok / Setrika -> Lanjut ke PACKING
+    if (s.includes('gosok') || s.includes('setrika')) {
       return (
         <button
-          onClick={() => {
-            setSelectedOrderForRack(order);
-            setShowRackModal(true);
-          }}
-          className="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black py-2.5 rounded-xl shadow-md transition"
+          onClick={() => handleStatusChange(order, 'Packing')}
+          disabled={isSubmitting}
+          className="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black py-2.5 rounded-xl shadow transition"
         >
-          📦 Mulai Packing & Simpan di Rak
+          📦 Mulai Packing
+        </button>
+      );
+    }
+
+    // TAHAP 6: Packing -> PENYIMPANAN RAK / SELESAI
+    if (s.includes('pack') || s.includes('packing')) {
+      return (
+        <button
+          onClick={() => handleStatusChange(order, 'Penyimpanan Rak / Selesai')}
+          disabled={isSubmitting}
+          className="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black py-2.5 rounded-xl shadow transition"
+        >
+          ✅ Selesai & Simpan di Rak
         </button>
       );
     }
