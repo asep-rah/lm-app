@@ -745,172 +745,168 @@ export default function CustomerDashboardPage() {
                 </button>
               </div>
 
-              <div className="space-y-2.5 pt-1">
-                <div className="flex justify-between items-center">
-                  <h3 className="text-xs font-extrabold text-slate-700 uppercase tracking-wider">⚡ Pesanan Dalam Proses ({activeOrders.length})</h3>
-                  <button onClick={() => setActiveTab('history')} className="text-[11px] font-bold text-blue-600">Lihat Semua</button>
+              <div className="space-y-3 pt-1">
+      {/* Header Section */}
+      <div className="flex justify-between items-center mb-1">
+        <div className="flex items-center gap-1.5">
+          <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+          <h3 className="text-xs font-bold text-slate-800 tracking-wide uppercase">
+            {activeTab === 'home'
+              ? `Pesanan Berlangsung (${activeOrders.filter((o: any) => !['Selesai', 'Diambil'].includes(o.status)).length})`
+              : 'Riwayat Pesanan Selesai'}
+          </h3>
+        </div>
+        <button
+          onClick={() => setActiveTab(activeTab === 'home' ? 'history' : 'home')}
+          className="text-[11px] font-bold text-indigo-600 hover:text-indigo-700"
+        >
+          {activeTab === 'home' ? 'Lihat Riwayat Selesai' : 'Kembali ke Beranda'}
+        </button>
+      </div>
+
+      {/* Render Pesanan */}
+      {(() => {
+        const berandaOrders = activeOrders.filter((o: any) => !['Selesai', 'Diambil'].includes(o.status));
+        const riwayatOrders = activeOrders.filter((o: any) => ['Selesai', 'Diambil'].includes(o.status));
+        const displayOrders = activeTab === 'home' ? berandaOrders : riwayatOrders;
+
+        if (displayOrders.length === 0) {
+          return (
+            <div className="bg-white border border-slate-100 p-6 rounded-2xl text-center text-xs text-slate-400 shadow-sm">
+              {activeTab === 'home'
+                ? 'Belum ada cucian yang sedang diproses.'
+                : 'Belum ada riwayat pesanan selesai.'}
+            </div>
+          );
+        }
+
+        return displayOrders.map((order: any) => {
+          const currentStatus = (order.status || '').toLowerCase();
+          const stages = [
+            { label: 'Jemput', icon: '🛺', match: ['jemput', 'menuju', 'diambil driver'] },
+            { label: 'Diterima', icon: '🏠', match: ['diterima', 'tiba'] },
+            { label: 'Proses', icon: '🧼', match: ['cuci', 'mencuci', 'sortir', 'kering'] },
+            { label: 'Setrika', icon: '👔', match: ['setrika', 'gosok'] },
+            { label: 'Siap', icon: '📦', match: ['siap', 'packing'] },
+            { label: 'Selesai', icon: '✅', match: ['selesai', 'diambil'] }
+          ];
+
+          let activeIndex = stages.findIndex(s => s.match.some(m => currentStatus.includes(m)));
+          if (activeIndex === -1) activeIndex = 1;
+
+          const formattedDate = order.created_at
+            ? new Date(order.created_at).toLocaleDateString('id-ID', {
+                day: 'numeric',
+                month: 'short',
+                hour: '2-digit',
+                minute: '2-digit'
+              })
+            : 'Baru Saja';
+
+          return (
+            <div
+              key={order.id}
+              onClick={() => setSelectedOrder(order)}
+              className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 flex flex-col gap-3 transition-all hover:shadow-md cursor-pointer active:scale-[0.98] mb-3"
+            >
+              {/* Header Kartu */}
+              <div className="flex justify-between items-center border-b border-slate-50 pb-2">
+                <span className="text-[10px] font-extrabold tracking-wider text-slate-400 uppercase">
+                  {order.receipt_number || order.order_type || 'Laundry Express'} • {formattedDate}
+                </span>
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-600 border border-amber-200/50">
+                  {order.status || 'Tiba di Outlet'}
+                </span>
+              </div>
+
+              {/* Body Kartu */}
+              <div className="flex justify-between items-center">
+                <div className="pr-2">
+                  <h4 className="font-bold text-slate-800 text-sm line-clamp-1">
+                    {order.service_type || 'Layanan Laundry'}
+                  </h4>
+                  <p className="text-[11px] text-indigo-600 font-semibold line-clamp-1 mt-0.5 flex items-center gap-1">
+                    <span>🔍</span> Klik untuk detail item & status lengkap
+                  </p>
                 </div>
-
-                 {/* PEMISAHAN LOGIKA BERANDA VS RIWAYAT & TRACKER LIVE */}
-          {(() => {
-            // 1. BERANDA: Hanya tampilkan pesanan yang masih dalam penjemputan driver
-            const berandaOrders = activeOrders.filter((o: any) =>
-              ['Jemput', 'Menuju Lokasi', 'Diambil Driver', 'Tiba di Outlet'].includes(o.status)
-            );
-
-            // 2. RIWAYAT: Masuk ke sini setelah terkonfirmasi Kasir (Bisa diklik & lacak cuci s.d. selesai)
-            const riwayatOrders = activeOrders.filter((o: any) =>
-              ['Diterima', 'Sortir', 'Mencuci', 'Pengeringan', 'Setrika', 'Siap', 'Selesai'].includes(o.status)
-            );
-
-            const displayOrders = activeTab === 'home' || activeTab === 'beranda' ? berandaOrders : riwayatOrders;
-            if (displayOrders.length === 0) {
-              return (
-                <div className="bg-white border border-slate-200/80 p-8 rounded-3xl text-center text-xs text-slate-400 shadow-sm">
-                  Belum ada cucian yang sedang diproses.
+                <div className="text-right whitespace-nowrap">
+                  <span className="text-[10px] text-slate-400 block font-normal">Total Estimasi</span>
+                  <span className="font-extrabold text-slate-900 text-sm">
+                    Rp {(order.amount || order.total_amount || order.estimated_price || 0).toLocaleString('id-ID')}
+                  </span>
                 </div>
-              );
-            }
-            return displayOrders.map((order: any) => {
-              const currentStatus = (order.status || '').toLowerCase();
-              const stages = [
-                { label: 'Jemput', icon: '🛺', match: ['jemput', 'diterima', 'baru', 'tiba'] },
-                { label: 'Cuci', icon: '🧼', match: ['cuci', 'mencuci', 'sortir'] },
-                { label: 'Kering', icon: '💨', match: ['kering', 'pengeringan'] },
-                { label: 'Setrika', icon: '👔', match: ['setrika', 'gosok'] },
-                { label: 'Siap', icon: '📦', match: ['siap', 'packing'] },
-                { label: 'Selesai', icon: '✅', match: ['selesai', 'diambil'] }
-              ];
+              </div>
 
-              let activeIndex = stages.findIndex(s => s.match.some(m => currentStatus.includes(m)));
-              if (activeIndex === -1) activeIndex = 0;
-
-              const orderItems: any[] = safeParse(order.items, []);
-              const formattedDate = order.created_at
-                ? new Date(order.created_at).toLocaleDateString('id-ID', {
-                    day: 'numeric',
-                    month: 'short',
-                    hour: '2-digit',
-                    minute: '2-digit'
-                  })
-                : 'Baru Saja';
-
-              return (
-                <div
-                  key={order.id}
-                  onClick={() => setSelectedOrder(order)}
-                  className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 flex flex-col gap-3 transition-all hover:shadow-md cursor-pointer mb-3"
-                >
-                  {/* Header Kartu: Resi/Tanggal & Status Badge Soft */}
-                  <div className="flex justify-between items-center border-b border-slate-50 pb-2">
-                    <span className="text-[10px] font-extrabold tracking-wider text-slate-400 uppercase">
-                      {order.order_type || 'Laundry Express'} • {formattedDate}
-                    </span>
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-600 border border-amber-200/50">
-                      {order.status || 'Tiba di Outlet'}
-                    </span>
-                  </div>
-
-                  {/* Body Kartu: Nama Layanan Ringkas & Total Harga */}
-                  <div className="flex justify-between items-center">
-                    <div className="pr-2">
-                      <h4 className="font-bold text-slate-800 text-sm line-clamp-1">
-                        {order.service_type || 'Layanan Laundry'}
-                      </h4>
-                      <p className="text-[11px] text-slate-400 line-clamp-1 mt-0.5">
-                        {orderItems.length > 0
-                          ? `${orderItems.length} item rincian satuan`
-                          : order.notes || 'Layanan Kiloan & Satuan'}
-                      </p>
-                    </div>
-                    <div className="text-right whitespace-nowrap">
-                      <span className="text-[10px] text-slate-400 block font-normal">Total Estimasi</span>
-                      <span className="font-extrabold text-slate-900 text-sm">
-                        Rp {(order.total_amount || order.estimated_price || order.amount || 0).toLocaleString('id-ID')}
+              {/* Tracker Visual 6 Tahap */}
+              <div className="grid grid-cols-6 gap-1 text-center pt-2 mt-1 border-t border-slate-50">
+                {stages.map((step, idx) => {
+                  const isPassedOrActive = idx <= activeIndex;
+                  const isActiveNow = idx === activeIndex;
+                  return (
+                    <div key={idx} className="flex flex-col items-center">
+                      <div
+                        className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold transition-all ${
+                          isActiveNow
+                            ? 'bg-indigo-600 text-white ring-2 ring-indigo-200 scale-110 animate-pulse'
+                            : isPassedOrActive
+                            ? 'bg-emerald-500 text-white shadow-sm'
+                            : 'bg-slate-100 text-slate-400'
+                        }`}
+                      >
+                        {step.icon}
+                      </div>
+                      <span
+                        className={`text-[8px] mt-1 font-semibold ${
+                          isActiveNow
+                            ? 'text-indigo-600 font-bold'
+                            : isPassedOrActive
+                            ? 'text-slate-700'
+                            : 'text-slate-400'
+                        }`}
+                      >
+                        {step.label}
                       </span>
                     </div>
+                  );
+                })}
+              </div>
+
+              {/* PETA LIVE DRIVER */}
+              {order.status === 'Driver Menuju Lokasi' && order.driver_lat && (
+                <div
+                  className="bg-blue-50/80 border border-blue-100 p-3 rounded-xl space-y-1.5 text-xs mt-1"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="flex justify-between items-center">
+                    <span className="font-bold text-blue-900 flex items-center gap-1 text-[11px]">
+                      📍 Driver Sedang Menuju Lokasi
+                    </span>
+                    <a
+                      href={`https://maps.google.com/?q=${order.driver_lat},${order.driver_lon}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="bg-blue-600 text-white font-bold text-[10px] px-2.5 py-1 rounded-lg shadow-sm"
+                    >
+                      Buka Peta Live 🗺️
+                    </a>
                   </div>
+                  <p className="text-[10px] text-blue-600">Posisi driver diperbarui secara otomatis.</p>
+                </div>
+              )}
 
-                  {/* Rincian Item Satuan */}
-                  {orderItems.length > 0 && (
-                    <div className="bg-slate-50/80 border border-slate-100 rounded-xl p-2.5 space-y-1">
-                      <p className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wide">
-                        Rincian Item ({orderItems.length})
-                      </p>
-                      {orderItems.map((it: any, idx: number) => (
-                        <div key={idx} className="flex justify-between items-center text-[11px]">
-                          <span className="font-semibold text-slate-700">
-                            {it.name} <span className="text-indigo-600 font-bold">x{it.qty || 1}</span>
-                          </span>
-                          {Number(it.price) > 0 && (
-                            <span className="font-semibold text-slate-500">
-                              Rp {(Number(it.price) * (Number(it.qty) || 1)).toLocaleString('id-ID')}
-                            </span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Tracker 4 Tahap Driver (Untuk Tab Beranda) */}
-                  {activeTab === 'home' || activeTab === 'beranda' ? (
-                    <div className="grid grid-cols-4 gap-1.5 text-center text-[9px] font-bold mt-1 pt-2 border-t border-slate-50">
-                      <div className={`p-1.5 rounded-lg ${currentStatus.includes('jemput') || currentStatus.includes('menuju') ? 'bg-indigo-600 text-white animate-pulse' : 'bg-slate-100 text-slate-400'}`}>1. Menuju Lokasi</div>
-                      <div className={`p-1.5 rounded-lg ${currentStatus.includes('diambil') ? 'bg-indigo-600 text-white animate-pulse' : 'bg-slate-100 text-slate-400'}`}>2. Cucian Diambil</div>
-                      <div className={`p-1.5 rounded-lg ${currentStatus.includes('tiba') ? 'bg-indigo-600 text-white animate-pulse' : 'bg-slate-100 text-slate-400'}`}>3. Driver Tiba</div>
-                      <div className="p-1.5 rounded-lg bg-emerald-100 text-emerald-700">4. Terkonfirmasi</div>
-                    </div>
-                  ) : (
-                    /* Tracker 6 Tahap Outlet (Untuk Tab Riwayat) */
-                    <div className="grid grid-cols-6 gap-1 text-center pt-2 mt-1 border-t border-slate-50">
-                      {stages.map((step, idx) => {
-                        const isPassedOrActive = idx <= activeIndex;
-                        const isActiveNow = idx === activeIndex;
-                        return (
-                          <div key={idx} className="flex flex-col items-center">
-                            <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold transition-all ${
-                              isActiveNow ? 'bg-indigo-600 text-white ring-2 ring-indigo-200 scale-110 animate-pulse' : isPassedOrActive ? 'bg-emerald-500 text-white shadow-sm' : 'bg-slate-100 text-slate-400'
-                            }`}>
-                              {step.icon}
-                            </div>
-                            <span className={`text-[8px] mt-1 font-semibold ${isActiveNow ? 'text-indigo-600 font-bold' : isPassedOrActive ? 'text-slate-700' : 'text-slate-400'}`}>
-                              {step.label}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                  {order.status === 'Driver Menuju Lokasi' && order.driver_lat && (
-                      <div className="bg-blue-50 border border-blue-200 p-3 rounded-2xl space-y-1.5 text-xs mt-2">
-                        <div className="flex justify-between items-center">
-                          <span className="font-extrabold text-blue-900 flex items-center gap-1">
-                            📍 Driver Sedang Menuju Lokasi
-                          </span>
-                          <a
-                            href={`https://maps.google.com/?q=${order.driver_lat},${order.driver_lon}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="bg-blue-600 text-white font-bold text-[10px] px-2.5 py-1 rounded-lg shadow-sm"
-                          >
-                            Buka Peta Live 🗺️
-                          </a>
-                        </div>
-                        <p className="text-[10px] text-blue-700">Posisi driver diperbarui secara otomatis.</p>
-                      </div>
-                    )}
-
-                    {order.photo_url && (
-                      <div className="mt-2 rounded-xl overflow-hidden border border-slate-200">
-                        <p className="text-[10px] font-bold text-slate-500 p-1.5 bg-slate-50">📸 Foto Bukti Cucian Diterima Driver:</p>
-                        <img src={order.photo_url} alt="Foto Bukti Cucian" className="w-full h-28 object-cover" />
-                      </div>
-                                  )}
+              {/* FOTO BUKTI CUCIAN */}
+              {order.photo_url && (
+                <div className="rounded-xl overflow-hidden border border-slate-100 mt-1">
+                  <p className="text-[10px] font-bold text-slate-500 p-1.5 bg-slate-50">
+                    📸 Foto Bukti Cucian Diterima Driver:
+                  </p>
+                  <img src={order.photo_url} alt="Foto Bukti Cucian" className="w-full h-28 object-cover" />
+                </div>
+              )}
             </div>
-              );
-            });
-          })()}
-       
+          );
+        });
+      })()}
               </div>
             </div>
           )}
