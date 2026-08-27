@@ -786,32 +786,61 @@ export default function CustomerDashboardPage() {
               if (activeIndex === -1) activeIndex = 0;
 
               const orderItems: any[] = safeParse(order.items, []);
+              const formattedDate = order.created_at
+                ? new Date(order.created_at).toLocaleDateString('id-ID', {
+                    day: 'numeric',
+                    month: 'short',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                  })
+                : 'Baru Saja';
 
               return (
                 <div
                   key={order.id}
                   onClick={() => setSelectedOrder(order)}
-                  className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm mb-3 cursor-pointer hover:border-blue-300 transition"
+                  className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 flex flex-col gap-3 transition-all hover:shadow-md cursor-pointer mb-3"
                 >
-                  <div className="flex justify-between items-start mb-2">
-                    <div>
-                      <h3 className="font-bold text-slate-800 text-sm">{order.service_type || 'Layanan Laundry'}</h3>
-                      <p className="text-[10px] text-slate-400">{order.created_at || 'Baru Saja'}</p>
-                    </div>
-                    <span className="text-xs font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full">
-                      {order.status}
+                  {/* Header Kartu: Resi/Tanggal & Status Badge Soft */}
+                  <div className="flex justify-between items-center border-b border-slate-50 pb-2">
+                    <span className="text-[10px] font-extrabold tracking-wider text-slate-400 uppercase">
+                      {order.order_type || 'Laundry Express'} • {formattedDate}
+                    </span>
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-600 border border-amber-200/50">
+                      {order.status || 'Tiba di Outlet'}
                     </span>
                   </div>
 
+                  {/* Body Kartu: Nama Layanan Ringkas & Total Harga */}
+                  <div className="flex justify-between items-center">
+                    <div className="pr-2">
+                      <h4 className="font-bold text-slate-800 text-sm line-clamp-1">
+                        {order.service_type || 'Layanan Laundry'}
+                      </h4>
+                      <p className="text-[11px] text-slate-400 line-clamp-1 mt-0.5">
+                        {orderItems.length > 0
+                          ? `${orderItems.length} item rincian satuan`
+                          : order.notes || 'Layanan Kiloan & Satuan'}
+                      </p>
+                    </div>
+                    <div className="text-right whitespace-nowrap">
+                      <span className="text-[10px] text-slate-400 block font-normal">Total Estimasi</span>
+                      <span className="font-extrabold text-slate-900 text-sm">
+                        Rp {(order.total_amount || order.estimated_price || order.amount || 0).toLocaleString('id-ID')}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Rincian Item Satuan */}
                   {orderItems.length > 0 && (
-                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 mb-2 space-y-1">
+                    <div className="bg-slate-50/80 border border-slate-100 rounded-xl p-2.5 space-y-1">
                       <p className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wide">
-                        Rincian Item Satuan ({orderItems.length})
+                        Rincian Item ({orderItems.length})
                       </p>
                       {orderItems.map((it: any, idx: number) => (
-                        <div key={idx} className="flex justify-between items-center text-[10px]">
-                          <span className="font-bold text-slate-700">
-                            {it.name} <span className="text-blue-600">x{it.qty || 1}</span>
+                        <div key={idx} className="flex justify-between items-center text-[11px]">
+                          <span className="font-semibold text-slate-700">
+                            {it.name} <span className="text-indigo-600 font-bold">x{it.qty || 1}</span>
                           </span>
                           {Number(it.price) > 0 && (
                             <span className="font-semibold text-slate-500">
@@ -824,27 +853,27 @@ export default function CustomerDashboardPage() {
                   )}
 
                   {/* Tracker 4 Tahap Driver (Untuk Tab Beranda) */}
-                  {(activeTab === 'home' || activeTab === 'beranda') ? (
-                    <div className="grid grid-cols-4 gap-1 text-center text-[9px] font-bold mt-3 pt-2 border-t border-slate-100">
-                      <div className={`p-1.5 rounded-lg ${currentStatus.includes('jemput') || currentStatus.includes('menuju') ? 'bg-blue-600 text-white animate-pulse' : 'bg-slate-100 text-slate-400'}`}>1. Menuju Lokasi</div>
-                      <div className={`p-1.5 rounded-lg ${currentStatus.includes('diambil') ? 'bg-blue-600 text-white animate-pulse' : 'bg-slate-100 text-slate-400'}`}>2. Cucian Diambil</div>
-                      <div className={`p-1.5 rounded-lg ${currentStatus.includes('tiba') ? 'bg-blue-600 text-white animate-pulse' : 'bg-slate-100 text-slate-400'}`}>3. Driver Tiba</div>
+                  {activeTab === 'home' || activeTab === 'beranda' ? (
+                    <div className="grid grid-cols-4 gap-1.5 text-center text-[9px] font-bold mt-1 pt-2 border-t border-slate-50">
+                      <div className={`p-1.5 rounded-lg ${currentStatus.includes('jemput') || currentStatus.includes('menuju') ? 'bg-indigo-600 text-white animate-pulse' : 'bg-slate-100 text-slate-400'}`}>1. Menuju Lokasi</div>
+                      <div className={`p-1.5 rounded-lg ${currentStatus.includes('diambil') ? 'bg-indigo-600 text-white animate-pulse' : 'bg-slate-100 text-slate-400'}`}>2. Cucian Diambil</div>
+                      <div className={`p-1.5 rounded-lg ${currentStatus.includes('tiba') ? 'bg-indigo-600 text-white animate-pulse' : 'bg-slate-100 text-slate-400'}`}>3. Driver Tiba</div>
                       <div className="p-1.5 rounded-lg bg-emerald-100 text-emerald-700">4. Terkonfirmasi</div>
                     </div>
                   ) : (
                     /* Tracker 6 Tahap Outlet (Untuk Tab Riwayat) */
-                    <div className="grid grid-cols-6 gap-1 text-center pt-2 mt-2 border-t border-slate-100">
+                    <div className="grid grid-cols-6 gap-1 text-center pt-2 mt-1 border-t border-slate-50">
                       {stages.map((step, idx) => {
                         const isPassedOrActive = idx <= activeIndex;
                         const isActiveNow = idx === activeIndex;
                         return (
                           <div key={idx} className="flex flex-col items-center">
                             <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold transition-all ${
-                              isActiveNow ? 'bg-blue-600 text-white ring-2 ring-blue-300 scale-110 animate-pulse' : isPassedOrActive ? 'bg-emerald-500 text-white shadow-sm' : 'bg-slate-200 text-slate-400'
+                              isActiveNow ? 'bg-indigo-600 text-white ring-2 ring-indigo-200 scale-110 animate-pulse' : isPassedOrActive ? 'bg-emerald-500 text-white shadow-sm' : 'bg-slate-100 text-slate-400'
                             }`}>
                               {step.icon}
                             </div>
-                            <span className={`text-[8px] mt-1 font-semibold ${isActiveNow ? 'text-blue-600 font-bold' : isPassedOrActive ? 'text-slate-700' : 'text-slate-400'}`}>
+                            <span className={`text-[8px] mt-1 font-semibold ${isActiveNow ? 'text-indigo-600 font-bold' : isPassedOrActive ? 'text-slate-700' : 'text-slate-400'}`}>
                               {step.label}
                             </span>
                           </div>
