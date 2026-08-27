@@ -237,6 +237,26 @@ export default function CustomerDashboardPage() {
     }
   }, [activeChatOrderId, customerPhone]);
 
+  // Sinkronisasi realtime: order baru & perubahan status driver langsung tampil
+  // di Beranda tanpa perlu refresh manual.
+  useEffect(() => {
+    if (!customerPhone) return;
+
+    const channel = supabase
+      .channel('realtime_pickup_customer')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'pickup_orders' }, () => {
+        fetchCustomerProfile(customerPhone);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
+        fetchCustomerProfile(customerPhone);
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [customerPhone]);
+
   const loadChats = async (orderId: string | null) => {
     setActiveChatOrderId(orderId);
     let query = supabase.from('support_chats').select('*');
@@ -352,7 +372,7 @@ export default function CustomerDashboardPage() {
       }
 
       const { data: pickupOrders } = await supabase
-  .from('pickup_requests')
+  .from('pickup_orders')
   .select('*')
   .order('created_at', { ascending: false });
 
@@ -544,6 +564,19 @@ setActiveOrders([...filteredPickups, ...(posTransactions || [])]);
     const detailInfo = `[INFO CUCIAN] Kantong: ${bagCount} | Cuci: ${washProcess} | Luntur: ${hasFading} | Brg Berharga: ${hasValuables}`;
     const finalNotes = notesCombined ? `${detailInfo} | ${notesCombined}` : detailInfo;
 
+    // Rincian item satuan dikirim terstruktur agar POS bisa memuatnya langsung ke
+    // keranjang nota. Kiloan tidak dimasukkan karena beratnya baru pasti setelah ditimbang kasir.
+    const itemsPayload = isSatuanChecked
+      ? cartSatuan.map((i) => ({
+          name: i.name,
+          qty: Number(i.qty) || 1,
+          price: Number(i.price) || 0,
+          basePrice: Number(i.basePrice) || 0,
+          duration: i.duration || 'Reguler (3 Hari)',
+          type: 'pcs' as const
+        }))
+      : [];
+
     const payload = {
       order_number: autoOrderNo,
       outlet_id: selectedOutlet || null,
@@ -558,6 +591,7 @@ setActiveOrders([...filteredPickups, ...(posTransactions || [])]);
       wash_process: washProcess || 'Pisah',
       has_fading: hasFading === 'Ya',
       has_valuables: hasValuables === 'Ya',
+      items: itemsPayload,
       delivery_fee: Number(finalOngkir) || 0,
       notes: finalNotes,
       pickup_date: todayDateStr,
@@ -743,6 +777,8 @@ setActiveOrders([...filteredPickups, ...(posTransactions || [])]);
               let activeIndex = stages.findIndex(s => s.match.some(m => currentStatus.includes(m)));
               if (activeIndex === -1) activeIndex = 0;
 
+              const orderItems: any[] = safeParse(order.items, []);
+
               return (
                 <div
                   key={order.id}
@@ -758,6 +794,26 @@ setActiveOrders([...filteredPickups, ...(posTransactions || [])]);
                       {order.status}
                     </span>
                   </div>
+
+                  {orderItems.length > 0 && (
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 mb-2 space-y-1">
+                      <p className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wide">
+                        Rincian Item Satuan ({orderItems.length})
+                      </p>
+                      {orderItems.map((it: any, idx: number) => (
+                        <div key={idx} className="flex justify-between items-center text-[10px]">
+                          <span className="font-bold text-slate-700">
+                            {it.name} <span className="text-blue-600">x{it.qty || 1}</span>
+                          </span>
+                          {Number(it.price) > 0 && (
+                            <span className="font-semibold text-slate-500">
+                              Rp {(Number(it.price) * (Number(it.qty) || 1)).toLocaleString('id-ID')}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
 
                   {/* Tracker 4 Tahap Driver (Untuk Tab Beranda) */}
                   {(activeTab === 'home' || activeTab === 'beranda') ? (

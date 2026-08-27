@@ -79,9 +79,19 @@ interface CustomerOrder {
   has_valuables: boolean;
   notes: string;
   phone_number?: string;
+  items?: PickupItem[] | string;
   estimated_weight?: number | string;
   delivery_fee?: number | string;
   status?: string;
+}
+
+interface PickupItem {
+  name: string;
+  qty: number | string;
+  price?: number | string;
+  basePrice?: number | string;
+  duration?: string;
+  type?: 'kg' | 'pcs';
 }
 
 export function POSContent() {
@@ -150,8 +160,29 @@ export function POSContent() {
       setServiceType(data.service_type);
       setSelectedServiceInput(data.service_type);
     }
-    if (data.estimated_weight) setWeightKg(String(data.estimated_weight));
     if (data.delivery_fee) setDeliveryFee(String(data.delivery_fee));
+
+    // Item satuan langsung masuk keranjang nota supaya rincian per item ikut
+    // tercetak di struk, tampil di kartu progress, dan terhitung sebagai upah karyawan.
+    const pickupItems: PickupItem[] = safeParse(data.items, []);
+    setCartItems(
+      pickupItems
+        .filter((it) => it && it.name)
+        .map((it, idx) => ({
+          id: `pickup-${idx}-${Date.now()}`,
+          name: String(it.name),
+          type: it.type === 'kg' ? ('kg' as const) : ('pcs' as const),
+          basePrice: Number(it.basePrice ?? it.price) || 0,
+          price: Number(it.price ?? it.basePrice) || 0,
+          qty: Number(it.qty) || 1,
+          note: it.duration || ''
+        }))
+    );
+
+    // Berat kiloan sengaja TIDAK diisi otomatis. Angka dari pelanggan hanya estimasi,
+    // kasir wajib menimbang di outlet lalu mengisi sendiri.
+    setWeightKg('');
+    setInputQtyKg('');
   };
 
   useEffect(() => {
@@ -1093,6 +1124,7 @@ const handleSubmitIssue = async (e: React.FormEvent) => {
       amount: totalPay, 
       payment_method: finalPaymentMethodLabel, 
       status: 'Diterima',
+      items: cartItems,
       by_sortir: employeeName
     };
 
@@ -1941,6 +1973,15 @@ const handleStatusChange = async (order: any, nextStatus: string) => {
                       <span className="font-semibold italic">{customerOrder.notes || 'Tidak ada catatan'}</span>
                     </div>
                   </div>
+
+                  {Number(customerOrder.estimated_weight) > 0 && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 text-[10px] text-amber-800">
+                      <span className="font-extrabold">⚖️ Estimasi pelanggan: {customerOrder.estimated_weight} Kg</span>
+                      <span className="block text-[9px] font-semibold mt-0.5">
+                        Hanya acuan. Timbang cucian di outlet lalu isi berat aslinya di input Kg.
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
 
