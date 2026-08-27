@@ -160,24 +160,46 @@ export function POSContent() {
       setServiceType(data.service_type);
       setSelectedServiceInput(data.service_type);
     }
+
     if (data.delivery_fee) setDeliveryFee(String(data.delivery_fee));
 
-    // Item satuan langsung masuk keranjang nota supaya rincian per item ikut
-    // tercetak di struk, tampil di kartu progress, dan terhitung sebagai upah karyawan.
-    const pickupItems: PickupItem[] = safeParse(data.items, []);
-    setCartItems(
-      pickupItems
-        .filter((it) => it && it.name)
-        .map((it, idx) => ({
-          id: `pickup-${idx}-${Date.now()}`,
-          name: String(it.name),
-          type: it.type === 'kg' ? ('kg' as const) : ('pcs' as const),
-          basePrice: Number(it.basePrice ?? it.price) || 0,
-          price: Number(it.price ?? it.basePrice) || 0,
-          qty: Number(it.qty) || 1,
-          note: it.duration || ''
-        }))
-    );
+    // Parse item dari JSON/Array secara presisi ke cartItems POS
+    const rawItems = safeParse(data.items, []);
+    
+    if (Array.isArray(rawItems) && rawItems.length > 0) {
+      const mappedCart = rawItems
+        .filter((it: any) => it && (it.name || it.service_name))
+        .map((it: any, idx: number) => {
+          const isKg = (it.type || it.unit || '').toLowerCase() === 'kg';
+          const itemPrice = Number(it.price || it.unit_price || 0);
+          return {
+            id: it.id || `pickup-${idx}-${Date.now()}`,
+            name: String(it.name || it.service_name),
+            type: isKg ? ('kg' as const) : ('pcs' as const),
+            basePrice: itemPrice,
+            price: itemPrice,
+            qty: isKg ? Number(it.qty || it.quantity || 0) : Number(it.qty || it.quantity || 1),
+            note: it.notes || it.note || ''
+          };
+        });
+
+      setCartItems(mappedCart);
+    } else if (data.service_type) {
+      // Fallback jika item tidak berbentuk array
+      const isKg = data.service_type.toLowerCase().includes('kilo');
+      const fallbackPrice = Number((data as any).estimated_price || (data as any).price || 0);
+      setCartItems([
+        {
+          id: `pickup-single-${Date.now()}`,
+          name: data.service_type,
+          type: isKg ? ('kg' as const) : ('pcs' as const),
+          basePrice: fallbackPrice,
+          price: fallbackPrice,
+          qty: isKg ? 0 : 1,
+          note: data.notes || ''
+        }
+      ]);
+    }
 
     // Berat kiloan sengaja TIDAK diisi otomatis. Angka dari pelanggan hanya estimasi,
     // kasir wajib menimbang di outlet lalu mengisi sendiri.
