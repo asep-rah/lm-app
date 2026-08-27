@@ -66,6 +66,24 @@ const getEstDate = (createdDateStr: string, durationStr: string) => {
   });
 };
 
+interface CustomerOrder {
+  id: string;
+  customer_name: string;
+  customer_phone: string;
+  address: string;
+  service_type: string;
+  duration: string;
+  bag_count: number | string;
+  wash_process: string;
+  has_fading: boolean;
+  has_valuables: boolean;
+  notes: string;
+  phone_number?: string;
+  estimated_weight?: number | string;
+  delivery_fee?: number | string;
+  status?: string;
+}
+
 export function POSContent() {
   const [activeTab, setActiveTab] = useState<'pos' | 'workflow' | 'pickup' | 'member' | 'expense' | 'performance'>('pos');
 
@@ -87,67 +105,95 @@ export function POSContent() {
   const [receiptTerms, setReceiptTerms] = useState('');
   const [settings, setSettings] = useState<any>(null);
 
-// State Fitur Setoran Cash via Digital Wallet & QRIS Meja Kasir
-const [showDepositModal, setShowDepositModal] = useState(false);
-const [depositAmount, setDepositAmount] = useState('');
-const [depositMethod, setDepositMethod] = useState<'INDOMARET_ALFAMART' | 'MBANKING_PERSONAL'>('INDOMARET_ALFAMART');
-const [adminFee, setAdminFee] = useState('');
-const [proofUrl, setProofUrl] = useState('');
+  // State Fitur Setoran Cash via Digital Wallet & QRIS Meja Kasir
+  const [showDepositModal, setShowDepositModal] = useState(false);
+  const [depositAmount, setDepositAmount] = useState('');
+  const [depositMethod, setDepositMethod] = useState<'INDOMARET_ALFAMART' | 'MBANKING_PERSONAL'>('INDOMARET_ALFAMART');
+  const [adminFee, setAdminFee] = useState('');
+  const [proofUrl, setProofUrl] = useState('');
 
-// State Closing Shift / Blind Cash Count
-const [showClosingModal, setShowClosingModal] = useState(false);
-const [physicalCashCount, setPhysicalCashCount] = useState('');
-const [closingNotes, setClosingNotes] = useState('');
+  // State Closing Shift / Blind Cash Count
+  const [showClosingModal, setShowClosingModal] = useState(false);
+  const [physicalCashCount, setPhysicalCashCount] = useState('');
+  const [closingNotes, setClosingNotes] = useState('');
 
-// State Form Kendala / Keluhan POS Kasir
-const [showIssueModal, setShowIssueModal] = useState(false);
-const [issueCategory, setIssueCategory] = useState('Peralatan/Mesin');
-const [issueUrgency, setIssueUrgency] = useState('Biasa');
-const [issueDescription, setIssueDescription] = useState('');
-const [isSubmittingIssue, setIsSubmittingIssue] = useState(false);
+  // State Form Kendala / Keluhan POS Kasir
+  const [showIssueModal, setShowIssueModal] = useState(false);
+  const [issueCategory, setIssueCategory] = useState('Peralatan/Mesin');
+  const [issueUrgency, setIssueUrgency] = useState('Biasa');
+  const [issueDescription, setIssueDescription] = useState('');
+  const [isSubmittingIssue, setIsSubmittingIssue] = useState(false);
 
-// --- AUTO FETCH DETAIL ORDER CUSTOMER DARI URL PICKUP_ID ---
-const searchParams = useSearchParams();
-const pickupId = searchParams.get('pickup_id');
-const [customerOrder, setCustomerOrder] = useState<any>(null);
+  // --- AUTO-FILL PENJEMPUTAN DRIVER KE FORM POS ---
+  const searchParams = useSearchParams();
+  const [customerOrder, setCustomerOrder] = useState<CustomerOrder | null>(null);
+  const [address, setAddress] = useState('');
+  const [bagCount, setBagCount] = useState('1');
+  const [washProcess, setWashProcess] = useState('Pisah');
+  const [hasFading, setHasFading] = useState(false);
+  const [hasValuables, setHasValuables] = useState(false);
 
-// State untuk 10 detail order jika belum terdefinisi di POS
-const [address, setAddress] = useState('');
-const [selectedDuration, setSelectedDuration] = useState('Reguler');
-const [bagCount, setBagCount] = useState('1');
-const [washProcess, setWashProcess] = useState('Pisah');
-const [hasFading, setHasFading] = useState(false);
-const [hasValuables, setHasValuables] = useState(false);
+  const applyPickupToForm = (data: CustomerOrder) => {
+    setCustomerOrder(data);
+    setOrderType('Online');
+    setCustomerName(data.customer_name || 'Pelanggan Online');
+    setCustomerPhone(data.customer_phone || data.phone_number || '');
+    setAddress(data.address || '');
+    setDuration(data.duration || 'Reguler (3 Hari)');
+    setBagCount(String(data.bag_count ?? '1'));
+    setWashProcess(data.wash_process || 'Pisah');
+    setHasFading(Boolean(data.has_fading));
+    setHasValuables(Boolean(data.has_valuables));
+    setNotes(data.notes || '');
 
-useEffect(() => {
-  if (pickupId) {
-    const fetchPickupDetail = async () => {
-      const { data } = await supabase
-        .from('pickup_requests')
-        .select('*')
-        .eq('id', pickupId)
-        .single();
+    if (data.service_type) {
+      setServiceType(data.service_type);
+      setSelectedServiceInput(data.service_type);
+    }
+    if (data.estimated_weight) setWeightKg(String(data.estimated_weight));
+    if (data.delivery_fee) setDeliveryFee(String(data.delivery_fee));
+  };
 
-      if (data) {
-        setCustomerOrder(data);
-        
-        // Pengisian aman mengikuti variabel yang ada di POS
-        if (typeof setCustomerName === 'function') setCustomerName(data.customer_name || '');
-        if (typeof setCustomerPhone === 'function') setCustomerPhone(data.customer_phone || '');
-        if (typeof setNotes === 'function') setNotes(data.notes || '');
-        
-        setAddress(data.address || '');
-        setSelectedDuration(data.duration || 'Reguler');
-        setBagCount(data.bag_count || '1');
-        setWashProcess(data.wash_process || 'Pisah');
-        setHasFading(Boolean(data.has_fading));
-        setHasValuables(Boolean(data.has_valuables));
+  useEffect(() => {
+    const pickupId = searchParams.get('pickup_id');
+    const urlName = searchParams.get('name');
+    const urlPhone = searchParams.get('phone');
+    const urlService = searchParams.get('service');
+    const urlDeliveryFee = searchParams.get('delivery_fee');
+    const urlOrderType = searchParams.get('order_type');
+  
+    // Layer 1: isi instan dari query param
+    if (urlName) setCustomerName(decodeURIComponent(urlName));
+    if (urlPhone) setCustomerPhone(decodeURIComponent(urlPhone));
+    if (urlService) {
+      setSelectedServiceInput(decodeURIComponent(urlService));
+      setServiceType(decodeURIComponent(urlService));
+    }
+    if (urlDeliveryFee) setDeliveryFee(urlDeliveryFee);
+    if (urlName || urlPhone || pickupId) setOrderType(urlOrderType || 'Online');
+  
+    if (!pickupId) return;
+  
+    // Layer 2: database sebagai sumber kebenaran
+    let cancelled = false;
+    const fetchFullPickupDetails = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('pickup_orders')
+          .select('*')
+          .eq('id', pickupId)
+          .single();
+  
+        if (error) throw error;
+        if (data && !cancelled) applyPickupToForm(data as CustomerOrder);
+      } catch (err) {
+        console.error('Gagal mengambil detail penjemputan:', err);
       }
     };
-
-    fetchPickupDetail();
-  }
-}, [pickupId]);
+  
+    fetchFullPickupDetails();
+    return () => { cancelled = true; };
+  }, [searchParams]);
 
 // Handler Submit Setoran Kasir
 const handleSubmitDeposit = async () => {
@@ -376,34 +422,6 @@ const handleReportIncident = async (e: React.FormEvent) => {
   const [memberPackage, setMemberPackage] = useState('Silver');
   const [memberOrderType, setMemberOrderType] = useState<'Offline' | 'Online'>('Offline');
 
-// AUTO-FILL POS FORM DARI URL QUERY PARAMS (ANTREAN PENJEMPUTAN)
-useEffect(() => {
-  if (typeof window === 'undefined') return;
-  const params = new URLSearchParams(window.location.search);
-  const name = params.get('name');
-  const phone = params.get('phone');
-  const service = params.get('service');
-  const deliveryFeeParam = params.get('delivery_fee');
-  const orderTypeParam = params.get('order_type');
-
-  if (name && typeof setCustomerName === 'function') setCustomerName(name);
-  if (phone && typeof setCustomerPhone === 'function') setCustomerPhone(phone);
-
-  // 🌐 PAKSA MODE ONLINE / WHATSAPP: Agar masuk statistik Omset Online di PnL Owner
-  if (typeof setOrderType === 'function') {
-    setOrderType(orderTypeParam || 'WhatsApp');
-  }
-
-  // 🚚 Auto-fill Biaya Ongkir ke Input Ongkir POS
-  if (deliveryFeeParam && typeof setDeliveryFee === 'function') {
-    setDeliveryFee(deliveryFeeParam.toString());
-  }
-
-  // 🛒 Auto-fill Layanan Langsung Masuk ke Input Layanan POS
-  if (service && typeof setSelectedServiceInput === 'function') {
-    setSelectedServiceInput(service);
-  }
-}, []);
   const [expCategory, setExpCategory] = useState('');
   const [expAmount, setExpAmount] = useState('');
   const [expDesc, setExpDesc] = useState('');
@@ -519,20 +537,7 @@ useEffect(() => {
 
   // FITUR C: TARIK DATA PENJEMPUTAN DRIVER LANGSUNG KE FORM POS
   const handleImportPickupOrder = (pickup: any) => {
-    setCustomerOrder(pickup); // Simpan objek lengkap untuk menampilkan kartu 10 item
-    setCustomerName(pickup.customer_name || 'Pelanggan Online');
-    setCustomerPhone(pickup.customer_phone || pickup.phone_number || '');
-    setOrderType('Online');
-    if (typeof setAddress === 'function') setAddress(pickup.address || '');
-    if (typeof setSelectedDuration === 'function') setSelectedDuration(pickup.duration || 'Reguler (3 Hari)');
-    if (typeof setBagCount === 'function') setBagCount(pickup.bag_count || '1');
-    if (typeof setWashProcess === 'function') setWashProcess(pickup.wash_process || 'Pisah');
-    if (typeof setHasFading === 'function') setHasFading(Boolean(pickup.has_fading));
-    if (typeof setHasValuables === 'function') setHasValuables(Boolean(pickup.has_valuables));
-    setServiceType(pickup.service_type || 'Cuci Kering Gosok');
-    setWeightKg(pickup.estimated_weight ? String(pickup.estimated_weight) : '3');
-    setDeliveryFee(pickup.delivery_fee ? String(pickup.delivery_fee) : '0');
-    setNotes(pickup.notes || '');
+    applyPickupToForm(pickup as CustomerOrder);
     setActiveTab('pos');
     alert('✅ 10 Data lengkap penjemputan berhasil ditarik ke Form POS!');
   };
@@ -1248,10 +1253,10 @@ const handleStatusChange = async (order: any, nextStatus: string) => {
     else if (s.includes('setrika') || s.includes('gosok')) updateObj.by_setrika = employeeName;
     else if (s.includes('pack')) updateObj.by_packing = employeeName;
 
-    // 1. Update ke Supabase database (tabel transactions, orders, DAN pickup_requests)
+    // 1. Update ke Supabase database (tabel transactions, orders, DAN pickup_orders)
     await supabase.from('transactions').update(updateObj).eq('id', order.id);
     await supabase.from('orders').update(updateObj).eq('id', order.id);
-    await supabase.from('pickup_requests').update(updateObj).eq('id', order.id);
+    await supabase.from('pickup_orders').update(updateObj).eq('id', order.id);
 
     // 2. Potong stok Deterjen & Parfum (bungkus try-catch terpisah agar status tetap update jika stok error)
     try {
@@ -1303,11 +1308,32 @@ const handleStatusChange = async (order: any, nextStatus: string) => {
   };
 
   const handleRequestDelete = async (order: any) => {
-    const reason = prompt(`Alasan hapus resi ${order.receipt_number}:`);
+    const reason = prompt(`Alasan hapus resi ${order.receipt_number || order.id}:`);
     if (!reason?.trim()) return alert('⚠️ Mohon tulis alasan!');
+    
     setIsSubmitting(true);
-    await supabase.from('transactions').update({ delete_requested: true, delete_reason: reason }).eq('id', order.id);
-    alert('✅ Permintaan hapus dikirim!'); refreshData(); setIsSubmitting(false);
+    try {
+      // 1. Simpan pengajuan ke tabel delete_requests (untuk dashboard Owner)
+      await supabase.from('delete_requests').insert([{
+        transaction_id: order.id,
+        customer_name: order.customer_name || 'Pelanggan',
+        reason: reason.trim(),
+        requested_by: employeeName || 'Kasir'
+      }]);
+
+      // 2. Tandai transaksi sebagai delete_requested agar tampil tanda 'Menunggu Approval'
+      await supabase.from('transactions').update({ 
+        delete_requested: true, 
+        delete_reason: reason.trim() 
+      }).eq('id', order.id);
+
+      alert('✅ Permintaan hapus berhasil dikirim ke Owner!');
+      await refreshData();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const renderNextStepButton = (order: any) => {
@@ -1853,6 +1879,71 @@ const handleStatusChange = async (order: any, nextStatus: string) => {
                 <div><label className="block text-[10px] font-bold text-slate-500 mb-1">Nomor WhatsApp Pelanggan</label><input type="tel" placeholder="Ketik 08..." value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} className="w-full border border-indigo-200 bg-indigo-50 text-indigo-800 rounded-xl px-3 py-3 text-xs md:text-sm font-bold" /></div>
                 <div><label className="block text-[10px] font-bold text-slate-500 mb-1">Nama Pelanggan (Otomatis)</label><input type="text" placeholder="Ketik Nama" value={customerName} onChange={(e) => setCustomerName(e.target.value)} className="w-full border rounded-xl px-3 py-3 text-xs md:text-sm" required /></div>
               </div>
+              
+              {customerOrder && (
+                <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 space-y-2">
+                  <div className="flex justify-between items-center">
+                    <p className="text-[10px] font-bold text-indigo-800 uppercase">
+                      🛺 Data Penjemputan Terisi Otomatis
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setCustomerOrder(null)}
+                      className="text-[10px] font-bold text-indigo-400 hover:text-indigo-700"
+                    >
+                      Tutup
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-[10px] text-slate-700">
+                    <div>
+                      <span className="block text-slate-400 font-bold uppercase text-[8px]">Nama</span>
+                      <span className="font-bold">{customerOrder.customer_name || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="block text-slate-400 font-bold uppercase text-[8px]">WhatsApp</span>
+                      <span className="font-bold font-mono">{customerOrder.customer_phone || customerOrder.phone_number || '-'}</span>
+                    </div>
+                    <div className="col-span-2">
+                      <span className="block text-slate-400 font-bold uppercase text-[8px]">Alamat Penjemputan</span>
+                      <span className="font-semibold">{customerOrder.address || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="block text-slate-400 font-bold uppercase text-[8px]">Layanan</span>
+                      <span className="font-bold">{customerOrder.service_type || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="block text-slate-400 font-bold uppercase text-[8px]">Durasi</span>
+                      <span className="font-bold text-amber-700">{customerOrder.duration || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="block text-slate-400 font-bold uppercase text-[8px]">Jumlah Kantong</span>
+                      <span className="font-bold">{customerOrder.bag_count ?? '-'}</span>
+                    </div>
+                    <div>
+                      <span className="block text-slate-400 font-bold uppercase text-[8px]">Proses Cuci</span>
+                      <span className="font-bold">{customerOrder.wash_process || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="block text-slate-400 font-bold uppercase text-[8px]">Risiko Luntur</span>
+                      <span className={`font-bold ${customerOrder.has_fading ? 'text-rose-600' : 'text-emerald-600'}`}>
+                        {customerOrder.has_fading ? '⚠️ Ya' : 'Tidak'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="block text-slate-400 font-bold uppercase text-[8px]">Barang Berharga</span>
+                      <span className={`font-bold ${customerOrder.has_valuables ? 'text-amber-600' : 'text-emerald-600'}`}>
+                        {customerOrder.has_valuables ? '⚠️ Ada' : 'Tidak Ada'}
+                      </span>
+                    </div>
+                    <div className="col-span-2 border-t border-indigo-200 pt-1.5">
+                      <span className="block text-slate-400 font-bold uppercase text-[8px]">Catatan Pelanggan</span>
+                      <span className="font-semibold italic">{customerOrder.notes || 'Tidak ada catatan'}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
 
               {customerDeposit !== null && (
                 <div className={`p-2.5 rounded-xl text-xs font-bold flex justify-between border ${customerDeposit > 0 ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>

@@ -352,22 +352,23 @@ export default function CustomerDashboardPage() {
       }
 
       const { data: pickupOrders } = await supabase
-        .from('pickup_orders')
-        .select('*')
-        .order('created_at', { ascending: false });
+  .from('pickup_requests')
+  .select('*')
+  .order('created_at', { ascending: false });
 
-      const filteredPickups = (pickupOrders || []).filter((o: any) => {
-        const p = o.phone_number || o.customer_phone || o.phone || '';
-        return cleanPhone(p) === norm;
-      });
+const filteredPickups = (pickupOrders || []).filter((o: any) => {
+  const p = o.phone_number || o.customer_phone || o.phone || '';
+  return cleanPhone(p) === norm;
+});
 
-      const { data: posTransactions } = await supabase
-        .from('transactions')
-        .select('*')
-        .eq('customer_phone', norm)
-        .order('created_at', { ascending: false });
+const { data: posTransactions } = await supabase
+  .from('transactions')
+  .select('*')
+  .eq('customer_phone', norm)
+  .order('created_at', { ascending: false });
 
-      setActiveOrders(filteredPickups.filter((o: any) => o.status !== 'Selesai' && o.status !== 'Batal'));
+// Gabungkan kedua data agar pesanan baru langsung muncul di live tracking Beranda
+setActiveOrders([...filteredPickups, ...(posTransactions || [])]);
 
       let historyArr: any[] = [];
       filteredPickups.filter((o: any) => o.status === 'Selesai' || o.status === 'Batal').forEach((o: any) => {
@@ -551,6 +552,12 @@ export default function CustomerDashboardPage() {
       phone_number: normPhone,
       service_type: mainServiceLabel,
       estimated_weight: isKiloanChecked ? Number(kiloanEstKg) || 3 : 0,
+      address: customerAddress || '',
+      duration: kiloanDuration || 'Reguler (3 Hari)',
+      bag_count: Number(bagCount) || 1,
+      wash_process: washProcess || 'Pisah',
+      has_fading: hasFading === 'Ya',
+      has_valuables: hasValuables === 'Ya',
       delivery_fee: Number(finalOngkir) || 0,
       notes: finalNotes,
       pickup_date: todayDateStr,
