@@ -1130,23 +1130,23 @@ const handleSubmitIssue = async (e: React.FormEvent) => {
     }
 
     const orderData = {
-      receipt_number: generatedResi, 
-      outlet_id: selectedOutlet, 
-      customer_name: customerName || 'Pelanggan', 
+      receipt_number: generatedResi,
+      outlet_id: selectedOutlet,
+      customer_name: customerName || 'Pelanggan',
       order_type: orderType,
-      delivery_fee: Number(deliveryFee) || 0, 
-      service_type: primaryServiceLabel, 
-      duration: duration, 
+      delivery_fee: Number(deliveryFee) || 0,
+      service_type: primaryServiceLabel,
+      duration: duration,
       weight_kg: totalKgSum,
-      pcs_count: totalPcsSum, 
-      discount_type: discountType, 
-      discount_value: Number(discountValue) || 0, 
+      pcs_count: totalPcsSum,
+      discount_type: discountType,
+      discount_value: Number(discountValue) || 0,
       discount_amount: calculatedDiscount,
-      notes: combinedNotes, 
-      amount: totalPay, 
-      payment_method: finalPaymentMethodLabel, 
+      notes: combinedNotes,
+      amount: totalPay,
+      payment_method: finalPaymentMethodLabel,
       status: 'Diterima',
-      items: cartItems,
+      items: typeof cartItems === 'string' ? cartItems : JSON.stringify(cartItems),
       by_sortir: employeeName
     };
 
