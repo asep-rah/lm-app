@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import StageTimeline from '@/components/StageTimeline';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -64,6 +65,7 @@ const paymentMethod: any = "CASH";
 
 export default function CustomerDashboardPage() {
   const [detailOrder, setDetailOrder] = useState<any>(null);
+  const [detailWorkLogs, setDetailWorkLogs] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<'home' | 'order' | 'deposit' | 'history' | 'profile'>('home');
   const [activeSupportTab, setActiveSupportTab] = useState<'cs' | 'ai'>('cs');
   const [customerPhone, setCustomerPhone] = useState('');
@@ -300,6 +302,31 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       supabase.removeChannel(channel);
     };
   }, [customerPhone]);
+
+  // Riwayat waktu tiap tahap untuk modal detail. Pesanan yang masih berupa
+  // pickup_orders (belum jadi transaksi) tidak punya work_logs, sehingga timeline
+  // tampil sebagai kerangka tahap yang belum dikerjakan.
+  useEffect(() => {
+    if (!detailOrder?.id) {
+      setDetailWorkLogs([]);
+      return;
+    }
+
+    let cancelled = false;
+    supabase
+      .from('work_logs')
+      .select('stage, employee_name, created_at')
+      .eq('transaction_id', detailOrder.id)
+      .order('created_at', { ascending: true })
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        setDetailWorkLogs(error ? [] : data || []);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [detailOrder?.id]);
 
   const loadChats = async (orderId: string | null) => {
     setActiveChatOrderId(orderId);
@@ -1833,6 +1860,16 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
               </p>
             </div>
           )}
+        </div>
+
+        {/* Riwayat Waktu Pengerjaan */}
+        <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+          <StageTimeline
+            logs={detailWorkLogs}
+            transaction={detailOrder}
+            showCrew={false}
+            title="Progres & Waktu Pengerjaan"
+          />
         </div>
 
         {/* Bukti Foto */}

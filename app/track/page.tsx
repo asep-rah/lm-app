@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import StageTimeline from '@/components/StageTimeline';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -143,34 +144,8 @@ export default function TrackingPage() {
             </div>
 
             <div className="border-t pt-4">
-              <h4 className="font-bold text-xs text-slate-800 mb-4 uppercase tracking-wider flex items-center gap-1.5">
-                <span>⏱️</span> Riwayat Waktu Pengerjaan
-              </h4>
-
-              <div className="relative border-l-2 border-emerald-500 ml-3 space-y-4 pl-4 text-xs">
-                <div className="relative">
-                  <div className="absolute -left-[23px] top-0.5 w-3 h-3 bg-emerald-500 rounded-full border-2 border-white"></div>
-                  <p className="font-bold text-slate-800">Cucian Diterima di Kasir</p>
-                  <p className="text-[10px] text-slate-400 font-mono">{new Date(orderData.created_at).toLocaleString('id-ID')}</p>
-                </div>
-
-                {workLogs.map((log, idx) => (
-                  <div key={idx} className="relative">
-                    <div className="absolute -left-[23px] top-0.5 w-3 h-3 bg-emerald-500 rounded-full border-2 border-white"></div>
-                    <p className="font-bold text-slate-800">{log.stage}</p>
-                    <p className="text-[10px] text-slate-400 font-mono">{new Date(log.created_at).toLocaleString('id-ID')}</p>
-                    {log.employee_name && <p className="text-[9px] text-slate-400 italic">Petugas: {log.employee_name}</p>}
-                  </div>
-                ))}
-
-                {orderData.status === 'Siap Diambil' && (
-                  <div className="relative">
-                    <div className="absolute -left-[23px] top-0.5 w-3.5 h-3.5 bg-blue-600 rounded-full border-2 border-white animate-ping"></div>
-                    <p className="font-bold text-blue-700">Siap Diambil di Outlet</p>
-                    <p className="text-[10px] text-blue-500 font-mono">Bisa diambil sekarang</p>
-                  </div>
-                )}
-              </div>
+              {/* Nama crew disembunyikan dari pelanggan; hanya tahap & waktu selesai. */}
+              <StageTimeline logs={workLogs} transaction={orderData} showCrew={false} />
             </div>
 
             {(orderData.status === 'Siap Diambil' || orderData.status === 'Selesai' || orderData.status === 'Packing') && (

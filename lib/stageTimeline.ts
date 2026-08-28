@@ -1,0 +1,113 @@
+// Sumber tunggal untuk pemetaan tahap pengerjaan + timeline waktu & crew.
+// Dipakai bersama oleh POS, Owner, halaman Track publik, dan dashboard customer
+// supaya tidak ada lagi logika pencocokan tahap yang berbeda antar halaman.
+
+export interface WorkLogRow {
+  stage?: string | null;
+  employee_name?: string | null;
+  created_at?: string | null;
+}
+
+export interface StageTimelineEntry {
+  key: string;
+  label: string;
+  icon: string;
+  crew: string | null;
+  at: string | null;
+  done: boolean;
+}
+
+/**
+ * Memetakan nama tahap bebas (dari kolom work_logs.stage atau transactions.status)
+ * ke kunci baku.
+ *
+ * Catatan bahasa yang penting: awalan "meng-" melebur dengan huruf k pada akar
+ * katanya, sehingga 'Mengeringkan' TIDAK mengandung substring 'kering' dan
+ * 'Mengemas' TIDAK mengandung 'kemas'. Karena itu pencocokan memakai akar
+ * 'ering' dan 'emas'.
+ */
+export const stageKeyOf = (stageStr: any): string => {
+  const s = String(stageStr || '').toLowerCase().trim();
+  if (s.includes('sortir')) return 'sortir';
+  if (s.includes('cuci') || s.includes('mencuci')) return 'cuci';
+  if (s.includes('ering')) return 'kering';
+  if (s.includes('setrika') || s.includes('gosok')) return 'setrika';
+  if (s.includes('pack') || s.includes('emas')) return 'packing';
+  // Dicek sebelum 'diambil': 'Siap Diambil' mengandung kata 'diambil' padahal
+  // cucian belum diserahkan ke pelanggan.
+  if (s.includes('siap')) return 'siap';
+  if (s.includes('selesai') || s.includes('diambil')) return 'selesai';
+  return s;
+};
+
+// Tahap yang punya tarif komisi di pengaturan layanan (Owner).
+export const PAID_STAGE_KEYS = ['sortir', 'cuci', 'kering', 'setrika', 'packing'];
+
+export const STAGE_SEQUENCE: { key: string; label: string; icon: string }[] = [
+  { key: 'sortir', label: 'Sortir', icon: '🔍' },
+  { key: 'cuci', label: 'Cuci', icon: '🧼' },
+  { key: 'kering', label: 'Kering', icon: '🌀' },
+  { key: 'setrika', label: 'Setrika', icon: '👔' },
+  { key: 'packing', label: 'Packing', icon: '🎁' },
+  { key: 'selesai', label: 'Selesai', icon: '✅' }
+];
+
+/** Contoh keluaran: "28 Agu 2026, 14:32". String kosong bila tanggal tidak valid. */
+export const formatStageTime = (iso: any): string => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+
+  const tanggal = d.toLocaleDateString('id-ID', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric'
+  });
+  const jam = String(d.getHours()).padStart(2, '0');
+  const menit = String(d.getMinutes()).padStart(2, '0');
+  return `${tanggal}, ${jam}:${menit}`;
+};
+
+/**
+ * Menyusun timeline tahap dari work_logs. Kolom `by_*` pada transactions dipakai
+ * sebagai sumber nama crew cadangan (hanya `by_sortir` yang ada di schema).
+ *
+ * Aman terhadap data kosong: bila work_logs tidak tersedia, setiap tahap tetap
+ * dikembalikan dengan done=false agar UI dapat merender kerangka timeline.
+ */
+export const buildStageTimeline = (
+  logs: WorkLogRow[] | null | undefined,
+  transaction?: any
+): StageTimelineEntry[] => {
+  const safeLogs = Array.isArray(logs) ? logs : [];
+  const currentStageKey = stageKeyOf(transaction?.status);
+
+  // Status 'Siap Diambil' berarti seluruh tahap pengerjaan (s/d Packing) sudah
+  // beres, tetapi tahap 'Selesai' (penyerahan) belum tercapai.
+  const effectiveKey = currentStageKey === 'siap' ? 'selesai' : currentStageKey;
+  const statusIndex = STAGE_SEQUENCE.findIndex((s) => s.key === effectiveKey);
+
+  return STAGE_SEQUENCE.map((stage, idx) => {
+    // Log terakhir untuk tahap ini dianggap paling sahih (bila ada pengulangan).
+    const matches = safeLogs.filter((l) => stageKeyOf(l?.stage) === stage.key);
+    const last = matches.length > 0 ? matches[matches.length - 1] : null;
+
+    const fallbackCrew = transaction?.[`by_${stage.key}`] || null;
+    const at = last?.created_at || null;
+
+    // Tahap dianggap selesai bila ada work log, atau bila status transaksi sudah
+    // melewati tahap tersebut (mis. data lama sebelum work_logs dicatat).
+    const passedByStatus = statusIndex > idx && statusIndex !== -1;
+    const isFinalDone =
+      stage.key === 'selesai' && ['selesai', 'diambil'].includes(currentStageKey);
+
+    return {
+      key: stage.key,
+      label: stage.label,
+      icon: stage.icon,
+      crew: last?.employee_name || fallbackCrew,
+      at,
+      done: Boolean(last) || passedByStatus || isFinalDone
+    };
+  });
+};

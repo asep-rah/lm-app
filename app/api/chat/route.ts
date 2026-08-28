@@ -28,7 +28,7 @@ const normalizeHistory = (raw: any): GeminiTurn[] => {
 
 export async function POST(req: Request) {
   // Dideklarasikan di luar try agar tetap terbaca saat logging di blok catch.
-  const model = (process.env.GEMINI_MODEL || 'gemini-2.5-flash').trim();
+  const model = (process.env.GEMINI_MODEL || 'gemini-2.0-flash').trim();
 
   try {
     const body = await req.json().catch(() => ({}));
@@ -215,9 +215,8 @@ DATA TRANSAKSI AKTIF CUSTOMER:
 - POS: ${JSON.stringify(txSummary)}
 - Jemputan: ${JSON.stringify(pickupSummary)}`;
 
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-      {
+    const callGemini = () =>
+      fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -225,12 +224,52 @@ DATA TRANSAKSI AKTIF CUSTOMER:
           contents: history,
           generationConfig: { temperature: 0.7, maxOutputTokens: 1024 }
         })
+      });
+
+    let res: Response | null = null;
+    let networkError: any = null;
+
+    // Percobaan pertama + satu kali retry. Retry hanya untuk kegagalan yang
+    // memang sementara (jaringan, 429, 5xx). Error 4xx seperti kunci/model
+    // invalid tidak diulang karena hasilnya pasti sama.
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        res = await callGemini();
+        networkError = null;
+      } catch (fetchErr: any) {
+        res = null;
+        networkError = fetchErr;
+        console.error('FULL_GEMINI_ERROR:', fetchErr);
       }
-    );
+
+      const retryable = !res || res.status === 429 || res.status >= 500;
+      if (!retryable) break;
+      if (attempt === 1) {
+        console.error('[GEMINI RETRY]', { model, attempt, httpStatus: res?.status ?? 'network-error' });
+        await new Promise((r) => setTimeout(r, 700));
+      }
+    }
+
+    // Gagal total (tidak ada respons sama sekali) -> alihkan ke CS manusia.
+    if (!res) {
+      console.error('[GEMINI UNREACHABLE]', {
+        model,
+        message: networkError?.message,
+        name: networkError?.name
+      });
+      return Response.json(
+        {
+          error: networkError?.message || 'Gemini tidak dapat dihubungi setelah 2 percobaan.',
+          reply: '⚠️ AI Assistant sedang tidak dapat dihubungi. Silakan hubungi CS Admin lewat tab Live CS ya Kak.'
+        },
+        { status: 502 }
+      );
+    }
 
     const data = await res.json().catch(() => ({}));
 
     if (!res.ok) {
+      console.error('FULL_GEMINI_ERROR:', data);
       // Error asli Gemini (kunci invalid, model tidak tersedia, kuota habis)
       // diteruskan apa adanya supaya penyebabnya bisa dilacak, bukan disamarkan
       // sebagai jawaban AI palsu. Detail lengkap dicetak agar terbaca di Vercel Logs.
@@ -273,6 +312,7 @@ DATA TRANSAKSI AKTIF CUSTOMER:
 
     return Response.json({ reply: aiText });
   } catch (error: any) {
+    console.error('FULL_GEMINI_ERROR:', error);
     console.error('[CHAT ROUTE ERROR]', {
       model,
       message: error?.message,

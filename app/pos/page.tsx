@@ -5,6 +5,8 @@ import { useEffect, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
+import StageTimeline from '@/components/StageTimeline';
+import { PAID_STAGE_KEYS, stageKeyOf } from '@/lib/stageTimeline';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -48,18 +50,9 @@ const isPackingStatus = (statusStr: string) => {
   return s.includes('pack') || s.includes('emas');
 };
 
-// Kunci tahap yang punya tarif komisi di pengaturan layanan (Owner).
-const PAID_STAGE_KEYS = ['sortir', 'cuci', 'kering', 'setrika', 'packing'];
-
-const getStageKey = (stageStr: string) => {
-  const s = (stageStr || '').toLowerCase();
-  if (s.includes('sortir')) return 'sortir';
-  if (s.includes('cuci') || s.includes('mencuci')) return 'cuci';
-  if (isDryingStatus(s)) return 'kering';
-  if (s.includes('setrika') || s.includes('gosok')) return 'setrika';
-  if (isPackingStatus(s)) return 'packing';
-  return s;
-};
+// Pemetaan tahap dipusatkan di lib/stageTimeline agar POS, Owner, dan halaman
+// pelacakan pelanggan tidak pernah lagi memakai aturan pencocokan yang berbeda.
+const getStageKey = stageKeyOf;
 
 // Aplikasi customer menyimpan durasi dengan label pendek ('Oneday', 'Express'),
 // sedangkan dropdown POS memakai label panjang. Tanpa normalisasi, <select> POS
@@ -784,15 +777,6 @@ const handleReportIncident = async (e: React.FormEvent) => {
     }
   }, [selectedTxDetail]);
 
-  const getStaffForStage = (stageName: string) => {
-    if (!selectedTxDetail) return '-';
-    const key = 'by_' + stageName;
-    if (selectedTxDetail[key]) return selectedTxDetail[key];
-    const match = [...txWorkLogs].reverse().find(w => getStageKey(w.stage) === stageName);
-    if (match) return match.employee_name;
-    return '-';
-  };
-
   useEffect(() => {
     async function loadInit() {
       const { data: dbOutlets } = await supabase.from('outlets').select('*');
@@ -1021,11 +1005,16 @@ const handleSubmitIssue = async (e: React.FormEvent) => {
         if (!processedTxIdsToday.has(log.transaction_id)) { processedTxIdsToday.add(log.transaction_id); if (svcDef?.type === 'pcs') tPcs += pcs; else tKg += kg; } 
         tPay += itemPay; 
 
-        if (tBreakdown[stageKey]) {
-          tBreakdown[stageKey].kg += kg;
-          tBreakdown[stageKey].pcs += pcs;
-        } else {
-          tBreakdown[stageKey] = { kg, pcs };
+        // Hanya tahap berupah yang masuk rincian harian. Log non-upah (mis.
+        // penyerahan 'Selesai' yang dicatat untuk stempel waktu) tidak boleh
+        // memunculkan baris tambahan di rincian.
+        if (PAID_STAGE_KEYS.includes(stageKey)) {
+          if (tBreakdown[stageKey]) {
+            tBreakdown[stageKey].kg += kg;
+            tBreakdown[stageKey].pcs += pcs;
+          } else {
+            tBreakdown[stageKey] = { kg, pcs };
+          }
         }
       }
     });
@@ -1493,7 +1482,34 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
 
   const handlePickupFinish = async (order: any) => {
     if (!confirm(`Serahkan cucian ${order.customer_name}?`)) return;
-    setIsSubmitting(true); await supabase.from('transactions').update({ status: 'Selesai' }).eq('id', order.id);
+    setIsSubmitting(true);
+
+    const { error } = await supabase.from('transactions').update({ status: 'Selesai' }).eq('id', order.id);
+
+    if (error) {
+      console.error('Gagal menyerahkan cucian:', error);
+      alert('❌ Gagal menyerahkan cucian: ' + (error.message || 'Koneksi bermasalah'));
+      setIsSubmitting(false);
+      return;
+    }
+
+    // Stempel waktu penyerahan. Tabel transactions tidak punya kolom waktu selain
+    // created_at, jadi work_logs dipakai sebagai riwayat waktu. Berat/pcs sengaja 0
+    // supaya baris ini tidak pernah dihitung sebagai upah produksi.
+    const { error: logErr } = await supabase.from('work_logs').insert([
+      {
+        transaction_id: order.id,
+        employee_name: employeeName || 'Kasir',
+        stage: 'Selesai',
+        service_type: order.service_type || '',
+        weight_kg: 0,
+        pcs_count: 0,
+        created_at: new Date().toISOString()
+      }
+    ]);
+
+    if (logErr) console.error('Gagal mencatat waktu penyerahan:', logErr);
+
     setSuccessMsg('✅ Diserahkan!'); refreshData(); setTimeout(() => setSuccessMsg(''), 3000); setIsSubmitting(false);
   };
 
@@ -1957,6 +1973,10 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
                   required
                 />
               </div>
+            </div>
+
+            <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
+              <StageTimeline logs={txWorkLogs} transaction={selectedTxDetail} />
             </div>
 
             <div className="space-y-2 pt-2 border-t">

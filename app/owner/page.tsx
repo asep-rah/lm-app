@@ -5,6 +5,7 @@ import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
 // 1. IMPORT KOMPONEN AI ASSISTANT ADMIN
 import AdminAIAssistant from '@/components/AdminAIAssistant';
+import StageTimeline from '@/components/StageTimeline';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -15,20 +16,6 @@ const safeParse = (data: any, fallback: any) => {
   if (!data) return fallback;
   if (typeof data === 'object') return data;
   try { return JSON.parse(data); } catch (e) { return fallback; }
-};
-
-// Memetakan nama tahap bebas dari work_logs ke kunci baku.
-// Catatan bahasa: 'Mengeringkan' tidak mengandung 'kering' dan 'Mengemas' tidak
-// mengandung 'kemas' (awalan meng- melebur dengan huruf k), sehingga dipakai
-// akar 'ering' dan 'emas'. Harus konsisten dengan getStageKey di app/pos.
-const stageKeyOf = (stageStr: string) => {
-  const s = String(stageStr || '').toLowerCase().trim();
-  if (s.includes('sortir')) return 'sortir';
-  if (s.includes('cuci') || s.includes('mencuci')) return 'cuci';
-  if (s.includes('ering')) return 'kering';
-  if (s.includes('setrika') || s.includes('gosok')) return 'setrika';
-  if (s.includes('pack') || s.includes('emas')) return 'packing';
-  return s;
 };
 
 export default function Dashboard() {
@@ -192,16 +179,6 @@ export default function Dashboard() {
       cancelled = true;
     };
   }, [selectedTxDetail?.id]);
-
-  const getStageCrew = (stageKey: string) => {
-    const direct = selectedTxDetail?.[`by_${stageKey}`];
-    if (direct) return direct;
-
-    const match = [...txWorkLogs]
-      .reverse()
-      .find((w) => stageKeyOf(w?.stage) === stageKey);
-    return match?.employee_name || '-';
-  };
 
   useEffect(() => {
     const ownerStr = localStorage.getItem('laundry_owner_user');
@@ -792,31 +769,13 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              {/* TIM CREW PENGERJAAN */}
-              <div className="space-y-1.5">
-                <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-wider">👥 Tim Crew Pengerjaan</h4>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[10px]">
-                  <div className="bg-slate-50 p-2 rounded-xl border">
-                    <span className="text-slate-400 font-bold block">1. Sortir</span>
-                    <b className="text-slate-800">{getStageCrew('sortir')}</b>
-                  </div>
-                  <div className="bg-slate-50 p-2 rounded-xl border">
-                    <span className="text-slate-400 font-bold block">2. Cuci</span>
-                    <b className="text-slate-800">{getStageCrew('cuci')}</b>
-                  </div>
-                  <div className="bg-slate-50 p-2 rounded-xl border">
-                    <span className="text-slate-400 font-bold block">3. Kering</span>
-                    <b className="text-slate-800">{getStageCrew('kering')}</b>
-                  </div>
-                  <div className="bg-slate-50 p-2 rounded-xl border">
-                    <span className="text-slate-400 font-bold block">4. Setrika</span>
-                    <b className="text-slate-800">{getStageCrew('setrika')}</b>
-                  </div>
-                  <div className="bg-slate-50 p-2 rounded-xl border">
-                    <span className="text-slate-400 font-bold block">5. Packing</span>
-                    <b className="text-slate-800">{getStageCrew('packing')}</b>
-                  </div>
-                </div>
+              {/* TIM CREW & WAKTU PENGERJAAN */}
+              <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
+                <StageTimeline
+                  logs={txWorkLogs}
+                  transaction={selectedTxDetail}
+                  title="Tim Crew & Waktu Pengerjaan"
+                />
               </div>
 
               <div className="bg-slate-900 text-white p-3.5 rounded-2xl flex justify-between items-center text-xs">
