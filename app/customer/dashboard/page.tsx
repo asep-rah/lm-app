@@ -50,6 +50,7 @@ const calculateDistanceKm = (lat1: number, lon1: number, lat2: number, lon2: num
 const paymentMethod: any = "CASH";
 
 export default function CustomerDashboardPage() {
+  const [detailOrder, setDetailOrder] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<'home' | 'order' | 'deposit' | 'history' | 'profile'>('home');
   const [activeSupportTab, setActiveSupportTab] = useState<'cs' | 'ai'>('cs');
   const [customerPhone, setCustomerPhone] = useState('');
@@ -849,9 +850,16 @@ export default function CustomerDashboardPage() {
                   <h4 className="font-bold text-slate-800 text-sm line-clamp-1">
                     {order.service_type || 'Layanan Laundry'}
                   </h4>
-                  <p className="text-[11px] text-indigo-600 font-semibold line-clamp-1 mt-0.5 flex items-center gap-1">
-                    <span>🔍</span> Klik untuk detail item & status lengkap
-                  </p>
+                  <button
+  type="button"
+  onClick={(e) => {
+    e.stopPropagation();
+    setDetailOrder(order);
+  }}
+  className="text-[11px] text-indigo-600 font-semibold line-clamp-1 mt-0.5 flex items-center gap-1 hover:underline cursor-pointer focus:outline-none"
+>
+  <span>🔍</span> Klik untuk detail item & status lengkap
+</button>
                 </div>
                 <div className="text-right whitespace-nowrap">
                   <span className="text-[10px] text-slate-400 block font-normal">Total Estimasi</span>
@@ -1711,6 +1719,108 @@ export default function CustomerDashboardPage() {
         </button>
       </div>
 
+{/* ================= MODAL POPUP DETAIL ITEM & STATUS ================= */}
+{detailOrder && (
+  <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      
+      {/* Header */}
+      <div className="bg-indigo-600 p-4 text-white flex justify-between items-center">
+        <div>
+          <h3 className="font-extrabold text-base">Detail Pesanan</h3>
+          <p className="text-[11px] text-indigo-100">
+            Resi: {detailOrder.receipt_number || detailOrder.id || '-'}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setDetailOrder(null)}
+          className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 text-white font-bold flex items-center justify-center cursor-pointer"
+        >
+          ✕
+        </button>
+      </div>
+
+      {/* Content */}
+      <div className="p-4 overflow-y-auto space-y-4 text-xs text-slate-700">
+        <div className="bg-indigo-50 p-3 rounded-xl border border-indigo-100 flex justify-between items-center">
+          <div>
+            <span className="text-[10px] text-indigo-500 font-bold uppercase block">Layanan</span>
+            <span className="font-bold text-slate-900 text-sm">
+              {detailOrder.service_type || detailOrder.service_name || 'Cuci Kering Gosok'}
+            </span>
+          </div>
+          <span className="px-2.5 py-1 bg-indigo-600 text-white font-black text-[10px] rounded-lg">
+            {detailOrder.status || 'Diterima'}
+          </span>
+        </div>
+
+        {/* Rincian Items */}
+        <div className="space-y-2">
+          <h4 className="font-extrabold text-slate-800 uppercase text-[10px]">📦 Rincian Item Cucian</h4>
+          {detailOrder.items && Array.isArray(detailOrder.items) && detailOrder.items.length > 0 ? (
+            <div className="space-y-1.5">
+              {detailOrder.items.map((it: any, idx: number) => (
+                <div key={idx} className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 flex justify-between items-center">
+                  <div>
+                    <span className="font-bold text-slate-800 block">{it.name || it.service_type || 'Item Cucian'}</span>
+                    <span className="text-[10px] text-slate-500">
+                      {it.weight ? `${it.weight} Kg` : ''} {it.qty ? `${it.qty} Pcs` : ''}
+                    </span>
+                  </div>
+                  <span className="px-2 py-0.5 bg-slate-200 text-slate-700 font-bold text-[10px] rounded-md">
+                    {it.status || detailOrder.status || 'Proses'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+              <p className="text-slate-600 font-medium">
+                {detailOrder.notes || 'Detail item telah dicatat oleh kasir/driver.'}
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Bukti Foto */}
+        <div className="space-y-2">
+          <h4 className="font-extrabold text-slate-800 uppercase text-[10px]">📸 Bukti Foto Cucian</h4>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <span className="text-[10px] font-bold text-slate-400 block mb-1">1. Penjemputan Driver</span>
+              {detailOrder.photo_pickup_url || detailOrder.photo_url ? (
+                <img src={detailOrder.photo_pickup_url || detailOrder.photo_url} alt="Pickup" className="w-full h-24 object-cover rounded-xl border border-slate-200" />
+              ) : (
+                <div className="w-full h-24 bg-slate-100 rounded-xl flex items-center justify-center text-[10px] text-slate-400">Belum Ada Foto</div>
+              )}
+            </div>
+            <div>
+              <span className="text-[10px] font-bold text-slate-400 block mb-1">2. Sampai Outlet</span>
+              {detailOrder.photo_outlet_url ? (
+                <img src={detailOrder.photo_outlet_url} alt="Outlet" className="w-full h-24 object-cover rounded-xl border border-slate-200" />
+              ) : (
+                <div className="w-full h-24 bg-slate-100 rounded-xl flex items-center justify-center text-[10px] text-slate-400">Belum Ada Foto</div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Footer */}
+      <div className="p-3 bg-slate-50 border-t border-slate-100">
+        <button
+          type="button"
+          onClick={() => setDetailOrder(null)}
+          className="w-full py-2 bg-slate-800 text-white font-bold rounded-xl text-xs cursor-pointer"
+        >
+          Tutup
+        </button>
+      </div>
+
+    </div>
+  </div>
+)}
     </div>
   );
 }
