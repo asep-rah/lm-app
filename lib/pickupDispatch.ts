@@ -10,7 +10,7 @@ export async function insertPickupOrder(
     service_type: payload.service_type || payload.service_detail || 'Pickup',
     address: payload.address || payload.pickup_address || '',
     notes: payload.notes || null,
-    status: payload.status || 'Baru Masuk',
+    status: payload.status || 'Menunggu Kurir',
     transaction_id: payload.transaction_id || null
   };
 

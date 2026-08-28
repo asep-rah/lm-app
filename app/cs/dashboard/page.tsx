@@ -389,7 +389,11 @@ export default function CSDashboard() {
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {filteredPickups.map((p) => {
-                const isNewOrder = p.status === 'Menunggu Driver' || p.status === 'Baru Masuk';
+                const isNewOrder =
+                  p.status === 'Menunggu Driver' ||
+                  p.status === 'Baru Masuk' ||
+                  p.status === 'Menunggu Kurir' ||
+                  p.status === 'Pickup Request';
 
                 return (
                   <div key={p.id} className={`bg-white border rounded-2xl p-4 shadow-sm hover:shadow-md transition space-y-3 ${isNewOrder ? 'border-rose-300 ring-2 ring-rose-100' : 'border-slate-200'}`}>

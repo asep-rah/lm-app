@@ -1,8 +1,8 @@
 'use client';
 export const dynamic = 'force-dynamic';
 
-import { useEffect, useState, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useEffect, useRef, useState, Suspense } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
 import StageTimeline from '@/components/StageTimeline';
@@ -11,6 +11,7 @@ import { createSupervisorIssueTask } from '@/lib/createOutletIssueTask';
 import RequisitionForm from '@/components/RequisitionForm';
 import RoleTaskInbox from '@/components/RoleTaskInbox';
 import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
+import { updatePickupOrder } from '@/lib/pickupUpdates';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -175,6 +176,9 @@ export function POSContent() {
 
   // --- AUTO-FILL PENJEMPUTAN DRIVER KE FORM POS ---
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const skipPickupPrefillRef = useRef(false);
   const [customerOrder, setCustomerOrder] = useState<CustomerOrder | null>(null);
   const [address, setAddress] = useState('');
   const [bagCount, setBagCount] = useState('1');
@@ -241,7 +245,42 @@ export function POSContent() {
     setInputQtyKg(estWeight > 0 ? String(estWeight) : '');
   };
 
+  const clearPickupPrefill = () => {
+    skipPickupPrefillRef.current = true;
+    setCustomerOrder(null);
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    const keys = [
+      'pickup_id',
+      'name',
+      'phone',
+      'service',
+      'notes',
+      'delivery_fee',
+      'order_type',
+      'duration',
+      'address',
+      'estimated_weight',
+      'weight'
+    ];
+    let changed = false;
+    keys.forEach((k) => {
+      if (url.searchParams.has(k)) {
+        url.searchParams.delete(k);
+        changed = true;
+      }
+    });
+    if (!changed) return;
+    const next = url.pathname + (url.searchParams.toString() ? `?${url.searchParams.toString()}` : '');
+    window.history.replaceState({}, '', next);
+    router.replace(next || pathname || '/pos', { scroll: false });
+  };
+
   useEffect(() => {
+    if (skipPickupPrefillRef.current) {
+      skipPickupPrefillRef.current = false;
+      return;
+    }
     const pickupId = searchParams.get('pickup_id');
     const urlName = searchParams.get('name');
     const urlPhone = searchParams.get('phone');
@@ -960,7 +999,14 @@ const handleSubmitIssue = async (e: React.FormEvent) => {
     .neq('status', 'Selesai')
     .neq('status', 'Batal');
 
-  setIncomingPickupsCount(incomingPkps?.length || 0);
+  const stillIncoming = (incomingPkps || []).filter((p: any) => {
+    const s = String(p.status || '').toLowerCase();
+    if (s.includes('tiba') || s.includes('diterima') || s.includes('kasir')) return false;
+    if (s.includes('sortir') || s.includes('cuci') || s.includes('ering') || s.includes('setrika') || s.includes('pack') || s.includes('siap')) return false;
+    if (s.includes('selesai')) return false;
+    return true;
+  });
+  setIncomingPickupsCount(stillIncoming.length);
 
     const { data: txData } = await supabase.from('transactions').select('amount, order_type, created_at').eq('outlet_id', selectedOutlet);
     const { data: memLogsAll } = await supabase.from('membership_logs').select('price, order_type, created_at').eq('outlet_id', selectedOutlet);
@@ -1188,6 +1234,7 @@ const handleSubmitIssue = async (e: React.FormEvent) => {
       receipt_number: generatedResi,
       outlet_id: selectedOutlet,
       customer_name: customerName || 'Pelanggan',
+      customer_phone: normalizedPhone || customerPhone || null,
       order_type: orderType,
       delivery_fee: Number(deliveryFee) || 0,
       service_type: primaryServiceLabel,
@@ -1224,16 +1271,21 @@ const handleSubmitIssue = async (e: React.FormEvent) => {
         outletPhone: curOutletPhone
       });
 
-      // OTOMATIS HAPUS/UPDATE ANTREAN KANBAN AGAR HILANG DARI PORTAL POS
+      // Nota POS = cucian diterima kasir. Pickup tetap aktif di Beranda pelanggan
+      // (bukan Selesai) sampai diserahkan / diantar.
     const params = new URLSearchParams(window.location.search);
-    const pickupId = params.get('pickup_id');
+    const pickupId = params.get('pickup_id') || customerOrder?.id || '';
 
     if (pickupId) {
-      await supabase
-        .from('pickup_orders')
-        .update({ status: 'Selesai' })
-        .eq('id', pickupId);
+      await updatePickupOrder(pickupId, {
+        status: 'Tiba di Outlet',
+        transaction_id: newTx.id
+      });
+      const linked = await supabase.from('transactions').update({ pickup_id: pickupId }).eq('id', newTx.id);
+      if (linked.error) console.warn('pickup_id pada transactions dilewati:', linked.error.message);
     }
+      setCustomerOrder(null);
+      clearPickupPrefill();
       setAmount(''); setCustomerName(''); setCustomerPhone(''); setWeightKg(''); setPcsCount(''); setNotes(''); setDiscountValue(''); setCartItems([]); setDeliveryFee(orderType === 'Online' ? '20000' : '');
       refreshData();
     } else alert('❌ Gagal: ' + error?.message);
@@ -1522,6 +1574,12 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
     ]);
 
     if (logErr) console.error('Gagal mencatat waktu penyerahan:', logErr);
+
+    if (order.pickup_id) {
+      await updatePickupOrder(order.pickup_id, { status: 'Selesai' });
+    } else {
+      await supabase.from('pickup_orders').update({ status: 'Selesai' }).eq('transaction_id', order.id);
+    }
 
     setSuccessMsg('✅ Diserahkan!'); refreshData(); setTimeout(() => setSuccessMsg(''), 3000); setIsSubmitting(false);
   };

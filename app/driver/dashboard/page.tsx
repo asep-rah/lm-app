@@ -17,6 +17,10 @@ const supabase = createClient(
 
 const ACTIVE_STATUSES = [
   'Baru Masuk',
+  'Menunggu Kurir',
+  'Pickup Request',
+  'Menunggu Driver',
+  'Menunggu Penjemputan',
   'Driver Menuju Lokasi',
   'Barang Dibawa ke Outlet',
   'Ready for Delivery',
@@ -182,7 +186,7 @@ export default function DriverDashboard() {
     const s = String(status || '').toLowerCase();
     if (s.includes('siap') || status === 'Ready for Delivery') return 'WAJIB: FOTO AMBIL CUCIAN DI OUTLET';
     if (status === 'Driver Mengantar') return 'WAJIB: FOTO SERAH TERIMA PELANGGAN';
-    if (status === 'Driver Menuju Lokasi' || status === 'Baru Masuk') return 'WAJIB: FOTO JEMPUT DI LOKASI CUSTOMER';
+    if (status === 'Driver Menuju Lokasi' || waitingAccept(status)) return 'WAJIB: FOTO JEMPUT DI LOKASI CUSTOMER';
     return 'WAJIB: FOTO SERAH TERIMA DI OUTLET';
   };
 
@@ -196,7 +200,7 @@ export default function DriverDashboard() {
     const currentStatus = String(order.status || '');
     const st = currentStatus.toLowerCase();
     const isOutletPickup = st.includes('siap') || currentStatus === 'Ready for Delivery';
-    const isPickupStep = currentStatus === 'Driver Menuju Lokasi' || currentStatus === 'Baru Masuk';
+    const isPickupStep = currentStatus === 'Driver Menuju Lokasi' || waitingAccept(currentStatus);
     const isDeliveryStep = currentStatus === 'Driver Mengantar';
     const confirmMsg = isOutletPickup
       ? 'Foto live wajib: ambil cucian di outlet sebelum berangkat ke pelanggan.'
@@ -284,7 +288,16 @@ export default function DriverDashboard() {
     }
   };
 
-  const waitingAccept = (status: string) => status === 'Baru Masuk';
+  const waitingAccept = (status: string) => {
+    const s = String(status || '').toLowerCase();
+    return (
+      status === 'Baru Masuk' ||
+      s.includes('menunggu kurir') ||
+      s.includes('pickup request') ||
+      s.includes('menunggu driver') ||
+      s.includes('menunggu penjemputan')
+    );
+  };
 
   const phoneOf = (p: any) => p.customer_phone || p.phone_number || '';
 

@@ -145,7 +145,7 @@ export default function TrackingPage() {
 
             <div className="border-t pt-4">
               {/* Nama crew disembunyikan dari pelanggan; hanya tahap & waktu selesai. */}
-              <StageTimeline logs={workLogs} transaction={orderData} showCrew={false} />
+              <StageTimeline logs={workLogs} transaction={orderData} showCrew={false} variant="customer" />
             </div>
 
             {(orderData.status === 'Siap Diambil' || orderData.status === 'Selesai' || orderData.status === 'Packing') && (

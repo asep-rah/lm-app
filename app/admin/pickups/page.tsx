@@ -89,7 +89,12 @@ export default function AdminPickupsPage() {
   };
 
   const newOrders = pickups.filter(
-    (p) => p.status === 'Baru Masuk' || p.status === 'Menunggu Penjemputan' || p.status === 'Menunggu Driver'
+    (p) =>
+      p.status === 'Baru Masuk' ||
+      p.status === 'Menunggu Kurir' ||
+      p.status === 'Pickup Request' ||
+      p.status === 'Menunggu Penjemputan' ||
+      p.status === 'Menunggu Driver'
   );
 
   const driverInProcess = pickups.filter(
@@ -97,7 +102,10 @@ export default function AdminPickupsPage() {
   );
 
   const arrivedAtOutlet = pickups.filter(
-    (p) => p.status === 'Telah Tiba di Outlet' || p.status === 'Selesai Jemput'
+    (p) =>
+      p.status === 'Telah Tiba di Outlet' ||
+      p.status === 'Tiba di Outlet' ||
+      p.status === 'Selesai Jemput'
   );
 
   return (

@@ -22,21 +22,38 @@ const safeParse = (data: any, fallback: any) => {
 };
 
 // Tetap di Beranda sepanjang proses. Pindah Riwayat hanya setelah diserahkan
-// (Selesai / Delivered / Terkirim) atau dibatalkan — bukan saat Siap Diambil.
+// (Selesai / Delivered / Terkirim) — bukan saat nota POS dibuat atau Siap Diambil.
 const isOrderFinished = (order: any) => {
   const st = String(order?.status || '').toLowerCase().trim();
   if (!st) return false;
+  if (st.includes('batal') || st.includes('cancel')) return true;
   if (st.includes('siap')) return false;
-  if (st.includes('packing') || st.includes('cuci') || st.includes('setrika') || st.includes('sortir') || st.includes('jemput') || st.includes('tiba') || st.includes('proses') || st.includes('ering') || st.includes('emas')) {
+  if (st.includes('selesai jemput')) return false;
+  if (
+    st.includes('packing') ||
+    st.includes('cuci') ||
+    st.includes('setrika') ||
+    st.includes('sortir') ||
+    st.includes('jemput') ||
+    st.includes('tiba') ||
+    st.includes('diterima') ||
+    st.includes('kasir') ||
+    st.includes('proses') ||
+    st.includes('ering') ||
+    st.includes('emas') ||
+    st.includes('menunggu') ||
+    st.includes('baru') ||
+    st.includes('request')
+  ) {
     return false;
   }
-  if (st.includes('batal') || st.includes('cancel')) return true;
-  if (st === 'diambil' || st.includes('sudah diambil') || st.includes('telah diambil')) return true;
   return (
+    st === 'selesai' ||
     st.includes('delivered') ||
     st.includes('terkirim') ||
-    st === 'selesai' ||
-    (st.includes('selesai') && !st.includes('pack'))
+    st === 'diambil' ||
+    st.includes('sudah diambil') ||
+    st.includes('telah diambil')
   );
 };
 
@@ -176,7 +193,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       const { count } = await supabase
         .from('pickup_orders')
         .select('*', { count: 'exact', head: true })
-        .in('status', ['Baru Masuk', 'Driver Menuju Lokasi']);
+        .in('status', ['Baru Masuk', 'Menunggu Kurir', 'Pickup Request', 'Driver Menuju Lokasi']);
       setQueueCount(count || 0);
     };
     fetchQueue();
@@ -600,6 +617,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       ...t,
       status: overlayStatus,
       pickup_id: t.pickup_id || relatedPickup?.id,
+      pickup_created_at: relatedPickup?.created_at,
       photo_pickup_url: t.photo_pickup_url || relatedPickup?.photo_pickup_url || relatedPickup?.photo_url,
       photo_outlet_url: t.photo_outlet_url || relatedPickup?.photo_outlet_url,
       photo_delivery_url: t.photo_delivery_url || relatedPickup?.photo_delivery_url
@@ -607,7 +625,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
   });
 
   activePickups.forEach((p: any) => {
-    const alreadyInTrx = activeTxs.some((t: any) => t.pickup_id === p.id);
+    const alreadyInTrx = activeTxs.some(
+      (t: any) => t.pickup_id === p.id || p.transaction_id === t.id
+    );
     if (!alreadyInTrx) {
       mergedActive.push({
         ...p,
@@ -821,7 +841,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       delivery_fee: Number(finalOngkir) || 0,
       notes: finalNotes,
       pickup_date: todayDateStr,
-      status: 'Baru Masuk',
+      status: 'Menunggu Kurir',
       created_at: nowIso
     };
 
@@ -1040,21 +1060,16 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
         return displayOrders.map((order: any) => {
           const currentStatus = (order.status || '').toLowerCase();
           const stages = [
-            { label: 'Jemput', icon: '🛺', match: ['jemput', 'menuju', 'diambil driver'] },
-            { label: 'Diterima', icon: '🏠', match: ['diterima', 'tiba'] },
-            // 'ering' (bukan 'kering') dipakai karena 'Mengeringkan' tidak mengandung
-            // substring 'kering' — awalan meng- melebur dengan huruf k akar katanya.
+            { label: 'Jemput', icon: '🛺', match: ['baru', 'menunggu', 'request', 'jemput', 'menuju', 'dibawa'] },
+            { label: 'Diterima', icon: '🏠', match: ['diterima', 'tiba', 'kasir'] },
             { label: 'Proses', icon: '🧼', match: ['cuci', 'mencuci', 'sortir', 'ering'] },
-            // Packing masih tahap pengerjaan, jadi digabung ke tahap penyelesaian.
-            // Kalau dimasukkan ke 'Siap', pelanggan dikabari cucian sudah siap
-            // padahal masih dikemas. 'emas' menangkap 'Kemas'/'Mengemas'/'Pengemasan'.
             { label: 'Setrika', icon: '👔', match: ['setrika', 'gosok', 'pack', 'emas'] },
             { label: 'Siap', icon: '📦', match: ['siap'] },
-            { label: 'Selesai', icon: '✅', match: ['selesai', 'diambil'] }
+            { label: 'Selesai', icon: '✅', match: ['selesai', 'terkirim', 'delivered', 'diambil'] }
           ];
 
           let activeIndex = stages.findIndex(s => s.match.some(m => currentStatus.includes(m)));
-          if (activeIndex === -1) activeIndex = 1;
+          if (activeIndex === -1) activeIndex = 0;
 
           const formattedDate = order.created_at
             ? new Date(order.created_at).toLocaleDateString('id-ID', {
@@ -1077,7 +1092,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                   {order.receipt_number || order.order_type || 'Laundry Express'} • {formattedDate}
                 </span>
                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-600 border border-amber-200/50">
-                  {order.status || 'Tiba di Outlet'}
+                  {order.status || 'Menunggu Kurir'}
                 </span>
               </div>
 
@@ -2014,7 +2029,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
             </span>
           </div>
           <span className="px-2.5 py-1 bg-indigo-600 text-white font-black text-[10px] rounded-lg">
-            {detailOrder.status || 'Diterima'}
+            {detailOrder.status || 'Menunggu Kurir'}
           </span>
         </div>
 
@@ -2052,6 +2067,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
             logs={detailWorkLogs}
             transaction={detailOrder}
             showCrew={false}
+            variant="customer"
             title="Progres & Waktu Pengerjaan"
           />
         </div>

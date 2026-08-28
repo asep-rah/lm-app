@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabaseClient';
 
 const OPTIONAL_KEYS = [
+  'transaction_id',
   'accepted_at',
   'picked_up_at',
   'arrived_outlet_at',

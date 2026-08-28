@@ -111,7 +111,7 @@ export default function PickupOrderForm() {
           : 'Satuan',
         notes: category === 'SATUAN' ? JSON.stringify(selectedSatuanItems) : kiloanPackage,
         estimated_weight: category === 'KILOAN' ? estimatedKg : 0,
-        status: 'Baru Masuk'
+        status: 'Menunggu Kurir'
       });
 
       if (error) throw error;
