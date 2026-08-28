@@ -89,7 +89,34 @@ export default function CustomerDashboardPage() {
   const [pendingCashierInvoice, setPendingCashierInvoice] = useState<any>(null);
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-
+  
+// Fungsi Trigger Xendit Top-Up
+const handleTopupXendit = async (priceAmount: number, packageName: string) => {
+  try {
+    setIsSubmitting(true);
+    const res = await fetch('/api/qris/charge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        amount: priceAmount,
+        customerName: customerData?.name || 'Pelanggan',
+        customerPhone: customerPhone,
+        description: `Top-Up Deposit ${packageName}`,
+        type: 'deposit'
+      })
+    });
+    const data = await res.json();
+    if (data.invoiceUrl) {
+      window.location.href = data.invoiceUrl;
+    } else {
+      alert('Gagal: ' + (data.error || 'Terjadi kesalahan'));
+    }
+  } catch (err: any) {
+    alert('Koneksi gagal: ' + err.message);
+  } finally {
+    setIsSubmitting(false);
+  }
+};
   const [bagCount, setBagCount] = useState('');
   const [washProcess, setWashProcess] = useState('');
   const [hasFading, setHasFading] = useState('');
@@ -731,9 +758,13 @@ export default function CustomerDashboardPage() {
                     <span className="text-[10px] uppercase font-bold text-blue-200 block">Saldo Deposit</span>
                     <span className="text-2xl font-black text-white">Rp {Number(customerData.deposit_balance || 0).toLocaleString('id-ID')}</span>
                   </div>
-                  <button onClick={() => setActiveTab('deposit')} className="bg-white text-blue-700 px-4 py-2 rounded-xl text-xs font-extrabold shadow-md hover:bg-blue-50 transition">
-                    + Top Up
-                  </button>
+                  <button 
+  type="button" 
+  onClick={() => setActiveTab('deposit')} 
+  className="bg-white text-blue-700 px-4 py-2 rounded-xl text-xs font-extrabold shadow-md hover:bg-blue-50 transition cursor-pointer"
+>
+  + Top-Up via Xendit
+</button>
                 </div>
               </div>
 
