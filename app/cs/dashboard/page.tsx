@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
 import RoleTaskInbox from '@/components/RoleTaskInbox';
+import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
 import { getStaffSession } from '@/lib/staffSession';
 import { insertChatMessage, threadKeyOf } from '@/lib/csChat';
 
@@ -318,6 +319,7 @@ export default function CSDashboard() {
           </div>
         </div>
 
+        <KpiRoleMonitoring />
         <RoleTaskInbox role="cs" />
 
         {/* FILTER BAR */}

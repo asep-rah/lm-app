@@ -18,6 +18,7 @@ import { CS_MACROS } from '@/lib/csMacros';
 import { createSupervisorIssueTask } from '@/lib/createOutletIssueTask';
 import { insertWithFallback } from '@/lib/safeWrite';
 import StageTimeline from '@/components/StageTimeline';
+import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
 import StatusBadge from '@/components/ui/StatusBadge';
 import { toast } from '@/lib/toast';
 

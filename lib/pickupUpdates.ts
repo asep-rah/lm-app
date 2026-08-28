@@ -1,6 +1,6 @@
 import { supabase } from '@/lib/supabaseClient';
 
-const TIME_KEYS = [
+const OPTIONAL_KEYS = [
   'accepted_at',
   'picked_up_at',
   'arrived_outlet_at',
@@ -18,7 +18,7 @@ export const updatePickupOrder = async (id: string, payload: Record<string, any>
   if (!first.error) return { error: null };
 
   const stripped = { ...payload };
-  TIME_KEYS.forEach((k) => delete stripped[k]);
+  OPTIONAL_KEYS.forEach((k) => delete stripped[k]);
   const second = await supabase.from('pickup_orders').update(stripped).eq('id', id);
   if (!second.error) {
     console.warn('pickup_orders: kolom stempel waktu diabaikan:', first.error.message);
@@ -28,6 +28,7 @@ export const updatePickupOrder = async (id: string, payload: Record<string, any>
   const statusOnly: Record<string, any> = { status: payload.status };
   if (payload.photo_url) statusOnly.photo_url = payload.photo_url;
   if (payload.photo_outlet_url) statusOnly.photo_outlet_url = payload.photo_outlet_url;
+  if (payload.photo_delivery_url) statusOnly.photo_delivery_url = payload.photo_delivery_url;
   const third = await supabase.from('pickup_orders').update(statusOnly).eq('id', id);
   if (third.error) return { error: third.error };
   console.warn('pickup_orders: payload dipangkas ke status/foto:', second.error.message);
@@ -47,6 +48,7 @@ export const logCourierStage = async (order: any, stage: string, employeeName: s
       service_type: order.service_type || 'Pickup',
       weight_kg: Number(order.estimated_weight) || 0,
       pcs_count: 0,
+      photo_url: order._proofUrl || null,
       created_at: new Date().toISOString()
     }
   ]);

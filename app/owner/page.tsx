@@ -16,6 +16,7 @@ import RevenueChart from '@/components/ui/RevenueChart';
 import PeakHeatmap from '@/components/ui/PeakHeatmap';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 import { fetchRoleKpis } from '@/lib/kpiMetrics';
+import { isOwnerRole } from '@/lib/staffSession';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -893,9 +894,11 @@ export default function Dashboard() {
             <button onClick={() => setActiveTab('pnl')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'pnl' ? 'bg-sky-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>PnL</button>
             <button onClick={() => setActiveTab('history')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'history' ? 'bg-sky-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>History</button>
             <button onClick={() => setActiveTab('loans')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'loans' ? 'bg-amber-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>Kasbon</button>
+            {isOwnerRole(currentUserRole) && (
+              <Link href="/owner/kpi-settings" className="whitespace-nowrap bg-amber-50 border border-amber-200 text-amber-700 hover:bg-amber-500 hover:text-white text-xs px-3.5 py-2 rounded-xl font-bold transition-all">KPI Settings</Link>
+            )}
             {isManagementAdmin && (
               <>
-                <Link href="/owner/kpi-settings" className="whitespace-nowrap bg-amber-50 border border-amber-200 text-amber-700 hover:bg-amber-500 hover:text-white text-xs px-3.5 py-2 rounded-xl font-bold transition-all">KPI Settings</Link>
                 <button onClick={() => setActiveTab('settings')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'settings' ? 'bg-sky-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>Settings</button>
                 <button onClick={() => setActiveTab('employees')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'employees' ? 'bg-sky-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>Karyawan</button>
               </>

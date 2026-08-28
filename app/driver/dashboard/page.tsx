@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import RoleTaskInbox from '@/components/RoleTaskInbox';
 import { logCourierStage, updatePickupOrder } from '@/lib/pickupUpdates';
+import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
 import SwipeToAction from '@/components/ui/SwipeToAction';
 import StatusBadge from '@/components/ui/StatusBadge';
 import { SkeletonCard } from '@/components/ui/Skeleton';
@@ -178,9 +179,11 @@ export default function DriverDashboard() {
   };
 
   const photoLabel = (status: string) => {
-    if (status === 'Driver Menuju Lokasi' || status === 'Baru Masuk') return '1. AMBIL FOTO DI LOKASI CUSTOMER';
-    if (status === 'Driver Mengantar') return 'AMBIL FOTO SERAH TERIMA PELANGGAN';
-    return '2. AMBIL FOTO SERAH TERIMA OUTLET';
+    const s = String(status || '').toLowerCase();
+    if (s.includes('siap') || status === 'Ready for Delivery') return 'WAJIB: FOTO AMBIL CUCIAN DI OUTLET';
+    if (status === 'Driver Mengantar') return 'WAJIB: FOTO SERAH TERIMA PELANGGAN';
+    if (status === 'Driver Menuju Lokasi' || status === 'Baru Masuk') return 'WAJIB: FOTO JEMPUT DI LOKASI CUSTOMER';
+    return 'WAJIB: FOTO SERAH TERIMA DI OUTLET';
   };
 
   const handleFileUploadAndFinish = async (
@@ -191,20 +194,24 @@ export default function DriverDashboard() {
     if (!file) return;
 
     const currentStatus = String(order.status || '');
+    const st = currentStatus.toLowerCase();
+    const isOutletPickup = st.includes('siap') || currentStatus === 'Ready for Delivery';
     const isPickupStep = currentStatus === 'Driver Menuju Lokasi' || currentStatus === 'Baru Masuk';
     const isDeliveryStep = currentStatus === 'Driver Mengantar';
-    const confirmMsg = isPickupStep
-      ? 'Upload foto bukti pengambilan pakaian di lokasi customer?'
+    const confirmMsg = isOutletPickup
+      ? 'Foto live wajib: ambil cucian di outlet sebelum berangkat ke pelanggan.'
+      : isPickupStep
+      ? 'Foto live wajib: bukti pengambilan pakaian di lokasi customer.'
       : isDeliveryStep
-      ? 'Upload foto bukti penyerahan cucian ke pelanggan?'
-      : 'Upload foto bukti penyerahan pakaian di outlet?';
+      ? 'Foto live wajib: bukti penyerahan cucian ke pelanggan.'
+      : 'Foto live wajib: bukti penyerahan pakaian di outlet.';
 
     if (!confirm(confirmMsg)) return;
 
     setUploadingId(order.id);
 
     try {
-      const photoType = isPickupStep ? 'pickup' : isDeliveryStep ? 'delivery' : 'outlet';
+      const photoType = isOutletPickup ? 'outlet-pickup' : isPickupStep ? 'pickup' : isDeliveryStep ? 'delivery' : 'outlet';
       const cleanFileName = `${photoType}-${order.id}-${Date.now()}.jpg`;
 
       const { error: uploadError } = await supabase.storage
@@ -227,11 +234,26 @@ export default function DriverDashboard() {
 
       let updateData: Record<string, any>;
       let stageLabel = 'Tiba di Outlet';
-      if (isPickupStep) {
+      if (isOutletPickup) {
+        updateData = {
+          photo_outlet_url: photoUrl,
+          status: 'Driver Mengantar',
+          picked_up_at: now,
+          arrived_outlet_at: now,
+          driver_name: driverName
+        };
+        stageLabel = 'Ambil di Outlet';
+      } else if (isPickupStep) {
         updateData = { photo_url: photoUrl, status: 'Barang Dibawa ke Outlet', picked_up_at: now, driver_name: driverName };
         stageLabel = 'Jemput Driver';
       } else if (isDeliveryStep) {
-        updateData = { photo_outlet_url: photoUrl, status: 'Terkirim', delivered_at: now, driver_name: driverName };
+        updateData = {
+          photo_delivery_url: photoUrl,
+          photo_outlet_url: order.photo_outlet_url || photoUrl,
+          status: 'Terkirim',
+          delivered_at: now,
+          driver_name: driverName
+        };
         stageLabel = 'Selesai';
       } else {
         updateData = { photo_outlet_url: photoUrl, status: 'Telah Tiba di Outlet', arrived_outlet_at: now, driver_name: driverName };
@@ -243,13 +265,15 @@ export default function DriverDashboard() {
         throw new Error('DB Error: ' + updateError.message);
       }
 
-      await logCourierStage(order, stageLabel, driverName);
+      await logCourierStage({ ...order, _proofUrl: photoUrl }, stageLabel, driverName);
 
       alert(
-        isPickupStep
+        isOutletPickup
+          ? '📷 Foto ambil di outlet tersimpan. Lanjut antar ke pelanggan.'
+          : isPickupStep
           ? '📷 Foto jemput berhasil! Lanjutkan perjalanan ke Outlet.'
           : isDeliveryStep
-          ? '📦 Foto serah terima pelanggan berhasil. Tugas antar selesai.'
+          ? '📦 Foto serah terima pelanggan tersimpan. Tugas antar selesai.'
           : '🏪 Foto serah terima outlet berhasil! Tugas jemput selesai.'
       );
       loadDriverTasks();
@@ -260,8 +284,7 @@ export default function DriverDashboard() {
     }
   };
 
-  const waitingAccept = (status: string) =>
-    status === 'Baru Masuk' || status === 'Ready for Delivery' || status === 'Siap Diantar';
+  const waitingAccept = (status: string) => status === 'Baru Masuk';
 
   const phoneOf = (p: any) => p.customer_phone || p.phone_number || '';
 
@@ -291,7 +314,12 @@ export default function DriverDashboard() {
         </div>
 
         <div className="p-4 flex-1 space-y-4">
-          {driverTab === 'inbox' && <RoleTaskInbox role={loginRole || 'driver'} />}
+          {driverTab === 'inbox' && (
+            <div className="space-y-4">
+              <KpiRoleMonitoring />
+              <RoleTaskInbox role={loginRole || 'driver'} />
+            </div>
+          )}
 
           {driverTab === 'account' && (
             <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-sm space-y-3">

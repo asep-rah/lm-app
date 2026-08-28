@@ -10,6 +10,7 @@ import { PAID_STAGE_KEYS, stageKeyOf } from '@/lib/stageTimeline';
 import { createSupervisorIssueTask } from '@/lib/createOutletIssueTask';
 import RequisitionForm from '@/components/RequisitionForm';
 import RoleTaskInbox from '@/components/RoleTaskInbox';
+import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -2651,6 +2652,7 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
                 employeeName={employeeName || 'Kasir'}
                 role="kasir"
               />
+              <KpiRoleMonitoring />
               <RoleTaskInbox role="kasir" />
               <form onSubmit={handleAddStock} className="space-y-3 border rounded-xl p-4 shadow-sm">
                 <h3 className="text-xs font-bold text-indigo-600 border-b pb-2">📦 Tambah Stok</h3>

@@ -12,36 +12,55 @@ export async function POST(req: Request) {
     const history = Array.isArray(body.messages) ? body.messages.slice(-8) : [];
     if (!last) return Response.json({ drafts: [] });
 
-    const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+    const apiKey = (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
     const model = (process.env.GEMINI_MODEL || 'gemini-2.0-flash').trim();
-    if (!apiKey) return Response.json({ drafts: [], error: 'no_key' }, { status: 503 });
+    if (!apiKey) return Response.json({ drafts: [] });
 
     const histText = history
       .map((m: any) => `${m.sender_type === 'cs' ? 'CS' : 'Pelanggan'}: ${m.message}`)
       .join('\n');
 
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
-            {
-              role: 'user',
-              parts: [
-                {
-                  text: `${CS_DRAFT_PROMPT}\n\nRiwayat:\n${histText}\n\nPesan terakhir pelanggan:\n${last}`
-                }
-              ]
-            }
-          ]
-        })
-      }
+    const models = Array.from(
+      new Set(
+        [
+          process.env.GEMINI_MODEL,
+          model,
+          'gemini-flash-latest',
+          'gemini-2.5-flash',
+          'gemini-2.0-flash',
+          'gemini-2.5-flash-lite'
+        ]
+          .map((m) => String(m || '').trim())
+          .filter(Boolean)
+      )
     );
 
-    const data = await res.json().catch(() => ({}));
-    const text = String(data?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+    let text = '';
+    for (const modelName of models) {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  {
+                    text: `${CS_DRAFT_PROMPT}\n\nRiwayat:\n${histText}\n\nPesan terakhir pelanggan:\n${last}`
+                  }
+                ]
+              }
+            ]
+          })
+        }
+      );
+      if (!res.ok) continue;
+      const data = await res.json().catch(() => ({}));
+      text = String(data?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+      if (text) break;
+    }
     const drafts = text
       .split(/\n---\n|\n---\s*\n|^---$/m)
       .map((s) => s.replace(/^---\s*|\s*---$/g, '').trim())

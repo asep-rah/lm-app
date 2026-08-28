@@ -8,6 +8,7 @@ import RoleTaskInbox from '@/components/RoleTaskInbox';
 import HeadTaskDelegator from '@/components/HeadTaskDelegator';
 import StageTimeline from '@/components/StageTimeline';
 import { isVoidTransaction } from '@/lib/voidTx';
+import { isOwnerRole } from '@/lib/staffSession';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -632,9 +633,11 @@ setDeleteRequests(delData);
           <button onClick={() => setActiveTab('history')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'history' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>📦 History 1 Thn</button>
           <button onClick={() => setActiveTab('loans')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'loans' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>💸 Kasbon Crew</button>
 
+          {isOwnerRole(currentUserRole) && (
+            <Link href="/owner/kpi-settings" className="whitespace-nowrap bg-amber-50 border border-amber-200 text-amber-800 hover:bg-amber-500 hover:text-white text-xs px-4 py-2 rounded-xl font-bold transition">🎯 KPI Settings</Link>
+          )}
           {['owner', 'supervisor'].includes(currentUserRole) && (
             <>
-              <Link href="/owner/kpi-settings" className="whitespace-nowrap bg-amber-50 border border-amber-200 text-amber-800 hover:bg-amber-500 hover:text-white text-xs px-4 py-2 rounded-xl font-bold transition">🎯 KPI Settings</Link>
               <button onClick={() => setActiveTab('settings')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'settings' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>⚙️ Settings</button>
               <button onClick={() => setActiveTab('employees')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'employees' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>👥 Karyawan</button>
             </>

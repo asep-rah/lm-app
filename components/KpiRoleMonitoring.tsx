@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { fetchRoleKpis, type KpiCard } from '@/lib/kpiMetrics';
 import { currentMonthYear } from '@/lib/kpiCatalog';
+import { getStaffSession, isOwnerRole, kpiKeysVisibleForRole } from '@/lib/staffSession';
 import Skeleton from '@/components/ui/Skeleton';
 import StatusBadge from '@/components/ui/StatusBadge';
 
@@ -11,8 +12,12 @@ const toneOf = (score: number) =>
   score >= 90 ? 'emerald' : score >= 70 ? 'amber' : 'rose';
 
 export default function KpiRoleMonitoring() {
+  const session = useMemo(() => getStaffSession(), []);
+  const allowedKeys = kpiKeysVisibleForRole(session.role);
+  const canEditTargets = isOwnerRole(session.role);
+
   const [cards, setCards] = useState<KpiCard[]>([]);
-  const [healthyCount, setHealthyCount] = useState(7);
+  const [healthyCount, setHealthyCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [lastSynced, setLastSynced] = useState('');
   const [monthYear, setMonthYear] = useState(currentMonthYear());
@@ -22,8 +27,11 @@ export default function KpiRoleMonitoring() {
     setLoading(true);
     try {
       const res = await fetchRoleKpis(monthYear);
-      setCards(res.cards);
-      setHealthyCount(res.healthyCount);
+      const visible = allowedKeys
+        ? res.cards.filter((c) => allowedKeys.includes(c.roleKey))
+        : res.cards;
+      setCards(visible);
+      setHealthyCount(visible.filter((c) => c.healthy).length);
       setFromConfig(res.fromConfig);
       setLastSynced(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }));
     } catch (err) {
@@ -38,7 +46,7 @@ export default function KpiRoleMonitoring() {
     const t = setInterval(load, 120_000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [monthYear]);
+  }, [monthYear, session.role]);
 
   const allHealthy = healthyCount === cards.length && cards.length > 0;
 
@@ -46,7 +54,9 @@ export default function KpiRoleMonitoring() {
     <div className="bg-white border border-slate-200/80 rounded-2xl p-5 md:p-6 shadow-sm hover:shadow-md transition-all">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-5 gap-3">
         <div>
-          <h3 className="text-lg font-black text-slate-900">Monitoring KPI 7 Role</h3>
+          <h3 className="text-lg font-black text-slate-900">
+            {canEditTargets ? 'Monitoring KPI 7 Role' : 'KPI Role Anda'}
+          </h3>
           <p className="text-xs text-slate-400 mt-1">
             Skor = realisasi vs target {monthYear}
             {fromConfig ? ' · kpi_configs' : ' · katalog default'}
@@ -60,12 +70,14 @@ export default function KpiRoleMonitoring() {
             onChange={(e) => setMonthYear(e.target.value)}
             className="bg-slate-50 border border-slate-200 text-slate-700 text-[10px] rounded-lg px-2 py-1.5"
           />
-          <Link
-            href="/owner/kpi-settings"
-            className="text-[10px] font-bold px-3 py-1.5 rounded-lg bg-sky-500 text-white hover:bg-sky-600"
-          >
-            Atur Target
-          </Link>
+          {canEditTargets && (
+            <Link
+              href="/owner/kpi-settings"
+              className="text-[10px] font-bold px-3 py-1.5 rounded-lg bg-sky-500 text-white hover:bg-sky-600"
+            >
+              Atur Target
+            </Link>
+          )}
           <StatusBadge tone={loading ? 'slate' : allHealthy ? 'emerald' : 'amber'}>
             {loading ? 'Memuat…' : allHealthy ? 'On Target' : `${healthyCount}/${cards.length} Role`}
           </StatusBadge>
@@ -73,7 +85,7 @@ export default function KpiRoleMonitoring() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-        {(cards.length ? cards : Array.from({ length: 7 })).map((item: any, idx) => (
+        {(cards.length ? cards : Array.from({ length: allowedKeys?.length || 1 })).map((item: any, idx) => (
           <div
             key={item?.roleKey || idx}
             className="bg-slate-50/80 p-4 rounded-xl border border-slate-200/80 hover:shadow-sm transition-all"

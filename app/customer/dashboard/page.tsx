@@ -5,7 +5,10 @@ import { createClient } from '@supabase/supabase-js';
 import StageTimeline from '@/components/StageTimeline';
 import { insertChatMessage, isStaffOnlyMessage } from '@/lib/csChat';
 import { mapDbPromo, mapSettingsPromo, promoDiscountRp, promoIsClaimable, type CatalogPromo } from '@/lib/promoCatalog';
-import { createPickupRoleTasks, insertPickupOrder } from '@/lib/pickupDispatch';
+import { createPickupRoleTasks, insertPickupOrder, createDeliveryRequestTasks } from '@/lib/pickupDispatch';
+import { updatePickupOrder } from '@/lib/pickupUpdates';
+import { laundryFallbackReply } from '@/lib/laundryFaq';
+import AIChatWidget from '@/components/AIChatWidget';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -18,18 +21,39 @@ const safeParse = (data: any, fallback: any) => {
   try { return JSON.parse(data); } catch (e) { return fallback; }
 };
 
-// Status dari POS/driver datang dengan kapitalisasi yang tidak konsisten
-// ('Selesai', 'selesai', 'Sudah Diambil'), jadi pencocokan harus case-insensitive.
-// Selama status belum mengandung selesai/diambil/batal, pesanan tetap dianggap aktif.
+// Tetap di Beranda sepanjang proses. Pindah Riwayat hanya setelah diserahkan
+// (Selesai / Delivered / Terkirim) atau dibatalkan — bukan saat Siap Diambil.
 const isOrderFinished = (order: any) => {
   const st = String(order?.status || '').toLowerCase().trim();
-
-  // 'Siap Diambil' mengandung kata 'diambil' padahal cucian belum diserahkan.
-  // Tanpa pengecualian ini pesanan pindah ke Riwayat terlalu cepat.
+  if (!st) return false;
   if (st.includes('siap')) return false;
-
-  return st.includes('selesai') || st.includes('diambil') || st.includes('batal');
+  if (st.includes('packing') || st.includes('cuci') || st.includes('setrika') || st.includes('sortir') || st.includes('jemput') || st.includes('tiba') || st.includes('proses') || st.includes('ering') || st.includes('emas')) {
+    return false;
+  }
+  if (st.includes('batal') || st.includes('cancel')) return true;
+  if (st === 'diambil' || st.includes('sudah diambil') || st.includes('telah diambil')) return true;
+  return (
+    st.includes('delivered') ||
+    st.includes('terkirim') ||
+    st === 'selesai' ||
+    (st.includes('selesai') && !st.includes('pack'))
+  );
 };
+
+const isDeliveryInProgress = (order: any) => {
+  const st = String(order?.status || '').toLowerCase();
+  return st.includes('diantar') || st.includes('mengantar') || (st.includes('delivery') && !st.includes('delivered'));
+};
+
+const isReadyForPickupAlert = (order: any) => {
+  const st = String(order?.status || '').toLowerCase();
+  if (isOrderFinished(order) || isDeliveryInProgress(order)) return false;
+  if (st.includes('siap diambil')) return true;
+  if (st.includes('packing') && st.includes('selesai')) return true;
+  return st.includes('siap') && st.includes('diambil');
+};
+
+const isSiapDiambil = (order: any) => isReadyForPickupAlert(order);
 
 const cleanPhone = (phoneStr: string) => {
   if (!phoneStr) return '';
@@ -161,6 +185,8 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
   const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const [completedOrders, setCompletedOrders] = useState<any[]>([]);
   const [depositLogs, setDepositLogs] = useState<any[]>([]);
+  const [readyPopup, setReadyPopup] = useState<any>(null);
+  const [requestingDeliveryId, setRequestingDeliveryId] = useState<string | null>(null);
 
   const estimatedPickupMinutes = (queueCount * 30) + 15;
 
@@ -221,7 +247,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
         const aiReply = {
           id: (Date.now() + 1).toString(),
           sender_type: 'ai',
-          message: data.reply || data.message || 'Halo Kak! Layanan Laundrivery menyediakan Antar-Jemput Express & Reguler. Ada yang bisa kami bantu kembali?',
+            message: data.reply || laundryFallbackReply(messageText),
           created_at: new Date().toISOString()
         };
         setAiMessages((prev) => [...prev, aiReply]);
@@ -231,7 +257,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
           {
             id: (Date.now() + 1).toString(),
             sender_type: 'ai',
-            message: '⚠️ AI Assistant sedang sibuk. Silakan beralih ke tab Live CS untuk bantuan CS Admin.',
+            message: laundryFallbackReply(messageText),
             created_at: new Date().toISOString()
           }
         ]);
@@ -303,6 +329,98 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       supabase.removeChannel(channel);
     };
   }, [customerPhone]);
+
+  useEffect(() => {
+    const ready = activeOrders.filter((o) => isReadyForPickupAlert(o));
+    const unseen = ready.find((o) => {
+      try {
+        return !localStorage.getItem('laundry_ready_' + o.id);
+      } catch {
+        return true;
+      }
+    });
+    if (unseen) setReadyPopup(unseen);
+  }, [activeOrders]);
+
+  const dismissReadyPopup = () => {
+    if (readyPopup?.id) {
+      try {
+        localStorage.setItem('laundry_ready_' + readyPopup.id, '1');
+      } catch {
+        /* ignore */
+      }
+    }
+    setReadyPopup(null);
+  };
+
+  const handleRequestDelivery = async (order: any, e: { stopPropagation: () => void }) => {
+    e.stopPropagation();
+    if (!customerPhone) return alert('Login terlebih dahulu.');
+    if (isDeliveryInProgress(order)) {
+      alert('Permintaan pengantaran sudah dikirim. Admin Ops / CS akan menugaskan driver.');
+      return;
+    }
+    setRequestingDeliveryId(order.id);
+    try {
+      const notes = `Request Pengantaran Customer · ${order.receipt_number || order.order_number || order.id}`;
+      const isPosOrder = Boolean(order.receipt_number);
+      let pickupId = isPosOrder ? order.pickup_id || null : order.id;
+
+      if (isPosOrder) {
+        if (!pickupId) {
+          const { data: existing } = await supabase
+            .from('pickup_orders')
+            .select('id')
+            .eq('transaction_id', order.id)
+            .limit(1);
+          pickupId = existing?.[0]?.id || null;
+        }
+        if (pickupId) {
+          const { error } = await updatePickupOrder(pickupId, {
+            status: 'Siap Diantar',
+            notes: `${order.notes || ''} | ${notes}`.trim()
+          });
+          if (error) throw error;
+        } else {
+          const { data, error } = await insertPickupOrder({
+            outlet_id: order.outlet_id || selectedOutlet || null,
+            customer_name: customerName || order.customer_name || 'Pelanggan',
+            customer_phone: customerPhone,
+            phone_number: customerPhone,
+            service_type: order.service_type || 'Antar cucian',
+            address: customerAddress,
+            notes,
+            status: 'Siap Diantar',
+            transaction_id: order.id
+          });
+          if (error) throw error;
+          pickupId = data?.[0]?.id || pickupId;
+        }
+        await supabase.from('transactions').update({ status: 'Siap Diantar' }).eq('id', order.id);
+      } else {
+        const { error } = await updatePickupOrder(order.id, {
+          status: 'Siap Diantar',
+          notes: `${order.notes || ''} | ${notes}`.trim()
+        });
+        if (error) throw error;
+        pickupId = order.id;
+      }
+
+      await createDeliveryRequestTasks({
+        id: pickupId || order.id,
+        customer_name: customerName || order.customer_name,
+        customer_phone: customerPhone,
+        notes
+      });
+
+      alert('✅ Permintaan pengantaran terkirim ke Admin Ops & CS. Driver akan di-assign.');
+      fetchCustomerProfile(customerPhone);
+    } catch (err: any) {
+      alert('❌ Gagal minta pengantaran: ' + (err.message || 'Coba lagi'));
+    } finally {
+      setRequestingDeliveryId(null);
+    }
+  };
 
   // Riwayat waktu tiap tahap untuk modal detail. Pesanan yang masih berupa
   // pickup_orders (belum jadi transaksi) tidak punya work_logs, sehingga timeline
@@ -469,23 +587,33 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
   const pickupMap = new Map();
   activePickups.forEach((p: any) => pickupMap.set(p.id, p));
+  const pickupByTx = new Map();
+  activePickups.forEach((p: any) => {
+    if (p.transaction_id) pickupByTx.set(p.transaction_id, p);
+  });
 
   const mergedActive = activeTxs.map((t: any) => {
-    const relatedPickup = t.pickup_id ? pickupMap.get(t.pickup_id) : null;
+    const relatedPickup = (t.pickup_id ? pickupMap.get(t.pickup_id) : null) || pickupByTx.get(t.id) || null;
+    const overlayStatus =
+      relatedPickup && isDeliveryInProgress(relatedPickup) ? relatedPickup.status : t.status;
     return {
       ...t,
+      status: overlayStatus,
+      pickup_id: t.pickup_id || relatedPickup?.id,
       photo_pickup_url: t.photo_pickup_url || relatedPickup?.photo_pickup_url || relatedPickup?.photo_url,
-      photo_outlet_url: t.photo_outlet_url || relatedPickup?.photo_outlet_url
+      photo_outlet_url: t.photo_outlet_url || relatedPickup?.photo_outlet_url,
+      photo_delivery_url: t.photo_delivery_url || relatedPickup?.photo_delivery_url
     };
   });
 
   activePickups.forEach((p: any) => {
     const alreadyInTrx = activeTxs.some((t: any) => t.pickup_id === p.id);
-    if (!alreadyInTrx && !['selesai', 'batal'].includes((p.status || '').toLowerCase())) {
+    if (!alreadyInTrx) {
       mergedActive.push({
         ...p,
         photo_pickup_url: p.photo_pickup_url || p.photo_url,
-        photo_outlet_url: p.photo_outlet_url
+        photo_outlet_url: p.photo_outlet_url,
+        photo_delivery_url: p.photo_delivery_url
       });
     }
   });
@@ -493,11 +621,11 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
   setActiveOrders(mergedActive);
 
   let historyArr: any[] = [];
-  activePickups.filter((o: any) => o.status === 'Selesai' || o.status === 'Batal').forEach((o: any) => {
-    historyArr.push({ id: o.id, type: 'Online Order', title: o.service_type, detail: o.notes || '', price: o.delivery_fee || 0, date: o.created_at });
+  activePickups.filter((o: any) => isOrderFinished(o)).forEach((o: any) => {
+    historyArr.push({ id: o.id, type: 'Online Order', title: o.service_type, detail: o.notes || '', price: o.delivery_fee || 0, date: o.created_at, status: o.status });
   });
 
-      posTransactions?.forEach((t: any) => {
+      posTransactions?.filter((t: any) => isOrderFinished(t)).forEach((t: any) => {
         historyArr.push({ id: t.id, type: 'Outlet POS', title: `${t.service_type} (${t.receipt_number})`, detail: t.notes, price: t.amount, date: t.created_at, status: t.status });
       });
 
@@ -740,6 +868,31 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 p-4 md:p-6 pb-28 max-w-md mx-auto relative font-sans">
+      {readyPopup && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-end md:items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-5 w-full max-w-sm shadow-xl space-y-3">
+            <p className="text-sm font-black text-slate-900">Cucian siap diambil</p>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Cucian Anda sudah selesai dan siap diambil! Silakan ambil ke outlet atau pesan Kurir Internal.
+            </p>
+            <p className="text-[11px] text-slate-400">{readyPopup.service_type} · {readyPopup.status}</p>
+            <div className="flex gap-2">
+              <button onClick={dismissReadyPopup} className="flex-1 border border-slate-200 font-bold text-xs py-2.5 rounded-xl">
+                Nanti
+              </button>
+              <button
+                onClick={(e) => {
+                  handleRequestDelivery(readyPopup, e);
+                  dismissReadyPopup();
+                }}
+                className="flex-1 bg-sky-500 text-white font-bold text-xs py-2.5 rounded-xl"
+              >
+                Minta Driver
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       
       {/* HEADER TOP BAR */}
       <div className="bg-white rounded-2xl p-3.5 shadow-sm border border-slate-200/80 flex justify-between items-center mb-4">
@@ -987,6 +1140,17 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                 })}
               </div>
 
+              {isSiapDiambil(order) && (
+                <button
+                  type="button"
+                  onClick={(e) => handleRequestDelivery(order, e)}
+                  disabled={requestingDeliveryId === order.id}
+                  className="w-full bg-sky-500 hover:bg-sky-600 text-white font-black text-xs py-3 rounded-xl shadow-sm"
+                >
+                  {requestingDeliveryId === order.id ? 'Mengirim…' : '🛵 Minta Pengantaran Driver'}
+                </button>
+              )}
+
               {/* PETA LIVE DRIVER */}
               {order.status === 'Driver Menuju Lokasi' && order.driver_lat && (
                 <div
@@ -1010,37 +1174,52 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                 </div>
               )}
 
-              {/* BUKTI FOTO GANDA (PICKUP & OUTLET) */}
+              {/* BUKTI FOTO (PICKUP, OUTLET, SERAH TERIMA) */}
 <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 space-y-2 mt-2">
   <p className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider">
-    📸 Bukti Foto Penjemputan & Outlet
+    📸 Bukti Foto Kurir
   </p>
-  <div className="grid grid-cols-2 gap-2">
+  <div className="grid grid-cols-3 gap-2">
     <div className="flex flex-col gap-1">
-      <span className="text-[9px] font-bold text-slate-400">1. Di Rumah Customer</span>
+      <span className="text-[9px] font-bold text-slate-400">Jemput</span>
       {order.photo_pickup_url || order.photo_url ? (
         <img 
           src={order.photo_pickup_url || order.photo_url} 
           alt="Foto Pickup" 
-          className="w-full h-24 object-cover rounded-lg border border-slate-200"
+          className="w-full h-20 object-cover rounded-lg border border-slate-200"
         />
       ) : (
-        <div className="w-full h-24 bg-slate-100 rounded-lg flex items-center justify-center text-[10px] text-slate-400">
+        <div className="w-full h-20 bg-slate-100 rounded-lg flex items-center justify-center text-[10px] text-slate-400">
           Belum Ada
         </div>
       )}
     </div>
 
     <div className="flex flex-col gap-1">
-      <span className="text-[9px] font-bold text-slate-400">2. Sampai Outlet</span>
+      <span className="text-[9px] font-bold text-slate-400">Outlet</span>
       {order.photo_outlet_url ? (
         <img 
           src={order.photo_outlet_url} 
-          alt="Foto Sampai Outlet" 
-          className="w-full h-24 object-cover rounded-lg border border-slate-200"
+          alt="Foto Outlet" 
+          className="w-full h-20 object-cover rounded-lg border border-slate-200"
         />
       ) : (
-        <div className="w-full h-24 bg-slate-100 rounded-lg flex items-center justify-center text-[10px] text-slate-400">
+        <div className="w-full h-20 bg-slate-100 rounded-lg flex items-center justify-center text-[10px] text-slate-400">
+          Belum Ada
+        </div>
+      )}
+    </div>
+
+    <div className="flex flex-col gap-1">
+      <span className="text-[9px] font-bold text-slate-400">Antar</span>
+      {order.photo_delivery_url ? (
+        <img 
+          src={order.photo_delivery_url} 
+          alt="Foto Serah Terima" 
+          className="w-full h-20 object-cover rounded-lg border border-slate-200"
+        />
+      ) : (
+        <div className="w-full h-20 bg-slate-100 rounded-lg flex items-center justify-center text-[10px] text-slate-400">
           Belum Ada
         </div>
       )}
@@ -1880,21 +2059,29 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
         {/* Bukti Foto */}
         <div className="space-y-2">
           <h4 className="font-extrabold text-slate-800 uppercase text-[10px]">📸 Bukti Foto Cucian</h4>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             <div>
-              <span className="text-[10px] font-bold text-slate-400 block mb-1">1. Penjemputan Driver</span>
+              <span className="text-[10px] font-bold text-slate-400 block mb-1">Jemput</span>
               {detailOrder.photo_pickup_url || detailOrder.photo_url ? (
                 <img src={detailOrder.photo_pickup_url || detailOrder.photo_url} alt="Pickup" className="w-full h-24 object-cover rounded-xl border border-slate-200" />
               ) : (
-                <div className="w-full h-24 bg-slate-100 rounded-xl flex items-center justify-center text-[10px] text-slate-400">Belum Ada Foto</div>
+                <div className="w-full h-24 bg-slate-100 rounded-xl flex items-center justify-center text-[10px] text-slate-400">Belum Ada</div>
               )}
             </div>
             <div>
-              <span className="text-[10px] font-bold text-slate-400 block mb-1">2. Sampai Outlet</span>
+              <span className="text-[10px] font-bold text-slate-400 block mb-1">Outlet</span>
               {detailOrder.photo_outlet_url ? (
                 <img src={detailOrder.photo_outlet_url} alt="Outlet" className="w-full h-24 object-cover rounded-xl border border-slate-200" />
               ) : (
-                <div className="w-full h-24 bg-slate-100 rounded-xl flex items-center justify-center text-[10px] text-slate-400">Belum Ada Foto</div>
+                <div className="w-full h-24 bg-slate-100 rounded-xl flex items-center justify-center text-[10px] text-slate-400">Belum Ada</div>
+              )}
+            </div>
+            <div>
+              <span className="text-[10px] font-bold text-slate-400 block mb-1">Antar</span>
+              {detailOrder.photo_delivery_url ? (
+                <img src={detailOrder.photo_delivery_url} alt="Delivery" className="w-full h-24 object-cover rounded-xl border border-slate-200" />
+              ) : (
+                <div className="w-full h-24 bg-slate-100 rounded-xl flex items-center justify-center text-[10px] text-slate-400">Belum Ada</div>
               )}
             </div>
           </div>
@@ -1915,6 +2102,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
     </div>
   </div>
 )}
+      {customerData && <AIChatWidget customerPhone={customerPhone} />}
     </div>
   );
 }

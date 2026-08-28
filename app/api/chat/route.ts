@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { laundryFallbackReply } from '@/lib/laundryFaq';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,12 +30,13 @@ const normalizeHistory = (raw: any): GeminiTurn[] => {
 export async function POST(req: Request) {
   // Dideklarasikan di luar try agar tetap terbaca saat logging di blok catch.
   const model = (process.env.GEMINI_MODEL || 'gemini-2.0-flash').trim();
+  let lastUserText = '';
 
   try {
     const body = await req.json().catch(() => ({}));
     const { message, messages, customerPhone, brandName } = body || {};
 
-    const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+    const apiKey = (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
     const supabaseUrl = process.env.SUPABASE_URL || 'https://qlgbjvzabnfqmfnjdkmo.supabase.co';
     const supabaseKey = process.env.SUPABASE_ANON_KEY || 'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs';
 
@@ -52,15 +54,10 @@ export async function POST(req: Request) {
       history.push({ role: 'user', parts: [{ text: single }] });
     }
 
+    lastUserText = history.filter((t) => t.role === 'user').pop()?.parts[0]?.text || '';
+
     if (!apiKey) {
-      return Response.json(
-        {
-          error: 'GEMINI_API_KEY belum diset di environment server.',
-          reply:
-            '⚠️ AI Assistant belum aktif karena kunci API belum dipasang di server. Silakan hubungi CS Admin lewat tab Live CS ya Kak.'
-        },
-        { status: 503 }
-      );
+      return Response.json({ reply: laundryFallbackReply(lastUserText) });
     }
 
     const supabase = createClient(supabaseUrl, supabaseKey);
@@ -215,116 +212,74 @@ DATA TRANSAKSI AKTIF CUSTOMER:
 - POS: ${JSON.stringify(txSummary)}
 - Jemputan: ${JSON.stringify(pickupSummary)}`;
 
-    const callGemini = () =>
-      fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+    lastUserText = history.filter((t) => t.role === 'user').pop()?.parts[0]?.text || lastUserText;
+    const faq = () => laundryFallbackReply(lastUserText);
+
+    const models = Array.from(
+      new Set(
+        [process.env.GEMINI_MODEL, model, 'gemini-flash-latest', 'gemini-2.5-flash']
+          .map((m) => String(m || '').trim())
+          .filter(Boolean)
+      )
+    ).slice(0, 4);
+
+    const callGemini = (modelName: string, withSystem: boolean) =>
+      fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          systemInstruction: { parts: [{ text: systemPrompt }] },
-          contents: history,
+          ...(withSystem ? { systemInstruction: { parts: [{ text: systemPrompt }] } } : {}),
+          contents: withSystem
+            ? history
+            : [
+                { role: 'user' as const, parts: [{ text: systemPrompt + '\n\nPertanyaan pelanggan:\n' + lastUserText }] }
+              ],
           generationConfig: { temperature: 0.7, maxOutputTokens: 1024 }
         })
       });
 
     let res: Response | null = null;
     let networkError: any = null;
+    let usedModel = models[0];
 
-    // Percobaan pertama + satu kali retry. Retry hanya untuk kegagalan yang
-    // memang sementara (jaringan, 429, 5xx). Error 4xx seperti kunci/model
-    // invalid tidak diulang karena hasilnya pasti sama.
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        res = await callGemini();
-        networkError = null;
-      } catch (fetchErr: any) {
-        res = null;
-        networkError = fetchErr;
-        console.error('FULL_GEMINI_ERROR:', fetchErr);
-      }
-
-      const retryable = !res || res.status === 429 || res.status >= 500;
-      if (!retryable) break;
-      if (attempt === 1) {
-        console.error('[GEMINI RETRY]', { model, attempt, httpStatus: res?.status ?? 'network-error' });
-        await new Promise((r) => setTimeout(r, 700));
+    outer: for (const modelName of models) {
+      usedModel = modelName;
+      for (const withSystem of [true, false]) {
+        try {
+          res = await callGemini(modelName, withSystem);
+          networkError = null;
+        } catch (fetchErr: any) {
+          res = null;
+          networkError = fetchErr;
+          continue;
+        }
+        if (res.ok) break outer;
+        if (res.status === 404) break;
+        if (res.status === 400 && withSystem) continue;
+        if (res.status === 429 || res.status >= 500) continue;
+        break;
       }
     }
 
-    // Gagal total (tidak ada respons sama sekali) -> alihkan ke CS manusia.
-    if (!res) {
-      console.error('[GEMINI UNREACHABLE]', {
-        model,
-        message: networkError?.message,
-        name: networkError?.name
+    if (!res || !res.ok) {
+      console.error('[GEMINI FALLBACK FAQ]', {
+        model: usedModel,
+        httpStatus: res?.status,
+        message: networkError?.message
       });
-      return Response.json(
-        {
-          error: networkError?.message || 'Gemini tidak dapat dihubungi setelah 2 percobaan.',
-          reply: '⚠️ AI Assistant sedang tidak dapat dihubungi. Silakan hubungi CS Admin lewat tab Live CS ya Kak.'
-        },
-        { status: 502 }
-      );
+      return Response.json({ reply: faq() });
     }
 
     const data = await res.json().catch(() => ({}));
-
-    if (!res.ok) {
-      console.error('FULL_GEMINI_ERROR:', data);
-      // Error asli Gemini (kunci invalid, model tidak tersedia, kuota habis)
-      // diteruskan apa adanya supaya penyebabnya bisa dilacak, bukan disamarkan
-      // sebagai jawaban AI palsu. Detail lengkap dicetak agar terbaca di Vercel Logs.
-      const detail = data?.error?.message || `Gemini merespons status ${res.status}.`;
-      console.error('[GEMINI ERROR]', {
-        model,
-        httpStatus: res.status,
-        status: data?.error?.status,
-        code: data?.error?.code,
-        message: detail,
-        raw: JSON.stringify(data).slice(0, 1000)
-      });
-      return Response.json(
-        {
-          error: detail,
-          reply: '⚠️ AI Assistant sedang tidak dapat menjawab. Silakan hubungi CS Admin lewat tab Live CS ya Kak.'
-        },
-        { status: 502 }
-      );
-    }
-
     const aiText = String(data?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
 
     if (!aiText) {
-      const blockReason = data?.promptFeedback?.blockReason;
-      console.error('[GEMINI EMPTY]', {
-        model,
-        blockReason,
-        finishReason: data?.candidates?.[0]?.finishReason,
-        raw: JSON.stringify(data).slice(0, 1000)
-      });
-      return Response.json(
-        {
-          error: blockReason ? `Jawaban diblokir: ${blockReason}` : 'Gemini tidak mengembalikan teks.',
-          reply: 'Maaf Kak, jawaban tidak dapat dibuat. Boleh diulang dengan kalimat lain?'
-        },
-        { status: 502 }
-      );
+      return Response.json({ reply: faq() });
     }
 
     return Response.json({ reply: aiText });
   } catch (error: any) {
     console.error('FULL_GEMINI_ERROR:', error);
-    console.error('[CHAT ROUTE ERROR]', {
-      model,
-      message: error?.message,
-      name: error?.name,
-      stack: error?.stack
-    });
-    return Response.json(
-      {
-        error: error?.message || 'Kesalahan tidak diketahui pada server chat.',
-        reply: '⚠️ Terjadi kendala teknis pada AI Assistant. Silakan coba lagi atau hubungi CS Admin.'
-      },
-      { status: 500 }
-    );
+    return Response.json({ reply: laundryFallbackReply(lastUserText) });
   }
 }

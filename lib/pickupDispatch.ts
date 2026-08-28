@@ -10,7 +10,8 @@ export async function insertPickupOrder(
     service_type: payload.service_type || payload.service_detail || 'Pickup',
     address: payload.address || payload.pickup_address || '',
     notes: payload.notes || null,
-    status: payload.status || 'Baru Masuk'
+    status: payload.status || 'Baru Masuk',
+    transaction_id: payload.transaction_id || null
   };
 
   return insertWithFallback<{ id: string }>(
@@ -58,6 +59,49 @@ export async function createPickupRoleTasks(order: {
       },
       {
         title: `Pickup online — ${order.customer_name || 'Pelanggan'}`,
+        description: desc,
+        assigned_to_role: role,
+        status: 'pending'
+      }
+    ]);
+  }
+}
+
+/** Tugas ke Admin Ops & CS agar menugaskan driver antar ke pelanggan. */
+export async function createDeliveryRequestTasks(order: {
+  id?: string;
+  customer_name?: string;
+  customer_phone?: string;
+  notes?: string;
+}) {
+  if (!order?.id) return;
+  const due = new Date();
+  due.setHours(due.getHours() + 4);
+  const desc =
+    `${order.customer_name || 'Pelanggan'} · ${order.customer_phone || ''} · ${order.notes || 'Request Pengantaran Customer'}. Assign driver internal untuk drop-off.`.trim();
+
+  for (const role of ['cs', 'admin_ops'] as const) {
+    await insertWithFallback('system_tasks', [
+      {
+        title: 'Request Pengantaran Customer',
+        description: desc,
+        assigned_to_role: role,
+        sla_hours: 4,
+        due_date: due.toISOString(),
+        kpi_penalty_points: 5,
+        status: 'pending',
+        source_type: 'CUSTOMER_DELIVERY',
+        source_id: order.id
+      },
+      {
+        title: 'Request Pengantaran Customer',
+        description: desc,
+        assigned_to_role: role,
+        due_date: due.toISOString(),
+        status: 'pending'
+      },
+      {
+        title: 'Request Pengantaran Customer',
         description: desc,
         assigned_to_role: role,
         status: 'pending'

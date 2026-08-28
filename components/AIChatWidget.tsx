@@ -1,5 +1,6 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
+import { laundryFallbackReply } from "@/lib/laundryFaq";
 
 interface AIChatWidgetProps {
   customerPhone?: string;
@@ -57,12 +58,12 @@ export default function AIChatWidget({ customerPhone = "" }: AIChatWidgetProps) 
       const data = await res.json();
       setChatHistory([
         ...newHistory,
-        { sender: "ai", text: data.reply || "Maaf, terjadi kendala respons." },
+        { sender: "ai", text: data.reply || laundryFallbackReply(query) },
       ]);
     } catch (err) {
       setChatHistory([
         ...newHistory,
-        { sender: "ai", text: "❌ Gagal terhubung ke server chat." },
+        { sender: "ai", text: laundryFallbackReply(query) },
       ]);
     } finally {
       setLoading(false);

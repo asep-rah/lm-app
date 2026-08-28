@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { getStaffSession, isOwnerRole, isSupervisorRole } from '@/lib/staffSession';
+import { getStaffSession, isOwnerRole, homePathForRole } from '@/lib/staffSession';
 import {
   currentMonthYear,
   KPI_CATALOG,
@@ -21,7 +21,7 @@ import {
 
 export default function KpiSettingsPage() {
   const session = useMemo(() => getStaffSession(), []);
-  const canEdit = isOwnerRole(session.role) || isSupervisorRole(session.role);
+  const canEdit = isOwnerRole(session.role);
 
   const [monthYear, setMonthYear] = useState(currentMonthYear());
   const [role, setRole] = useState(KPI_ROLES[0].key);
@@ -43,14 +43,16 @@ export default function KpiSettingsPage() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const raw = localStorage.getItem('laundry_owner_user');
+    const raw =
+      localStorage.getItem('laundry_owner_user') || localStorage.getItem('laundry_user');
     if (!raw) {
       window.location.href = '/login';
       return;
     }
     const user = JSON.parse(raw);
-    if (!['owner', 'supervisor'].includes(String(user.role || '').toLowerCase())) {
-      window.location.href = '/owner';
+    const role = String(user.role || '').toLowerCase();
+    if (!isOwnerRole(role)) {
+      window.location.href = homePathForRole(role);
       return;
     }
     load();
