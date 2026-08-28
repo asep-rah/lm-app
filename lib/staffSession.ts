@@ -27,10 +27,37 @@ export const getStaffSession = (): StaffSession => {
 };
 
 export const isOwnerRole = (role: string) =>
-  ['owner', 'head', 'head_management'].includes(String(role || '').toLowerCase());
+  ['owner'].includes(String(role || '').toLowerCase());
+
+export const isHeadManagementRole = (role: string) =>
+  ['head', 'head_management'].includes(String(role || '').toLowerCase());
 
 export const isSupervisorRole = (role: string) =>
   ['supervisor', 'owner'].includes(String(role || '').toLowerCase());
+
+/** Settings / KPI Settings / Pengaturan: Owner & Supervisor saja. */
+export const canAccessSettings = (role: string) => {
+  const r = String(role || '').toLowerCase().trim();
+  return r === 'owner' || r === 'supervisor';
+};
+
+/** Dashboard workspace (bukan POS, bukan Driver, bukan Owner analytics). */
+export const isWorkspaceRole = (role: string) => {
+  const r = String(role || '').toLowerCase().trim();
+  return [
+    'admin_ops',
+    'admin',
+    'digital_marketing',
+    'finance',
+    'head_finance',
+    'owner_relation',
+    'cs',
+    'head_cs',
+    'supervisor',
+    'head',
+    'head_management'
+  ].includes(r);
+};
 
 /** Finance dipetakan ke Admin Ops karena belum ada role terpisah di login. */
 export const isAdminOpsRole = (role: string) =>
@@ -39,20 +66,11 @@ export const isAdminOpsRole = (role: string) =>
 export const canCreateRequisition = (role: string) =>
   !['investor'].includes(role);
 
-/** Dashboard tujuan jika role tidak boleh membuka rute Owner. */
+/** Dashboard tujuan jika role tidak boleh membuka rute Owner / settings. */
 export const homePathForRole = (role: string) => {
   const r = String(role || '').toLowerCase().trim();
-  if (
-    isOwnerRole(r) ||
-    r === 'supervisor' ||
-    r === 'finance' ||
-    r === 'head_finance' ||
-    r === 'admin_ops' ||
-    r === 'admin'
-  ) {
-    return '/owner';
-  }
-  if (r === 'cs' || r === 'head_cs') return '/cs';
+  if (isOwnerRole(r)) return '/owner';
+  if (isWorkspaceRole(r)) return '/workspace';
   if (['driver', 'courier', 'kurir'].includes(r)) return '/driver/dashboard';
   if (r === 'investor') return '/investor';
   if (r === 'kasir' || r === 'pos') return '/pos';
@@ -65,12 +83,13 @@ export const homePathForRole = (role: string) => {
  */
 export const kpiKeysVisibleForRole = (role: string): string[] | null => {
   const r = String(role || '').toLowerCase().trim();
-  if (isOwnerRole(r)) return null;
+  if (isOwnerRole(r) || isHeadManagementRole(r)) return null;
   if (r === 'supervisor') return ['kasir', 'supervisor'];
   if (r === 'kasir' || r === 'pos') return ['kasir'];
   if (['cs', 'head_cs', 'driver', 'courier', 'kurir'].includes(r)) return ['kurir_cs'];
   if (['finance', 'head_finance'].includes(r)) return ['finance'];
   if (['admin_ops', 'admin'].includes(r)) return ['admin_ops'];
   if (r === 'digital_marketing') return ['digital_marketing'];
+  if (r === 'owner_relation') return ['owner_relation'];
   return ['kasir'];
 };

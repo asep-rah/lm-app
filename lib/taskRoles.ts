@@ -14,14 +14,15 @@ export const KPI_ROLE_ALIASES: Record<string, string[]> = {
 export const inboxRolesFor = (loginRole: string): string[] => {
   const r = String(loginRole || '').toLowerCase().trim();
   if (['kasir', 'pos'].includes(r)) return ['kasir', 'pos'];
-  if (r === 'driver' || r === 'courier' || r === 'kurir') return ['driver', 'courier', 'kurir', 'cs'];
-  if (['cs', 'head_cs'].includes(r)) return ['cs', 'head_cs', 'driver'];
+  if (r === 'driver' || r === 'courier' || r === 'kurir') return ['driver', 'courier', 'kurir'];
+  if (['cs', 'head_cs'].includes(r)) return ['cs', 'head_cs'];
   if (r === 'supervisor') return ['supervisor'];
-  if (['finance', 'head_finance', 'admin_ops', 'admin'].includes(r)) {
-    return ['finance', 'head_finance', 'admin_ops', 'admin'];
-  }
+  if (['finance', 'head_finance'].includes(r)) return ['finance', 'head_finance'];
+  if (['admin_ops', 'admin'].includes(r)) return ['admin_ops', 'admin'];
   if (r === 'digital_marketing') return ['digital_marketing'];
-  if (['owner', 'owner_relation'].includes(r)) return ['owner', 'owner_relation'];
+  if (r === 'owner_relation') return ['owner_relation'];
+  if (['head', 'head_management'].includes(r)) return ['head', 'head_management'];
+  if (['owner'].includes(r)) return ['owner', 'owner_relation'];
   return r ? [r] : [];
 };
 
@@ -36,6 +37,11 @@ export const kpiRoleOfTask = (assignedTo: any): string | null => {
 export const isTaskCompleted = (status: any) => {
   const s = String(status || '').toLowerCase().trim();
   return s === 'completed' || s === 'done' || s === 'selesai';
+};
+
+export const isTaskInProgress = (status: any) => {
+  const s = String(status || '').toLowerCase().trim();
+  return s === 'in_progress' || s === 'proses' || s === 'processing' || s.includes('proses');
 };
 
 export const isTaskOverdueOpen = (task: any, now = Date.now()) => {

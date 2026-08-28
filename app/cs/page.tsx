@@ -596,6 +596,9 @@ export default function CsCommandCenter() {
             </div>
           </div>
         </div>
+        <Link href="/workspace" className="text-[11px] font-bold text-slate-500 border border-slate-200 rounded-xl px-3 py-2">
+          Workspace
+        </Link>
         <Link href="/cs/dashboard" className="text-[11px] font-bold text-slate-500 border border-slate-200 rounded-xl px-3 py-2">
           Ops Dashboard
         </Link>

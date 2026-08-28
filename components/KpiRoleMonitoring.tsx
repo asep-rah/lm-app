@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { fetchRoleKpis, type KpiCard } from '@/lib/kpiMetrics';
 import { currentMonthYear } from '@/lib/kpiCatalog';
-import { getStaffSession, isOwnerRole, kpiKeysVisibleForRole } from '@/lib/staffSession';
+import { getStaffSession, kpiKeysVisibleForRole, canAccessSettings } from '@/lib/staffSession';
 import Skeleton from '@/components/ui/Skeleton';
 import StatusBadge from '@/components/ui/StatusBadge';
 
@@ -14,7 +14,7 @@ const toneOf = (score: number) =>
 export default function KpiRoleMonitoring() {
   const session = useMemo(() => getStaffSession(), []);
   const allowedKeys = kpiKeysVisibleForRole(session.role);
-  const canEditTargets = isOwnerRole(session.role);
+  const canEditTargets = canAccessSettings(session.role);
 
   const [cards, setCards] = useState<KpiCard[]>([]);
   const [healthyCount, setHealthyCount] = useState(0);
@@ -55,7 +55,7 @@ export default function KpiRoleMonitoring() {
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-5 gap-3">
         <div>
           <h3 className="text-lg font-black text-slate-900">
-            {canEditTargets ? 'Monitoring KPI 7 Role' : 'KPI Role Anda'}
+            {allowedKeys === null ? 'Monitoring KPI 7 Role' : 'KPI Role Anda'}
           </h3>
           <p className="text-xs text-slate-400 mt-1">
             Skor = realisasi vs target {monthYear}

@@ -16,7 +16,8 @@ import RevenueChart from '@/components/ui/RevenueChart';
 import PeakHeatmap from '@/components/ui/PeakHeatmap';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 import { fetchRoleKpis } from '@/lib/kpiMetrics';
-import { isOwnerRole } from '@/lib/staffSession';
+import { canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
+import { isMultiOutletRole, staffRolesForForm } from '@/lib/staffRoles';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -139,7 +140,7 @@ export default function Dashboard() {
   const [newEmpName, setNewEmpName] = useState('');
   const [newEmpUsername, setNewEmpUsername] = useState('');
   const [newEmpPassword, setNewEmpPassword] = useState('');
-  const [newEmpRole, setNewEmpRole] = useState<'kasir' | 'driver' | 'cs' | 'supervisor' | 'finance' | 'owner' | 'investor'>('kasir');
+  const [newEmpRole, setNewEmpRole] = useState('kasir');
   const [newEmpSalary, setNewEmpSalary] = useState('');
   const [newEmpOutlet, setNewEmpOutlet] = useState('ALL');
   const [newEmpAccessOutlets, setNewEmpAccessOutlets] = useState<string[]>([]);
@@ -200,12 +201,16 @@ export default function Dashboard() {
     const ownerStr = localStorage.getItem('laundry_owner_user');
     if (!ownerStr) { window.location.href = '/login'; return; }
     const user = JSON.parse(ownerStr);
-    
-    if (!['owner', 'supervisor', 'finance'].includes(user.role)) {
-      alert('⚠️ Akses ditolak! Halaman ini khusus Management.');
-      window.location.href = '/login';
+    const role = String(user.role || '').toLowerCase();
+    if (isWorkspaceRole(role) && !canAccessSettings(role)) {
+      window.location.href = '/workspace';
+      return;
     }
-    setCurrentUserRole(user.role);
+    if (!canAccessSettings(role) && !isOwnerRole(role)) {
+      window.location.href = homePathForRole(role);
+      return;
+    }
+    setCurrentUserRole(role);
     setCurrentUserName(user.name);
   }, []);
 
@@ -620,7 +625,7 @@ export default function Dashboard() {
     const { data: checkUser } = await supabase.from('employees').select('id').eq('username', newEmpUsername).single();
     if (checkUser) { alert('❌ Username sudah digunakan!'); setIsSaving(false); return; }
     
-    const singleOutletValue = ['investor', 'owner', 'supervisor', 'finance'].includes(newEmpRole) ? null : (newEmpOutlet === 'ALL' ? null : newEmpOutlet);
+    const singleOutletValue = isMultiOutletRole(newEmpRole) ? null : (newEmpOutlet === 'ALL' ? null : newEmpOutlet);
     const multiOutletValue = newEmpRole === 'investor' ? JSON.stringify(newEmpAccessOutlets) : '[]';
 
     const { error } = await supabase.from('employees').insert([{ 
@@ -791,7 +796,7 @@ export default function Dashboard() {
     link.click();
   };
 
-  const isManagementAdmin = ['owner', 'supervisor'].includes(currentUserRole);
+  const isManagementAdmin = canAccessSettings(currentUserRole);
   const trendPct = (curr: number, prev: number) => {
     if (!prev) return curr > 0 ? 100 : 0;
     return Math.round(((curr - prev) / Math.abs(prev)) * 100);
@@ -894,7 +899,7 @@ export default function Dashboard() {
             <button onClick={() => setActiveTab('pnl')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'pnl' ? 'bg-sky-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>PnL</button>
             <button onClick={() => setActiveTab('history')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'history' ? 'bg-sky-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>History</button>
             <button onClick={() => setActiveTab('loans')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'loans' ? 'bg-amber-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>Kasbon</button>
-            {isOwnerRole(currentUserRole) && (
+            {canAccessSettings(currentUserRole) && (
               <Link href="/owner/kpi-settings" className="whitespace-nowrap bg-amber-50 border border-amber-200 text-amber-700 hover:bg-amber-500 hover:text-white text-xs px-3.5 py-2 rounded-xl font-bold transition-all">KPI Settings</Link>
             )}
             {isManagementAdmin && (
@@ -902,6 +907,9 @@ export default function Dashboard() {
                 <button onClick={() => setActiveTab('settings')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'settings' ? 'bg-sky-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>Settings</button>
                 <button onClick={() => setActiveTab('employees')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'employees' ? 'bg-sky-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>Karyawan</button>
               </>
+            )}
+            {canAccessSettings(currentUserRole) && (
+              <Link href="/workspace" className="whitespace-nowrap bg-slate-50 border border-slate-200 text-slate-600 hover:bg-white text-xs px-3.5 py-2 rounded-xl font-bold">Workspace</Link>
             )}
             <Link href="/pos" className="whitespace-nowrap bg-emerald-50 border border-emerald-200 text-emerald-700 hover:bg-emerald-500 hover:text-white text-xs px-3.5 py-2 rounded-xl font-bold transition-all">POS</Link>
             <button onClick={handleLogout} className="whitespace-nowrap bg-rose-50 border border-rose-200 text-rose-600 hover:bg-rose-500 hover:text-white font-bold text-xs px-3 py-2 rounded-xl transition-all">Keluar</button>
@@ -1606,14 +1614,10 @@ export default function Dashboard() {
                     <input type="text" placeholder="Username Login" value={newEmpUsername} onChange={(e) => setNewEmpUsername(e.target.value.toLowerCase().replace(/\s/g, ''))} className="w-full border rounded-lg px-3 py-2 text-sm" required />
                     <input type="text" placeholder="Password Login" value={newEmpPassword} onChange={(e) => setNewEmpPassword(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm" required />
                     
-                    <select value={newEmpRole} onChange={(e) => setNewEmpRole(e.target.value as any)} className="w-full border rounded-lg px-3 py-2 text-xs font-bold text-purple-900 bg-white">
-                      <option value="kasir">Kasir (1 Outlet)</option>
-                      <option value="driver">Driver / Kurir (Aplikasi Kurir)</option>
-                      <option value="cs">Customer Service (CS Pusat)</option>
-                      <option value="supervisor">Supervisor (Multi-Outlet)</option>
-                      <option value="finance">Finance (Multi-Outlet)</option>
-                      <option value="investor">👔 Investor (Multi-Outlet Read Only)</option>
-                      {currentUserRole === 'owner' && <option value="owner">Owner (Full Akses)</option>}
+                    <select value={newEmpRole} onChange={(e) => setNewEmpRole(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-xs font-bold text-purple-900 bg-white">
+                      {staffRolesForForm(currentUserRole === 'owner').map((r) => (
+                        <option key={r.value} value={r.value}>{r.label}</option>
+                      ))}
                     </select>
                   </div>
 
@@ -1745,6 +1749,36 @@ export default function Dashboard() {
               </div>
             )}
           </>
+        )}
+
+        {editingEmp && (
+          <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+            <form onSubmit={handleSaveEditEmployee} className="bg-white rounded-2xl p-5 w-full max-w-sm space-y-3 shadow-xl">
+              <p className="text-sm font-black">Edit {editingEmp.name}</p>
+              <select value={editEmpRole} onChange={(e) => setEditEmpRole(e.target.value)} className="w-full border rounded-xl px-3 py-2 text-xs font-bold">
+                {staffRolesForForm(currentUserRole === 'owner').map((r) => (
+                  <option key={r.value} value={r.value}>{r.label}</option>
+                ))}
+              </select>
+              <select value={editEmpOutlet} onChange={(e) => setEditEmpOutlet(e.target.value)} className="w-full border rounded-xl px-3 py-2 text-xs">
+                <option value="ALL">🌐 Semua Cabang (Pusat)</option>
+                {outlets.map((o) => (
+                  <option key={o.id} value={o.id}>{o.name}</option>
+                ))}
+              </select>
+              <input
+                type="text"
+                placeholder="Password baru (opsional)"
+                value={editEmpPassword}
+                onChange={(e) => setEditEmpPassword(e.target.value)}
+                className="w-full border rounded-xl px-3 py-2 text-xs"
+              />
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setEditingEmp(null)} className="flex-1 border rounded-xl py-2 text-xs font-bold">Batal</button>
+                <button type="submit" disabled={isSaving} className="flex-1 bg-indigo-600 text-white rounded-xl py-2 text-xs font-bold">Simpan</button>
+              </div>
+            </form>
+          </div>
         )}
       </div>
     </div>

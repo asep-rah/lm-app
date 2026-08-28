@@ -8,7 +8,8 @@ import RoleTaskInbox from '@/components/RoleTaskInbox';
 import HeadTaskDelegator from '@/components/HeadTaskDelegator';
 import StageTimeline from '@/components/StageTimeline';
 import { isVoidTransaction } from '@/lib/voidTx';
-import { isOwnerRole } from '@/lib/staffSession';
+import { canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
+import { staffRolesForForm } from '@/lib/staffRoles';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -67,7 +68,7 @@ export default function Dashboard() {
   const [newEmpName, setNewEmpName] = useState('');
   const [newEmpUsername, setNewEmpUsername] = useState('');
   const [newEmpPassword, setNewEmpPassword] = useState('');
-  const [newEmpRole, setNewEmpRole] = useState<'kasir' | 'driver' | 'cs' | 'supervisor' | 'finance' | 'owner'>('kasir');
+  const [newEmpRole, setNewEmpRole] = useState('kasir');
   const [newEmpSalary, setNewEmpSalary] = useState('');
   const [newEmpOutlet, setNewEmpOutlet] = useState('ALL');
 
@@ -163,12 +164,16 @@ const handleApproveExpense = async (expenseId: string) => {
     const ownerStr = localStorage.getItem('laundry_owner_user');
     if (!ownerStr) { window.location.href = '/login'; return; }
     const user = JSON.parse(ownerStr);
-    
-    if (!['owner', 'supervisor', 'finance'].includes(user.role)) {
-      alert('⚠️ Akses ditolak! Halaman ini khusus Management.');
-      window.location.href = '/login';
+    const role = String(user.role || '').toLowerCase();
+    if (isWorkspaceRole(role) && !canAccessSettings(role)) {
+      window.location.href = '/workspace';
+      return;
     }
-    setCurrentUserRole(user.role);
+    if (!canAccessSettings(role) && !isOwnerRole(role)) {
+      window.location.href = homePathForRole(role);
+      return;
+    }
+    setCurrentUserRole(role);
     setCurrentUserName(user.name);
   }, []);
 
@@ -633,14 +638,17 @@ setDeleteRequests(delData);
           <button onClick={() => setActiveTab('history')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'history' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>📦 History 1 Thn</button>
           <button onClick={() => setActiveTab('loans')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'loans' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>💸 Kasbon Crew</button>
 
-          {isOwnerRole(currentUserRole) && (
+          {canAccessSettings(currentUserRole) && (
             <Link href="/owner/kpi-settings" className="whitespace-nowrap bg-amber-50 border border-amber-200 text-amber-800 hover:bg-amber-500 hover:text-white text-xs px-4 py-2 rounded-xl font-bold transition">🎯 KPI Settings</Link>
           )}
-          {['owner', 'supervisor'].includes(currentUserRole) && (
+          {canAccessSettings(currentUserRole) && (
             <>
               <button onClick={() => setActiveTab('settings')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'settings' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>⚙️ Settings</button>
               <button onClick={() => setActiveTab('employees')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'employees' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>👥 Karyawan</button>
             </>
+          )}
+          {canAccessSettings(currentUserRole) && (
+            <Link href="/workspace" className="whitespace-nowrap bg-slate-100 text-slate-700 font-bold text-xs px-3 py-2 rounded-xl">Workspace</Link>
           )}
 
           {/* 🔔 ICON LONCENG NOTIFIKASI REQUEST HAPUS (PENGGANTI PORTAL KASIR) */}
@@ -1046,7 +1054,7 @@ setDeleteRequests(delData);
         )}
 
         {/* TAB OWNER ONLY */}
-        {currentUserRole === 'owner' && (
+        {canAccessSettings(currentUserRole) && (
           <>
             {activeTab === 'settings' && (
               <div className="flex flex-col gap-6">
@@ -1195,13 +1203,10 @@ setDeleteRequests(delData);
                     <input type="text" placeholder="Password" value={newEmpPassword} onChange={(e) => setNewEmpPassword(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm" required />
                     
                     {/* DROPDOWN PERAN DENGAN DRIVER & CS */}
-                    <select value={newEmpRole} onChange={(e) => setNewEmpRole(e.target.value as any)} className="w-full border rounded-lg px-3 py-2 text-xs font-bold text-purple-900 bg-white">
-                      <option value="kasir">Kasir (1 Outlet)</option>
-                      <option value="driver">Driver / Kurir (Aplikasi Kurir)</option>
-                      <option value="cs">Customer Service (CS Pusat)</option>
-                      <option value="supervisor">Supervisor (Multi-Outlet)</option>
-                      <option value="finance">Finance (Multi-Outlet)</option>
-                      <option value="owner">Owner (Full Akses)</option>
+                    <select value={newEmpRole} onChange={(e) => setNewEmpRole(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-xs font-bold text-purple-900 bg-white">
+                      {staffRolesForForm(currentUserRole === 'owner').map((r) => (
+                        <option key={r.value} value={r.value}>{r.label}</option>
+                      ))}
                     </select>
                   </div>
                   <input type="number" placeholder="Gaji Pokok" value={newEmpSalary} onChange={(e) => setNewEmpSalary(e.target.value)} className="w-full border rounded-xl px-3 py-2 text-sm text-emerald-600 font-bold" required />
@@ -1222,12 +1227,9 @@ setDeleteRequests(delData);
                             <td className="p-3">
                               {/* EDIT DROPDOWN ROLE DENGAN PILIHAN LENGKAP */}
                               <select value={emp.role || 'kasir'} onChange={(e) => handleUpdateEmployeeRole(emp.id, e.target.value)} className="border border-slate-300 rounded-lg px-2 py-1 text-[10px] font-bold text-slate-700 bg-white focus:outline-none focus:border-purple-500 cursor-pointer shadow-sm">
-                                <option value="kasir">KASIR</option>
-                                <option value="driver">DRIVER / KURIR</option>
-                                <option value="cs">CUSTOMER SERVICE</option>
-                                <option value="supervisor">SUPERVISOR</option>
-                                <option value="finance">FINANCE</option>
-                                <option value="owner">OWNER</option>
+                                {staffRolesForForm(currentUserRole === 'owner').map((r) => (
+                                  <option key={r.value} value={r.value}>{r.label}</option>
+                                ))}
                               </select>
                             </td>
                             <td className="p-3">

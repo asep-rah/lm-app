@@ -288,6 +288,9 @@ export default function CSDashboard() {
             <p className="text-blue-200 mt-1 text-xs md:text-sm">Pintu Utama Komunikasi, Instruksi Driver, Konfirmasi Tagihan, & Follow-up</p>
           </div>
           <div className="flex items-center gap-2">
+            <Link href="/workspace" className="bg-white/10 hover:bg-white/20 text-white font-bold py-2.5 px-4 rounded-xl text-xs transition">
+              Workspace
+            </Link>
             <Link href="/cs" className="bg-sky-500 hover:bg-sky-600 text-white font-bold py-2.5 px-4 rounded-xl text-xs shadow-sm transition">
               Command Center
             </Link>
