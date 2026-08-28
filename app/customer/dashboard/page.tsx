@@ -89,7 +89,7 @@ export default function CustomerDashboardPage() {
   const [pendingCashierInvoice, setPendingCashierInvoice] = useState<any>(null);
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  
+
 // Fungsi Trigger Xendit Top-Up
 const handleTopupXendit = async (priceAmount: number, packageName: string) => {
   try {
@@ -822,8 +822,15 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
       {/* Render Pesanan */}
       {(() => {
-        const berandaOrders = activeOrders.filter((o: any) => !['Selesai', 'Diambil'].includes(o.status));
-        const riwayatOrders = activeOrders.filter((o: any) => ['Selesai', 'Diambil'].includes(o.status));
+        const berandaOrders = activeOrders.filter((o: any) => {
+  const st = String(o?.status || '').toLowerCase().trim();
+  return !st.includes('selesai') && !st.includes('diambil') && !st.includes('batal');
+});
+
+const riwayatOrders = activeOrders.filter((o: any) => {
+  const st = String(o?.status || '').toLowerCase().trim();
+  return st.includes('selesai') || st.includes('diambil') || st.includes('batal');
+});
         const displayOrders = activeTab === 'home' ? berandaOrders : riwayatOrders;
 
         if (displayOrders.length === 0) {

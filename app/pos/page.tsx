@@ -1307,15 +1307,29 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
       updated_at: new Date().toISOString()
     };
 
-    // 1. Update tabel transactions
-    const { error: txErr } = await supabase
-      .from('transactions')
-      .update(updatePayload)
-      .eq('id', order.id);
+    // 1. Jika ini item turunan dari Multi-Item, update array items-nya
+    if (typeof order.item_index === 'number' && Array.isArray(order.items)) {
+      const updatedItems = [...order.items];
+      updatedItems[order.item_index] = {
+        ...updatedItems[order.item_index],
+        status: targetStatus
+      };
 
-    if (txErr) console.error('Error updating transaction:', txErr);
+      await supabase
+        .from('transactions')
+        .update({ items: updatedItems, updated_at: new Date().toISOString() })
+        .eq('id', order.id);
+    } else {
+      // 2. Update transaksi tunggal biasa
+      const { error: txErr } = await supabase
+        .from('transactions')
+        .update(updatePayload)
+        .eq('id', order.id);
 
-    // 2. Update tabel pickup_orders (jika berasal dari penjemputan app)
+      if (txErr) console.error('Error updating transaction:', txErr);
+    }
+
+    // 3. Update tabel pickup_orders jika berasal dari aplikasi driver
     const pickupId = order.pickup_id || order.id;
     if (pickupId) {
       await supabase
@@ -1324,7 +1338,7 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
         .eq('id', pickupId);
     }
 
-    // 3. Optional: Kurangi stok bahan kimia secara aman tanpa memblokir UI
+    // 4. Potong stok bahan kimia & refresh data UI secara instan
     try {
       if (typeof deductChemicalInventory === 'function') {
         const itemName = order.service_name || order.service_type || 'Laundry';
@@ -1333,18 +1347,17 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
         await deductChemicalInventory(itemName, qty, outlet);
       }
     } catch (chemErr) {
-      console.warn('Inventory deduction skipped or failed:', chemErr);
+      console.warn('Inventory deduction skipped:', chemErr);
     }
 
-    // 4. Refresh data agar UI langsung ter-update
     if (typeof refreshData === 'function') {
       await refreshData();
     }
+
   } catch (err: any) {
     console.error('Error in handleStatusChange:', err);
     alert('Gagal mengubah status: ' + err.message);
   } finally {
-    // PENTING: Selalu lepas kunci tombol agar bisa diklik kembali
     setIsSubmitting(false);
   }
 };
@@ -2352,8 +2365,16 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
                   };
 
                   return (
-                    <div key={idx} className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-2">
-                      <div className="flex justify-between items-center">
+                    <div key={idx} className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-2 relative z-10">
+                      <div 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (typeof (window as any).setSelectedOrderForDetail === 'function') {
+                            (window as any).setSelectedOrderForDetail(order);
+                          }
+                        }}
+                        className="flex justify-between items-center cursor-pointer"
+                      >
                         <div>
                           <span className="font-extrabold text-slate-800 text-xs block">
                             {item.name || item.service_type}
@@ -2366,9 +2387,12 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
                           {item.status || order.status || 'Diterima'}
                         </span>
                       </div>
-
-                      {/* Tombol Pengerjaan Khusus Untuk Item Ini */}
-                      <div className="pt-1 border-t border-slate-200">
+    
+                      {/* Isolasi Tombol Pengerjaan dari Klik Modal Parent */}
+                      <div 
+                        onClick={(e) => e.stopPropagation()} 
+                        className="pt-1 border-t border-slate-200 relative z-30 pointer-events-auto"
+                      >
                         {renderNextStepButton(itemTask)}
                       </div>
                     </div>
