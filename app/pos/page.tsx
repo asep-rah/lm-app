@@ -1385,13 +1385,17 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
   };
 
   const renderNextStepButton = (order: any) => {
-    const s = (order.status || 'Diterima').toLowerCase();
-
-    // TAHAP 1: Diterima / Baru / Penjemputan -> Lanjut ke SORTIR
-    if (s === 'diterima' || s === 'baru' || s === 'penjemputan' || s === 'menunggu cuci') {
+    const s = (order.status || '').toLowerCase();
+  
+    // TAHAP 1: Diterima / Baru / Penjemputan / Telah Tiba di Outlet -> Lanjut ke SORTIR
+    if (s.includes('diterima') || s.includes('baru') || s.includes('penjemputan') || s.includes('tiba') || s.includes('menunggu cuci')) {
       return (
         <button
-          onClick={() => handleStatusChange(order, 'Sortir')}
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleStatusChange(order, 'Sortir');
+          }}
           disabled={isSubmitting}
           className="w-full bg-slate-700 hover:bg-slate-800 text-white text-xs font-black py-2.5 rounded-xl shadow transition"
         >

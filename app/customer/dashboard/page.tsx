@@ -894,15 +894,43 @@ export default function CustomerDashboardPage() {
                 </div>
               )}
 
-              {/* FOTO BUKTI CUCIAN */}
-              {order.photo_url && (
-                <div className="rounded-xl overflow-hidden border border-slate-100 mt-1">
-                  <p className="text-[10px] font-bold text-slate-500 p-1.5 bg-slate-50">
-                    📸 Foto Bukti Cucian Diterima Driver:
-                  </p>
-                  <img src={order.photo_url} alt="Foto Bukti Cucian" className="w-full h-28 object-cover" />
-                </div>
-              )}
+              {/* BUKTI FOTO GANDA (PICKUP & OUTLET) */}
+<div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 space-y-2 mt-2">
+  <p className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider">
+    📸 Bukti Foto Penjemputan & Outlet
+  </p>
+  <div className="grid grid-cols-2 gap-2">
+    <div className="flex flex-col gap-1">
+      <span className="text-[9px] font-bold text-slate-400">1. Di Rumah Customer</span>
+      {order.photo_pickup_url || order.photo_url ? (
+        <img 
+          src={order.photo_pickup_url || order.photo_url} 
+          alt="Foto Pickup" 
+          className="w-full h-24 object-cover rounded-lg border border-slate-200"
+        />
+      ) : (
+        <div className="w-full h-24 bg-slate-100 rounded-lg flex items-center justify-center text-[10px] text-slate-400">
+          Belum Ada
+        </div>
+      )}
+    </div>
+
+    <div className="flex flex-col gap-1">
+      <span className="text-[9px] font-bold text-slate-400">2. Sampai Outlet</span>
+      {order.photo_outlet_url ? (
+        <img 
+          src={order.photo_outlet_url} 
+          alt="Foto Sampai Outlet" 
+          className="w-full h-24 object-cover rounded-lg border border-slate-200"
+        />
+      ) : (
+        <div className="w-full h-24 bg-slate-100 rounded-lg flex items-center justify-center text-[10px] text-slate-400">
+          Belum Ada
+        </div>
+      )}
+    </div>
+  </div>
+</div>
             </div>
           );
         });
