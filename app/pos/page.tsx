@@ -133,6 +133,11 @@ export function POSContent() {
   const [issueUrgency, setIssueUrgency] = useState('Biasa');
   const [issueDescription, setIssueDescription] = useState('');
   const [isSubmittingIssue, setIsSubmittingIssue] = useState(false);
+  
+  // Reset state penguncian tombol saat halaman dimuat
+  useEffect(() => {
+    setIsSubmitting(false);
+  }, []);
 
   // --- AUTO-FILL PENJEMPUTAN DRIVER KE FORM POS ---
   const searchParams = useSearchParams();
@@ -1412,10 +1417,11 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
         <button
           type="button"
           onClick={(e) => {
+            e.preventDefault();
             e.stopPropagation();
             handleStatusChange(order, 'Sortir');
           }}
-          disabled={isSubmitting}
+          disabled={false}
           className="w-full bg-slate-700 hover:bg-slate-800 text-white text-xs font-black py-2.5 rounded-xl shadow transition active:scale-[0.98]"
         >
           🔍 Mulai Sortir
@@ -1429,10 +1435,11 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
         <button
           type="button"
           onClick={(e) => {
+            e.preventDefault();
             e.stopPropagation();
             handleStatusChange(order, 'Mencuci');
           }}
-          disabled={isSubmitting}
+          disabled={false}
           className="w-full bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-black py-2.5 rounded-xl shadow transition active:scale-[0.98]"
         >
           🧼 Mulai Mencuci
@@ -1446,10 +1453,11 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
         <button
           type="button"
           onClick={(e) => {
+            e.preventDefault();
             e.stopPropagation();
             handleStatusChange(order, 'Setrika');
           }}
-          disabled={isSubmitting}
+          disabled={false}
           className="w-full bg-amber-500 hover:bg-amber-600 text-white text-xs font-black py-2.5 rounded-xl shadow transition active:scale-[0.98]"
         >
           👔 Mulai Setrika / Packing
@@ -1463,10 +1471,11 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
         <button
           type="button"
           onClick={(e) => {
+            e.preventDefault();
             e.stopPropagation();
             handleStatusChange(order, 'Siap Ambil');
           }}
-          disabled={isSubmitting}
+          disabled={false}
           className="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black py-2.5 rounded-xl shadow transition active:scale-[0.98]"
         >
           📦 Siap Ambil / Diantar
@@ -1479,10 +1488,11 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
       <button
         type="button"
         onClick={(e) => {
+          e.preventDefault();
           e.stopPropagation();
           handleStatusChange(order, 'Sortir');
         }}
-        disabled={isSubmitting}
+        disabled={false}
         className="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black py-2.5 rounded-xl shadow transition active:scale-[0.98]"
       >
         🔄 Lanjutkan Pengerjaan

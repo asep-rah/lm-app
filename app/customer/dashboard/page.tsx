@@ -392,16 +392,40 @@ export default function CustomerDashboardPage() {
     .or(`customer_phone.eq.${norm},customer_phone.eq.${altNorm}`)
     .order('created_at', { ascending: false });
 
+  // Filter dan gabungkan data pickup & POS agar pesanan 'Tiba di Outlet' TIDAK PERNAH HILANG
   const activePickups = pickupOrders || [];
   const activeTxs = posTransactions || [];
 
-  // Tampilkan pesanan aktif langsung ke Beranda
-  setActiveOrders([...activePickups, ...activeTxs]);
+  const pickupMap = new Map();
+  activePickups.forEach((p: any) => pickupMap.set(p.id, p));
 
-      let historyArr: any[] = [];
-      activePickups.filter((o: any) => o.status === 'Selesai' || o.status === 'Batal').forEach((o: any) => {
-        historyArr.push({ id: o.id, type: 'Online Order', title: o.service_type, detail: o.notes || '', price: o.delivery_fee || 0, date: o.created_at, status: o.status });
+  const mergedActive = activeTxs.map((t: any) => {
+    const relatedPickup = t.pickup_id ? pickupMap.get(t.pickup_id) : null;
+    return {
+      ...t,
+      photo_pickup_url: t.photo_pickup_url || relatedPickup?.photo_pickup_url || relatedPickup?.photo_url,
+      photo_outlet_url: t.photo_outlet_url || relatedPickup?.photo_outlet_url
+    };
+  });
+
+  activePickups.forEach((p: any) => {
+    const alreadyInTrx = activeTxs.some((t: any) => t.pickup_id === p.id);
+    if (!alreadyInTrx && !['selesai', 'batal'].includes((p.status || '').toLowerCase())) {
+      mergedActive.push({
+        ...p,
+        photo_pickup_url: p.photo_pickup_url || p.photo_url,
+        photo_outlet_url: p.photo_outlet_url
       });
+    }
+  });
+
+  setActiveOrders(mergedActive);
+
+  let historyArr: any[] = [];
+  activePickups.filter((o: any) => o.status === 'Selesai' || o.status === 'Batal').forEach((o: any) => {
+    historyArr.push({ id: o.id, type: 'Online Order', title: o.service_type, detail: o.notes || '', price: o.delivery_fee || 0, date: o.created_at });
+  });
+
       posTransactions?.forEach((t: any) => {
         historyArr.push({ id: t.id, type: 'Outlet POS', title: `${t.service_type} (${t.receipt_number})`, detail: t.notes, price: t.amount, date: t.created_at, status: t.status });
       });
