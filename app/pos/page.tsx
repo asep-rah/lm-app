@@ -1149,9 +1149,9 @@ const handleSubmitIssue = async (e: React.FormEvent) => {
       discount_amount: calculatedDiscount,
       notes: combinedNotes,
       amount: totalPay,
+      items: cartItems.length > 0 ? cartItems : [{ name: primaryServiceLabel, qty: totalPcsSum || 1, weight: totalKgSum || 0 }],
       payment_method: finalPaymentMethodLabel,
       status: 'Diterima',
-      items: typeof cartItems === 'string' ? cartItems : JSON.stringify(cartItems),
       by_sortir: employeeName
     };
 
@@ -1300,9 +1300,9 @@ const handleSubmitIssue = async (e: React.FormEvent) => {
 };
 
 const handleStatusChange = async (order: any, targetStatus: string) => {
-  setIsSubmitting(true);
   try {
-    const updatePayload = { 
+    setIsSubmitting(true);
+    const updatePayload = {
       status: targetStatus,
       updated_at: new Date().toISOString()
     };
@@ -1324,26 +1324,27 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
         .eq('id', pickupId);
     }
 
-   // 3. Optional: Kurangi stok bahan kimia secara aman tanpa memblokir UI
-   try {
-    if (typeof deductChemicalInventory === 'function') {
-      const itemName = order.service_name || order.service_type || 'Laundry';
-      const qty = Number(order.weight_kg || order.quantity || 1);
-      const outlet = order.outlet_name || selectedOutlet || 'Main Outlet';
-      await deductChemicalInventory(itemName, qty, outlet);
+    // 3. Optional: Kurangi stok bahan kimia secara aman tanpa memblokir UI
+    try {
+      if (typeof deductChemicalInventory === 'function') {
+        const itemName = order.service_name || order.service_type || 'Laundry';
+        const qty = Number(order.weight_kg || order.quantity || 1);
+        const outlet = order.outlet_name || selectedOutlet || 'Main Outlet';
+        await deductChemicalInventory(itemName, qty, outlet);
+      }
+    } catch (chemErr) {
+      console.warn('Inventory deduction skipped or failed:', chemErr);
     }
-  } catch (chemErr) {
-    console.warn('Inventory deduction skipped or failed:', chemErr);
-  }
 
-  // 4. Refresh data agar UI langsung ter-update
-  if (typeof refreshData === 'function') {
-    await refreshData();
-  }
-  } catch (err) {
-    console.error('Failed to change status:', err);
-    alert('Gagal memperbarui status. Silakan coba lagi.');
+    // 4. Refresh data agar UI langsung ter-update
+    if (typeof refreshData === 'function') {
+      await refreshData();
+    }
+  } catch (err: any) {
+    console.error('Error in handleStatusChange:', err);
+    alert('Gagal mengubah status: ' + err.message);
   } finally {
+    // PENTING: Selalu lepas kunci tombol agar bisa diklik kembali
     setIsSubmitting(false);
   }
 };
@@ -2337,29 +2338,49 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
                     </div>
                   )}
 
-                  {/* TAMPILAN ITEM MULTI-SERVICES (KILOAN VS SATUAN SEPARATED) */}
-          {order.items && Array.isArray(order.items) && order.items.length > 0 ? (
-            <div className="space-y-2 my-2 border-t border-b border-slate-100 py-2">
-              {order.items.map((item: any, idx: number) => (
-                <div key={idx} className="flex justify-between items-center bg-slate-50 p-2 rounded-lg text-xs">
-                  <div>
-                    <span className="font-bold text-slate-800 block">{item.name || item.service_type}</span>
-                    <span className="text-[10px] text-slate-500">
-                      {item.weight ? `${item.weight} Kg` : ''} {item.qty ? `${item.qty} Pcs` : ''}
-                    </span>
-                  </div>
-                  <span className="px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded-md font-bold text-[10px] border border-indigo-100">
-                    {item.status || order.status || 'Diterima'}
-                  </span>
-                </div>
-              ))}
-            </div>
-          ) : null}
+                  {/* TAMPILAN ITEM MULTI-SERVICES DENGAN TOMBOL PENGERJAAN TERPISAH PER ITEM */}
+            {order.items && Array.isArray(order.items) && order.items.length > 0 ? (
+              <div className="space-y-3 mt-2">
+                {order.items.map((item: any, idx: number) => {
+                  // Membuat sub-task item tiruan agar tombol status bekerja per-item
+                  const itemTask = {
+                    ...order,
+                    id: order.id,
+                    item_index: idx,
+                    service_type: item.name || item.service_type || 'Item Cucian',
+                    status: item.status || order.status || 'Diterima'
+                  };
 
-          {/* TOMBOL AKSI PENGERJAAN KASIR */}
-          <div className="pt-1 border-t">
-            {renderNextStepButton(order)}
-          </div>
+                  return (
+                    <div key={idx} className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-2">
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <span className="font-extrabold text-slate-800 text-xs block">
+                            {item.name || item.service_type}
+                          </span>
+                          <span className="text-[10px] text-slate-500 font-medium">
+                            {item.weight ? `${item.weight} Kg` : ''} {item.qty ? `${item.qty} Pcs` : ''}
+                          </span>
+                        </div>
+                        <span className="px-2 py-0.5 bg-indigo-50 text-indigo-600 font-bold text-[10px] rounded-md border border-indigo-100">
+                          {item.status || order.status || 'Diterima'}
+                        </span>
+                      </div>
+
+                      {/* Tombol Pengerjaan Khusus Untuk Item Ini */}
+                      <div className="pt-1 border-t border-slate-200">
+                        {renderNextStepButton(itemTask)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              /* Pengerjaan Pesanan Single-Item Biasa */
+              <div className="pt-2 border-t border-slate-100">
+                {renderNextStepButton(order)}
+              </div>
+            )}
                 </div>
               ))}
               {activeOrders.length === 0 && <p className="text-xs text-slate-400 text-center py-8">Tidak ada antrean cucian saat ini.</p>}
