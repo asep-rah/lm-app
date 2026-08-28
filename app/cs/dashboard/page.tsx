@@ -209,9 +209,19 @@ export default function CSDashboard() {
 
   const handleApproveByCS = async (txId: string) => {
     if (!confirm('Setujui transaksi ini atas nama customer setelah konfirmasi via WA?')) return;
-    const { error } = await supabase.from('transactions').update({ status: 'Proses' }).eq('id', txId);
+    
+    // Update status menjadi 'Sortir' dan set persetujuan CS agar tombol pengerjaan kasir aktif kembali
+    const { error } = await supabase
+      .from('transactions')
+      .update({ 
+        status: 'Sortir',
+        confirmation_status: 'approved',
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', txId);
+
     if (!error) {
-      alert('✅ Transaksi disetujui dan diteruskan ke proses cuci!');
+      alert('✅ Transaksi disetujui! Kasir dapat melanjutkan pengerjaan.');
       loadCSData();
     } else {
       alert('❌ Gagal: ' + error.message);

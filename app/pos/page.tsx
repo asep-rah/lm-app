@@ -1386,9 +1386,28 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
 
   const renderNextStepButton = (order: any) => {
     const s = (order.status || '').toLowerCase();
+    const confirmationStatus = (order.confirmation_status || '').toLowerCase();
   
-    // TAHAP 1: Diterima / Baru / Penjemputan / Telah Tiba di Outlet -> Lanjut ke SORTIR
-    if (s.includes('diterima') || s.includes('baru') || s.includes('penjemputan') || s.includes('tiba') || s.includes('menunggu cuci')) {
+    // 1. Jika sedang menunggu persetujuan CS -> Tampilkan Badge Peringatan
+    if (s.includes('menunggu konfirmasi') || confirmationStatus === 'pending') {
+      return (
+        <div className="w-full bg-amber-50 border border-amber-200 text-amber-700 text-[11px] font-bold py-2 px-3 rounded-xl text-center flex items-center justify-center gap-1.5 animate-pulse">
+          <span>⏳</span> Menunggu Persetujuan CS / Admin
+        </div>
+      );
+    }
+  
+    // 2. TAHAP 1: Diterima / Baru / Telah Tiba di Outlet / Disetujui CS / Penjemputan -> Lanjut ke SORTIR
+    if (
+      s.includes('diterima') || 
+      s.includes('baru') || 
+      s.includes('penjemputan') || 
+      s.includes('tiba') || 
+      s.includes('disetujui') || 
+      s.includes('dikonfirmasi') ||
+      s.includes('menunggu cuci') ||
+      !s
+    ) {
       return (
         <button
           type="button"
@@ -1397,79 +1416,78 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
             handleStatusChange(order, 'Sortir');
           }}
           disabled={isSubmitting}
-          className="w-full bg-slate-700 hover:bg-slate-800 text-white text-xs font-black py-2.5 rounded-xl shadow transition"
+          className="w-full bg-slate-700 hover:bg-slate-800 text-white text-xs font-black py-2.5 rounded-xl shadow transition active:scale-[0.98]"
         >
           🔍 Mulai Sortir
         </button>
       );
     }
-
-    // TAHAP 2: Sortir -> Lanjut ke MENCUCI
+  
+    // 3. TAHAP 2: Sortir -> Lanjut ke MENCUCI
     if (s.includes('sortir')) {
       return (
         <button
-          onClick={() => handleStatusChange(order, 'Mencuci')}
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleStatusChange(order, 'Mencuci');
+          }}
           disabled={isSubmitting}
-          className="w-full bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-black py-2.5 rounded-xl shadow transition"
+          className="w-full bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-black py-2.5 rounded-xl shadow transition active:scale-[0.98]"
         >
-          🧺 Mulai Mencuci
+          🧼 Mulai Mencuci
         </button>
       );
     }
-
-    // TAHAP 3: Mencuci / Cuci -> Lanjut ke MENGERINGKAN
+  
+    // 4. TAHAP 3: Mencuci / Cuci -> Lanjut ke MENGERINGKAN / SETRIKA
     if (s.includes('cuci') || s.includes('mencuci')) {
       return (
         <button
-          onClick={() => handleStatusChange(order, 'Mengeringkan')}
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleStatusChange(order, 'Setrika');
+          }}
           disabled={isSubmitting}
-          className="w-full bg-amber-500 hover:bg-amber-600 text-white text-xs font-black py-2.5 rounded-xl shadow transition"
+          className="w-full bg-amber-500 hover:bg-amber-600 text-white text-xs font-black py-2.5 rounded-xl shadow transition active:scale-[0.98]"
         >
-          🔥 Mulai Mengeringkan
+          👔 Mulai Setrika / Packing
         </button>
       );
     }
-
-    // TAHAP 4: Mengeringkan / Kering -> Lanjut ke MENGGOSOK / SETRIKA
-    if (s.includes('kering') || s.includes('pengeringan') || s.includes('mengeringkan')) {
+  
+    // 5. TAHAP 4: Setrika / Gosok -> Lanjut ke SIAP AMBIL
+    if (s.includes('setrika') || s.includes('gosok') || s.includes('kering')) {
       return (
         <button
-          onClick={() => handleStatusChange(order, 'Menggosok / Setrika')}
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleStatusChange(order, 'Siap Ambil');
+          }}
           disabled={isSubmitting}
-          className="w-full bg-purple-600 hover:bg-purple-700 text-white text-xs font-black py-2.5 rounded-xl shadow transition"
+          className="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black py-2.5 rounded-xl shadow transition active:scale-[0.98]"
         >
-          👔 Mulai Menggosok / Setrika
+          📦 Siap Ambil / Diantar
         </button>
       );
     }
-
-    // TAHAP 5: Menggosok / Setrika -> Lanjut ke PACKING
-    if (s.includes('gosok') || s.includes('setrika')) {
-      return (
-        <button
-          onClick={() => handleStatusChange(order, 'Packing')}
-          disabled={isSubmitting}
-          className="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black py-2.5 rounded-xl shadow transition"
-        >
-          📦 Mulai Packing
-        </button>
-      );
-    }
-
-    // TAHAP 6: Packing -> PENYIMPANAN RAK / SELESAI
-    if (s.includes('pack') || s.includes('packing')) {
-      return (
-        <button
-          onClick={() => handleStatusChange(order, 'Penyimpanan Rak / Selesai')}
-          disabled={isSubmitting}
-          className="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black py-2.5 rounded-xl shadow transition"
-        >
-          ✅ Selesai & Simpan di Rak
-        </button>
-      );
-    }
-
-    return null;
+  
+    // Fallback jika status tidak dikenal
+    return (
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          handleStatusChange(order, 'Sortir');
+        }}
+        disabled={isSubmitting}
+        className="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black py-2.5 rounded-xl shadow transition active:scale-[0.98]"
+      >
+        🔄 Lanjutkan Pengerjaan
+      </button>
+    );
   };
 
   const baseSalaryUsed = Math.max(empBasicSalary, calcStats.productionPay);
@@ -2309,7 +2327,29 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
                     </div>
                   )}
 
-                  <div className="pt-1 border-t">{renderNextStepButton(order)}</div>
+                  {/* TAMPILAN ITEM MULTI-SERVICES (KILOAN VS SATUAN SEPARATED) */}
+          {order.items && Array.isArray(order.items) && order.items.length > 0 ? (
+            <div className="space-y-2 my-2 border-t border-b border-slate-100 py-2">
+              {order.items.map((item: any, idx: number) => (
+                <div key={idx} className="flex justify-between items-center bg-slate-50 p-2 rounded-lg text-xs">
+                  <div>
+                    <span className="font-bold text-slate-800 block">{item.name || item.service_type}</span>
+                    <span className="text-[10px] text-slate-500">
+                      {item.weight ? `${item.weight} Kg` : ''} {item.qty ? `${item.qty} Pcs` : ''}
+                    </span>
+                  </div>
+                  <span className="px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded-md font-bold text-[10px] border border-indigo-100">
+                    {item.status || order.status || 'Diterima'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {/* TOMBOL AKSI PENGERJAAN KASIR */}
+          <div className="pt-1 border-t">
+            {renderNextStepButton(order)}
+          </div>
                 </div>
               ))}
               {activeOrders.length === 0 && <p className="text-xs text-slate-400 text-center py-8">Tidak ada antrean cucian saat ini.</p>}
