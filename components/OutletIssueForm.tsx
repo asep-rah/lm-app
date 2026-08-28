@@ -1,5 +1,9 @@
+'use client';
+
 import React, { useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
+import { createSupervisorIssueTask } from '@/lib/createOutletIssueTask';
+import { insertWithFallback } from '@/lib/safeWrite';
 
 export default function OutletIssueForm({ selectedOutlet, employeeName }: { selectedOutlet: string; employeeName: string }) {
   const [issueCategory, setIssueCategory] = useState('Kerusakan Alat');
@@ -31,22 +35,44 @@ export default function OutletIssueForm({ selectedOutlet, employeeName }: { sele
         }
       }
 
-      // Pastikan outlet_id di-convert jika dikirim angka ("18" -> dihindari error UUID)
-      const { error } = await supabase.from('outlet_issues').insert([{
-        outlet_id: typeof selectedOutlet === 'object' ? (selectedOutlet as any).id : selectedOutlet,
-        category: issueCategory,
-        description: issueDescription,
-        reporter_name: employeeName || 'Kasir',
-        status: 'Sedang Diproses',
-        media_url: mediaUrl,
-        created_at: new Date().toISOString()
-      }]);
+      const outletId = typeof selectedOutlet === 'object' ? (selectedOutlet as any).id : selectedOutlet;
+      const { data: inserted, error } = await insertWithFallback<{ id: string }>('outlet_issues', [
+        {
+          outlet_id: outletId,
+          category: issueCategory,
+          description: issueDescription,
+          reporter_name: employeeName || 'Kasir',
+          status: 'Sedang Diproses',
+          media_url: mediaUrl || null,
+          created_at: new Date().toISOString()
+        },
+        {
+          outlet_id: outletId,
+          category: issueCategory,
+          description: issueDescription,
+          reporter_name: employeeName || 'Kasir',
+          status: 'Sedang Diproses'
+        },
+        { outlet_id: outletId, category: issueCategory, description: issueDescription }
+      ], { select: 'id' });
 
-      if (error) throw error;
+      if (error || !inserted?.[0]?.id) throw error || new Error('Insert gagal');
+
+      if (inserted?.[0]?.id) {
+        const taskRes = await createSupervisorIssueTask({
+          id: inserted[0].id,
+          category: issueCategory,
+          description: issueDescription,
+          reporter_name: employeeName || 'Kasir'
+        });
+        if (taskRes.error) {
+          console.error('Laporan tersimpan, tetapi task Supervisor gagal dibuat:', taskRes.error);
+        }
+      }
 
       setIssueDescription('');
       setMediaFile(null);
-      setMsg('✅ Laporan kendala berhasil dikirim!');
+      setMsg('✅ Laporan kendala terkirim & tugas Supervisor otomatis dibuat.');
       setTimeout(() => setMsg(''), 3000);
     } catch (error: any) {
       alert('❌ Gagal mengirim: ' + error.message);

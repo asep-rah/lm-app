@@ -6,6 +6,16 @@ import Link from 'next/link';
 // 1. IMPORT KOMPONEN AI ASSISTANT ADMIN
 import AdminAIAssistant from '@/components/AdminAIAssistant';
 import StageTimeline from '@/components/StageTimeline';
+import { isVoidTransaction } from '@/lib/voidTx';
+import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
+import RequisitionForm from '@/components/RequisitionForm';
+import HeadTaskDelegator from '@/components/HeadTaskDelegator';
+import RoleTaskInbox from '@/components/RoleTaskInbox';
+import MetricCard from '@/components/ui/MetricCard';
+import RevenueChart from '@/components/ui/RevenueChart';
+import PeakHeatmap from '@/components/ui/PeakHeatmap';
+import { SkeletonCard } from '@/components/ui/Skeleton';
+import { fetchRoleKpis } from '@/lib/kpiMetrics';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -21,7 +31,7 @@ const safeParse = (data: any, fallback: any) => {
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<'pnl' | 'settings' | 'employees' | 'delete_requests' | 'loans' | 'history'>('pnl');
   
-  const [currentUserRole, setCurrentUserRole] = useState('kasir');
+  const [currentUserRole, setCurrentUserRole] = useState('');
   const [currentUserName, setCurrentUserName] = useState('');
 
   const [outlets, setOutlets] = useState<any[]>([]);
@@ -29,6 +39,11 @@ export default function Dashboard() {
   const [period, setPeriod] = useState('THIS_MONTH');
 
   const [stats, setStats] = useState({ income: 0, onlineIncome: 0, offlineIncome: 0, expense: 0, profit: 0 });
+  const [prevStats, setPrevStats] = useState({ income: 0, profit: 0 });
+  const [kpiScore, setKpiScore] = useState<number | null>(null);
+  const [slaScore, setSlaScore] = useState<number | null>(null);
+  const [revenueSeries, setRevenueSeries] = useState<{ label: string; value: number }[]>([]);
+  const [heatmap, setHeatmap] = useState<number[][]>(() => Array.from({ length: 7 }, () => Array(12).fill(0)));
   const [tableData, setTableData] = useState<any[]>([]);
   const [rawExportData, setRawExportData] = useState({ txs: [] as any[], mems: [] as any[], exps: [] as any[] });
   
@@ -193,6 +208,21 @@ export default function Dashboard() {
     setCurrentUserName(user.name);
   }, []);
 
+  useEffect(() => {
+    fetchRoleKpis().then((res) => {
+      const avg = res.cards.length
+        ? Math.round(res.cards.reduce((s, c) => s + (c.score || 0), 0) / res.cards.length)
+        : 0;
+      setKpiScore(avg);
+      const kurir = res.cards.find((c) => c.roleKey === 'kurir_cs');
+      const sla = kurir?.metrics?.find((m) => m.key === 'pickup_sla_pct');
+      setSlaScore(sla ? Math.round(Number(sla.actual) || 0) : avg);
+    }).catch(() => {
+      setKpiScore(null);
+      setSlaScore(null);
+    });
+  }, []);
+
   const handleLogout = () => {
     localStorage.removeItem('laundry_owner_user');
     localStorage.removeItem('laundry_user');
@@ -263,7 +293,7 @@ export default function Dashboard() {
         return true;
       };
 
-      const periodTxs = allTxs?.filter(checkPeriod) || [];
+      const periodTxs = (allTxs?.filter(checkPeriod) || []).filter((t) => !isVoidTransaction(t));
       const periodMems = allMems?.filter(checkPeriod) || [];
       const periodExps = allExps?.filter(checkPeriod) || [];
 
@@ -354,7 +384,7 @@ export default function Dashboard() {
       filteredTxs.forEach((t) => { 
         const amt = Number(t.amount) || 0; inc += amt;
         if (t.order_type === 'Online') onlineInc += amt; else offlineInc += amt;
-        combinedData.push({ date: t.created_at, type: 'Income', category: 'Laundry', desc: `${t.service_type} (${t.customer_name})`, amount: amt }); 
+        combinedData.push({ date: t.created_at, type: 'Income', category: 'Laundry', desc: `${t.service_type} (${t.customer_name})`, amount: amt, rawData: t }); 
       });
 
       filteredMems.forEach((m) => { 
@@ -370,7 +400,59 @@ export default function Dashboard() {
 
       combinedData.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       setStats({ income: inc, onlineIncome: onlineInc, offlineIncome: offlineInc, expense: exp, profit: inc - exp }); 
-      setTableData(combinedData); 
+      setTableData(combinedData);
+
+      const prevOf = (item: any) => {
+        const d = new Date(item.created_at);
+        if (period === 'THIS_YEAR') {
+          const two = new Date();
+          two.setFullYear(two.getFullYear() - 2);
+          const one = new Date();
+          one.setFullYear(one.getFullYear() - 1);
+          return d >= two && d < one;
+        }
+        const lastMonth = now.getMonth() === 0 ? 11 : now.getMonth() - 1;
+        const lastYear = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+        if (period === 'LAST_MONTH') {
+          const prevM = lastMonth === 0 ? 11 : lastMonth - 1;
+          const prevY = lastMonth === 0 ? lastYear - 1 : lastYear;
+          return d.getMonth() === prevM && d.getFullYear() === prevY;
+        }
+        return d.getMonth() === lastMonth && d.getFullYear() === lastYear;
+      };
+      const prevTxs = (allTxs || []).filter(prevOf).filter((t: any) => selectedOutlet === 'ALL' || t.outlet_id === selectedOutlet);
+      const prevMems = (allMems || []).filter(prevOf).filter((m: any) => selectedOutlet === 'ALL' || m.outlet_id === selectedOutlet);
+      const prevExps = (allExps || []).filter(prevOf).filter((e: any) => selectedOutlet === 'ALL' || e.outlet_id === selectedOutlet);
+      const prevInc =
+        prevTxs.reduce((s: number, t: any) => s + (Number(t.amount) || 0), 0) +
+        prevMems.reduce((s: number, m: any) => s + (Number(m.price) || 0), 0);
+      const prevExp = prevExps.reduce((s: number, e: any) => s + (Number(e.amount) || 0), 0);
+      setPrevStats({ income: prevInc, profit: prevInc - prevExp });
+
+      const byDay: Record<string, number> = {};
+      const heat = Array.from({ length: 7 }, () => Array.from({ length: 12 }, () => 0));
+      const bump = (iso: any, amt: number) => {
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return;
+        const key = d.toLocaleDateString('en-CA');
+        byDay[key] = (byDay[key] || 0) + amt;
+        heat[d.getDay()][Math.floor(d.getHours() / 2)] += 1;
+      };
+      filteredTxs.forEach((t: any) => bump(t.created_at, Number(t.amount) || 0));
+      filteredMems.forEach((m: any) => bump(m.created_at, Number(m.price) || 0));
+      const series: { label: string; value: number }[] = [];
+      for (let i = 13; i >= 0; i--) {
+        const d = new Date();
+        d.setHours(12, 0, 0, 0);
+        d.setDate(d.getDate() - i);
+        series.push({
+          label: `${d.getDate()}/${d.getMonth() + 1}`,
+          value: byDay[d.toLocaleDateString('en-CA')] || 0
+        });
+      }
+      setRevenueSeries(series);
+      setHeatmap(heat);
+
       setIsLoading(false);
     }
     loadData();
@@ -709,6 +791,10 @@ export default function Dashboard() {
   };
 
   const isManagementAdmin = ['owner', 'supervisor'].includes(currentUserRole);
+  const trendPct = (curr: number, prev: number) => {
+    if (!prev) return curr > 0 ? 100 : 0;
+    return Math.round(((curr - prev) / Math.abs(prev)) * 100);
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-3 md:p-8">
@@ -791,43 +877,46 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* NAV HEADER EXECUTIVE GLASSMORPHISM */}
-        <div className="relative overflow-hidden bg-slate-900 text-white p-6 md:p-8 rounded-3xl shadow-2xl border border-slate-800 backdrop-blur-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-          {/* Ambient Background Glow */}
-          <div className="absolute -top-12 -left-12 w-40 h-40 bg-emerald-500/20 rounded-full blur-3xl pointer-events-none" />
-          <div className="absolute -bottom-12 -right-12 w-40 h-40 bg-indigo-500/20 rounded-full blur-3xl pointer-events-none" />
-
-          <div className="relative z-10">
-            <div className="flex items-center gap-2">
-              <span className="inline-block w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-[10px] font-mono tracking-widest uppercase text-emerald-400 font-extrabold">Executive Terminal</span>
-            </div>
-            <h1 className="text-2xl md:text-3xl font-black tracking-tight text-white mt-1">
-              Laundrivery <span className="bg-gradient-to-r from-emerald-400 to-teal-300 bg-clip-text text-transparent">ERP</span> 🏛️
+        {/* NAV HEADER */}
+        <div className="bg-white border border-slate-200/80 p-5 md:p-6 rounded-2xl shadow-sm hover:shadow-md transition-all flex flex-col md:flex-row justify-between items-start md:items-center gap-5">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-sky-600">Owner Analytics</p>
+            <h1 className="text-2xl md:text-3xl font-black tracking-tight text-slate-900 mt-0.5">
+              Laundrivery ERP
             </h1>
-            <p className="text-xs text-slate-400 font-medium mt-0.5">
-              Logged as <span className="text-indigo-300 font-bold uppercase">{currentUserName || 'Owner'}</span> ({currentUserRole})
+            <p className="text-xs text-slate-400 mt-0.5">
+              {currentUserName || 'Owner'} · <span className="font-bold text-slate-600 uppercase">{currentUserRole || '…'}</span>
             </p>
           </div>
 
-          <div className="relative z-10 flex w-full md:w-auto overflow-x-auto pb-2 md:pb-0 gap-2 hide-scrollbar">
-            <button onClick={() => setActiveTab('pnl')} className={`whitespace-nowrap px-4 py-2.5 font-bold text-xs rounded-2xl transition-all duration-200 ${activeTab === 'pnl' ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-lg shadow-emerald-500/20 scale-105' : 'bg-slate-800/80 text-slate-300 hover:bg-slate-700'}`}>📊 Laporan PnL</button>
-            <button onClick={() => setActiveTab('history')} className={`whitespace-nowrap px-4 py-2.5 font-bold text-xs rounded-2xl transition-all duration-200 ${activeTab === 'history' ? 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-lg shadow-indigo-500/20 scale-105' : 'bg-slate-800/80 text-slate-300 hover:bg-slate-700'}`}>📜 History 1 Thn</button>
-            <button onClick={() => setActiveTab('loans')} className={`whitespace-nowrap px-4 py-2.5 font-bold text-xs rounded-2xl transition-all duration-200 ${activeTab === 'loans' ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow-lg shadow-amber-500/20 scale-105' : 'bg-slate-800/80 text-slate-300 hover:bg-slate-700'}`}>💸 Kasbon Crew</button>
-            
+          <div className="flex w-full md:w-auto overflow-x-auto pb-1 md:pb-0 gap-1.5 hide-scrollbar">
+            <button onClick={() => setActiveTab('pnl')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'pnl' ? 'bg-sky-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>PnL</button>
+            <button onClick={() => setActiveTab('history')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'history' ? 'bg-sky-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>History</button>
+            <button onClick={() => setActiveTab('loans')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'loans' ? 'bg-amber-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>Kasbon</button>
             {isManagementAdmin && (
               <>
-                <button onClick={() => setActiveTab('settings')} className={`whitespace-nowrap px-4 py-2.5 font-bold text-xs rounded-2xl transition-all duration-200 ${activeTab === 'settings' ? 'bg-gradient-to-r from-purple-500 to-pink-600 text-white shadow-lg shadow-purple-500/20 scale-105' : 'bg-slate-800/80 text-slate-300 hover:bg-slate-700'}`}>⚙️ Settings</button>
-                <button onClick={() => setActiveTab('employees')} className={`whitespace-nowrap px-4 py-2.5 font-bold text-xs rounded-2xl transition-all duration-200 ${activeTab === 'employees' ? 'bg-gradient-to-r from-blue-500 to-cyan-600 text-white shadow-lg shadow-blue-500/20 scale-105' : 'bg-slate-800/80 text-slate-300 hover:bg-slate-700'}`}>👥 Karyawan</button>
+                <Link href="/owner/kpi-settings" className="whitespace-nowrap bg-amber-50 border border-amber-200 text-amber-700 hover:bg-amber-500 hover:text-white text-xs px-3.5 py-2 rounded-xl font-bold transition-all">KPI Settings</Link>
+                <button onClick={() => setActiveTab('settings')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'settings' ? 'bg-sky-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>Settings</button>
+                <button onClick={() => setActiveTab('employees')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'employees' ? 'bg-sky-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>Karyawan</button>
               </>
             )}
-            <Link href="/pos" className="whitespace-nowrap bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500 hover:text-white text-xs px-4 py-2.5 rounded-2xl font-bold transition-all duration-200">🛒 POS Kasir</Link>
-            <button onClick={handleLogout} className="whitespace-nowrap bg-rose-500/10 border border-rose-500/30 text-rose-400 hover:bg-rose-600 hover:text-white font-bold text-xs px-3.5 py-2.5 rounded-2xl transition-all duration-200">Keluar</button>
+            <Link href="/pos" className="whitespace-nowrap bg-emerald-50 border border-emerald-200 text-emerald-700 hover:bg-emerald-500 hover:text-white text-xs px-3.5 py-2 rounded-xl font-bold transition-all">POS</Link>
+            <button onClick={handleLogout} className="whitespace-nowrap bg-rose-50 border border-rose-200 text-rose-600 hover:bg-rose-500 hover:text-white font-bold text-xs px-3 py-2 rounded-xl transition-all">Keluar</button>
           </div>
         </div>
 
         {/* 2. WIDGET AI EXECUTIVE COPILOT & CHURN DETECTOR */}
         <AdminAIAssistant />
+
+        <KpiRoleMonitoring />
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <RequisitionForm employeeName={currentUserName} role={currentUserRole} selectedOutlet={selectedOutlet !== 'ALL' ? selectedOutlet : undefined} />
+          <div className="space-y-4">
+            <RoleTaskInbox role={currentUserRole || undefined} />
+            {['owner', 'supervisor'].includes(currentUserRole) && <HeadTaskDelegator />}
+          </div>
+        </div>
 
         {/* TAB 1: PNL & LEADERBOARD RANKING */}
         {activeTab === 'pnl' && (
@@ -849,54 +938,54 @@ export default function Dashboard() {
               <button onClick={exportCSV} className="w-full md:w-auto mt-auto bg-blue-600 text-white font-bold text-xs px-6 py-3 rounded-xl shadow-md">📥 EXPORT CSV</button>
             </div>
 
-            {/* TOP FINANCIAL METRIC CARDS (FINTECH GRADIENT) */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 pt-2">
-          {/* GROSS REVENUE */}
-          <div className="relative overflow-hidden bg-gradient-to-br from-emerald-600 via-teal-600 to-emerald-800 text-white p-6 rounded-3xl shadow-xl shadow-emerald-500/10 border border-emerald-400/20 transform hover:-translate-y-1 transition-all duration-300">
-            <div className="flex justify-between items-start">
-              <span className="text-[10px] font-extrabold tracking-wider uppercase bg-emerald-950/40 px-3 py-1 rounded-full border border-emerald-400/30 text-emerald-200 backdrop-blur-md">Gross Revenue</span>
-              <span className="text-xl">💰</span>
-            </div>
-            <h2 className="text-2xl md:text-3xl font-black tracking-tight mt-4">
-              Rp {stats.income.toLocaleString('id-ID')}
-            </h2>
-            <div className="mt-4 pt-3 border-t border-emerald-400/20 flex justify-between text-[11px] font-medium text-emerald-100">
-              <span>Offline: <b>Rp {stats.offlineIncome.toLocaleString('id-ID')}</b></span>
-              <span>Online: <b className="text-amber-200">Rp {stats.onlineIncome.toLocaleString('id-ID')}</b></span>
-            </div>
+            {/* TOP FINANCIAL METRIC CARDS */}
+        {isLoading ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 pt-2">
+            {Array.from({ length: 4 }).map((_, i) => <SkeletonCard key={i} />)}
           </div>
-
-          {/* OPEX */}
-          <div className="relative overflow-hidden bg-gradient-to-br from-rose-600 via-pink-600 to-rose-800 text-white p-6 rounded-3xl shadow-xl shadow-rose-500/10 border border-rose-400/20 transform hover:-translate-y-1 transition-all duration-300">
-            <div className="flex justify-between items-start">
-              <span className="text-[10px] font-extrabold tracking-wider uppercase bg-rose-950/40 px-3 py-1 rounded-full border border-rose-400/30 text-rose-200 backdrop-blur-md">Total Opex</span>
-              <span className="text-xl">💸</span>
-            </div>
-            <h2 className="text-2xl md:text-3xl font-black tracking-tight mt-4">
-              Rp {stats.expense.toLocaleString('id-ID')}
-            </h2>
-            <p className="text-[10px] text-rose-200 font-medium mt-4">Termasuk Beban Gaji, Detergen, & Operasional</p>
-          </div>
-
-          {/* NET PROFIT */}
-          <div className={`relative overflow-hidden p-6 rounded-3xl shadow-xl border transform hover:-translate-y-1 transition-all duration-300 text-white ${stats.profit >= 0 ? 'bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 border-indigo-500/30 shadow-indigo-500/10' : 'bg-gradient-to-br from-rose-950 via-slate-900 to-rose-950 border-rose-500/30 shadow-rose-500/10'}`}>
-            <div className="flex justify-between items-start">
-              <span className={`text-[10px] font-extrabold tracking-wider uppercase px-3 py-1 rounded-full backdrop-blur-md border ${stats.profit >= 0 ? 'bg-indigo-900/60 text-indigo-300 border-indigo-400/30' : 'bg-rose-900/60 text-rose-300 border-rose-400/30'}`}>Net Profit</span>
-              <span className="text-xl">{stats.profit >= 0 ? '📈' : '📉'}</span>
-            </div>
-            <h2 className={`text-2xl md:text-3xl font-black tracking-tight mt-4 ${stats.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-              Rp {stats.profit.toLocaleString('id-ID')}
-            </h2>
-            <p className="text-[10px] text-slate-400 font-medium mt-4">Estimasi Laba Bersih Setelah Pengeluaran</p>
-          </div>
+        ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 pt-2">
+          <MetricCard
+            label="Omset"
+            value={`Rp ${stats.income.toLocaleString('id-ID')}`}
+            hint={`Off ${stats.offlineIncome.toLocaleString('id-ID')} · On ${stats.onlineIncome.toLocaleString('id-ID')}`}
+            trend={trendPct(stats.income, prevStats.income)}
+            accent="sky"
+          />
+          <MetricCard
+            label="Profit"
+            value={`Rp ${stats.profit.toLocaleString('id-ID')}`}
+            hint={`OPEX Rp ${stats.expense.toLocaleString('id-ID')}`}
+            trend={trendPct(stats.profit, prevStats.profit)}
+            accent={stats.profit >= 0 ? 'emerald' : 'rose'}
+          />
+          <MetricCard
+            label="SLA Performance"
+            value={slaScore === null ? '—' : `${slaScore}%`}
+            hint="Kurir & CS on-time"
+            trend={slaScore === null ? null : slaScore - 95}
+            accent="amber"
+          />
+          <MetricCard
+            label="KPI Score"
+            value={kpiScore === null ? '—' : `${kpiScore}%`}
+            hint="Rata-rata 7 role"
+            trend={kpiScore === null ? null : kpiScore - 90}
+            accent="emerald"
+          />
         </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <RevenueChart points={revenueSeries} />
+          <PeakHeatmap grid={heatmap} />
+        </div>
+
         {/* MODUL MANAJEMEN & ANALITIK PROMO OWNER */}
-        <div className="bg-slate-900 border border-slate-800 p-6 rounded-3xl space-y-6 shadow-2xl my-6">
+        <div className="bg-white border border-slate-200/80 p-6 rounded-2xl space-y-6 shadow-sm my-2">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-800 pb-4">
               <div>
-                <h3 className="text-lg font-black text-amber-400 flex items-center gap-2">
-                  🎟️ Kelola Promo & Analisis Performa
-                </h3>
+                <h3 className="text-lg font-black text-amber-700">Kelola Promo & Analisis Performa</h3>
                 <p className="text-xs text-slate-400 mt-0.5">Atur voucher promo aplikasi customer dan pantau performa konversi omzetnya.</p>
               </div>
               <button
@@ -918,7 +1007,7 @@ export default function Dashboard() {
               </div>
               <div className="bg-slate-800/60 border border-slate-700/80 p-4 rounded-2xl">
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Penggunaan Voucher</p>
-                <p className="text-2xl font-black text-amber-400 mt-1">
+                <p className="text-2xl font-black text-amber-600 mt-1">
                   {promos.reduce((acc, p) => acc + (p.used_count || 0), 0)} Transaksi
                 </p>
               </div>
@@ -946,7 +1035,7 @@ export default function Dashboard() {
                 <tbody className="divide-y divide-slate-800 text-slate-200">
                   {promos.map((item) => (
                     <tr key={item.id} className="hover:bg-slate-800/40 transition">
-                      <td className="p-3 font-extrabold text-amber-400">{item.code}</td>
+                      <td className="p-3 font-extrabold text-amber-600">{item.code}</td>
                       <td className="p-3 font-semibold">
                         {item.discount_type === 'percent' ? `${item.discount_value}%` : `Rp ${Number(item.discount_value).toLocaleString('id-ID')}`}
                       </td>
@@ -996,7 +1085,7 @@ export default function Dashboard() {
             <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
               <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 w-full max-w-md space-y-4 shadow-2xl">
                 <div className="flex justify-between items-center border-b border-slate-800 pb-3">
-                  <h3 className="text-sm font-black text-amber-400">➕ Buat Kode Promo Baru</h3>
+                  <h3 className="text-sm font-black text-amber-700">Buat Kode Promo Baru</h3>
                   <button type="button" onClick={() => setShowPromoModal(false)} className="text-slate-400 hover:text-white font-bold text-sm">✕</button>
                 </div>
 
@@ -1133,10 +1222,14 @@ export default function Dashboard() {
                   </thead>
                   <tbody>
                     {tableData.map((row, idx) => (
-                      <tr key={idx} className="border-b border-slate-100">
+                      <tr
+                        key={idx}
+                        className={`border-b border-slate-100 ${row.rawData ? 'cursor-pointer hover:bg-indigo-50' : ''}`}
+                        onClick={() => row.rawData && setSelectedTxDetail(row.rawData)}
+                      >
                         <td className="p-3 md:p-4 text-slate-600 font-mono">{new Date(row.date).toLocaleString('id-ID')}</td>
                         <td className="p-3 md:p-4"><span className={`px-2 py-1 rounded text-[9px] md:text-[10px] font-bold ${row.type === 'Income' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{row.category}</span></td>
-                        <td className="p-3 md:p-4 text-slate-800 font-medium">{row.desc}</td>
+                        <td className="p-3 md:p-4 text-slate-800 font-medium">{row.desc}{row.rawData ? <span className="ml-1 text-[9px] text-indigo-400 font-bold">timeline</span> : null}</td>
                         <td className={`p-3 md:p-4 text-right font-bold ${row.type === 'Income' ? 'text-emerald-600' : 'text-rose-600'}`}>{row.type === 'Income' ? '+' : ''} Rp {Math.abs(row.amount).toLocaleString('id-ID')}</td>
                       </tr>
                     ))}

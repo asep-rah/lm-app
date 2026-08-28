@@ -49,6 +49,7 @@ export const STAGE_SEQUENCE: { key: string; label: string; icon: string }[] = [
   { key: 'kering', label: 'Kering', icon: '🌀' },
   { key: 'setrika', label: 'Setrika', icon: '👔' },
   { key: 'packing', label: 'Packing', icon: '🎁' },
+  { key: 'siap', label: 'Siap Diantar', icon: '🚚' },
   { key: 'selesai', label: 'Selesai', icon: '✅' }
 ];
 
@@ -81,11 +82,7 @@ export const buildStageTimeline = (
 ): StageTimelineEntry[] => {
   const safeLogs = Array.isArray(logs) ? logs : [];
   const currentStageKey = stageKeyOf(transaction?.status);
-
-  // Status 'Siap Diambil' berarti seluruh tahap pengerjaan (s/d Packing) sudah
-  // beres, tetapi tahap 'Selesai' (penyerahan) belum tercapai.
-  const effectiveKey = currentStageKey === 'siap' ? 'selesai' : currentStageKey;
-  const statusIndex = STAGE_SEQUENCE.findIndex((s) => s.key === effectiveKey);
+  const statusIndex = STAGE_SEQUENCE.findIndex((s) => s.key === currentStageKey);
 
   return STAGE_SEQUENCE.map((stage, idx) => {
     // Log terakhir untuk tahap ini dianggap paling sahih (bila ada pengulangan).
@@ -100,6 +97,7 @@ export const buildStageTimeline = (
     const passedByStatus = statusIndex > idx && statusIndex !== -1;
     const isFinalDone =
       stage.key === 'selesai' && ['selesai', 'diambil'].includes(currentStageKey);
+    const isSiapNow = stage.key === 'siap' && currentStageKey === 'siap';
 
     return {
       key: stage.key,
@@ -107,7 +105,7 @@ export const buildStageTimeline = (
       icon: stage.icon,
       crew: last?.employee_name || fallbackCrew,
       at,
-      done: Boolean(last) || passedByStatus || isFinalDone
+      done: Boolean(last) || passedByStatus || isFinalDone || isSiapNow
     };
   });
 };

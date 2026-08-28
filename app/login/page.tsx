@@ -31,8 +31,8 @@ export default function LoginPage() {
     if (userStr) {
       const user = JSON.parse(userStr);
       if (user.role === 'kasir') window.location.href = '/pos';
-      else if (user.role === 'driver') window.location.href = '/driver/dashboard';
-      else if (user.role === 'cs') window.location.href = '/cs/dashboard';
+      else if (user.role === 'driver' || user.role === 'courier' || user.role === 'kurir') window.location.href = '/driver/dashboard';
+      else if (user.role === 'cs') window.location.href = '/cs';
       else if (user.role === 'investor') window.location.href = '/investor';
       else if (['owner', 'supervisor', 'finance'].includes(user.role)) window.location.href = '/owner';
     }
@@ -77,12 +77,12 @@ export default function LoginPage() {
       localStorage.setItem('laundry_owner_user', JSON.stringify(user));
       localStorage.setItem('laundry_user', JSON.stringify(user));
       window.location.href = '/owner';
-    } else if (role === 'driver') {
+    } else if (role === 'driver' || role === 'courier' || role === 'kurir') {
       localStorage.setItem('laundry_user', JSON.stringify(user));
       window.location.href = '/driver/dashboard';
     } else if (role === 'cs') {
       localStorage.setItem('laundry_user', JSON.stringify(user));
-      window.location.href = '/cs/dashboard';
+      window.location.href = '/cs';
     } else if (role === 'investor') {
       localStorage.setItem('laundry_user', JSON.stringify(user));
       window.location.href = '/investor';

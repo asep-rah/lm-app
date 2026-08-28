@@ -2,6 +2,12 @@
 import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
+import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
+import RequisitionForm from '@/components/RequisitionForm';
+import RoleTaskInbox from '@/components/RoleTaskInbox';
+import HeadTaskDelegator from '@/components/HeadTaskDelegator';
+import StageTimeline from '@/components/StageTimeline';
+import { isVoidTransaction } from '@/lib/voidTx';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -14,12 +20,10 @@ const safeParse = (data: any, fallback: any) => {
   try { return JSON.parse(data); } catch (e) { return fallback; }
 };
 
-const completeTaskWithSlaCheck = (taskId: any, payload?: any): any => ({ isOverdue: false, penalty: 0, reward: 0 });
-
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<'pnl' | 'settings' | 'employees' | 'delete_requests' | 'loans' | 'history'>('pnl');
   
-  const [currentUserRole, setCurrentUserRole] = useState('kasir');
+  const [currentUserRole, setCurrentUserRole] = useState('');
   const [currentUserName, setCurrentUserName] = useState('');
 
   const [outlets, setOutlets] = useState<any[]>([]);
@@ -85,9 +89,10 @@ export default function Dashboard() {
   const [historyMonthFilter, setHistoryMonthFilter] = useState('ALL');
   const [historyDateFilter, setHistoryDateFilter] = useState('');
   const [fullYearHistory, setFullYearHistory] = useState<any[]>([]);
+  const [selectedTxDetail, setSelectedTxDetail] = useState<any>(null);
+  const [txWorkLogs, setTxWorkLogs] = useState<any[]>([]);
 // State & Logic To-Do List Kendala Outlet (Real-Time)
 const [outletIssues, setOutletIssues] = useState<any[]>([]);
-const [tasks, setTasks] = useState<any[]>([]);
 
 const fetchOutletIssues = async () => {
   const { data } = await supabase
@@ -113,6 +118,26 @@ useEffect(() => {
   };
 }, []);
 
+useEffect(() => {
+  if (!selectedTxDetail?.id) {
+    setTxWorkLogs([]);
+    return;
+  }
+  let cancelled = false;
+  supabase
+    .from('work_logs')
+    .select('stage, employee_name, created_at')
+    .eq('transaction_id', selectedTxDetail.id)
+    .order('created_at', { ascending: true })
+    .then(({ data, error }) => {
+      if (cancelled) return;
+      setTxWorkLogs(error ? [] : data || []);
+    });
+  return () => {
+    cancelled = true;
+  };
+}, [selectedTxDetail?.id]);
+
 const handleUpdateIssueStatus = async (id: string, newStatus: string) => {
   const updates: any = { status: newStatus };
   if (newStatus === 'Selesai') updates.resolved_at = new Date().toISOString();
@@ -132,24 +157,6 @@ const handleApproveExpense = async (expenseId: string) => {
   if (!error) {
     alert('✅ Pengajuan disetujui! Data otomatis diteruskan ke Admin Ops untuk pembayaran via CMS BRI.');
   }
-};
-// Handler Penanganan Selesai Task SLA & Hitung Poin KPI
-const handleCompleteTask = async (taskId: string) => {
-  const userStr = localStorage.getItem('laundry_owner_user');
-  const user = userStr ? JSON.parse(userStr) : { id: '', name: 'Management', role: 'supervisor' };
-
-  const res = await completeTaskWithSlaCheck(taskId, {
-    id: user.id,
-    name: user.name || user.username || 'Management',
-    role: user.role || 'supervisor'
-  });
-
-  if (res.isOverdue) {
-    alert(`⚠️ Tugas diselesaikan melebihi SLA! Poin KPI terpotong ${res.penalty} poin.`);
-  } else {
-    alert(`🎉 Tugas selesai tepat waktu! Bonus +${res.reward} poin KPI.`);
-  }
-  fetchOutletIssues(); // Refresh data
 };
   useEffect(() => {
     const ownerStr = localStorage.getItem('laundry_owner_user');
@@ -219,7 +226,7 @@ setDeleteRequests(delData);
       const { data: delReqs } = await supabase.from('transactions').select('*, outlets(name)').eq('delete_requested', true).order('created_at', { ascending: false });
       if (delReqs) setDeleteRequests(delReqs);
 
-      let txQuery = supabase.from('transactions').select('id, created_at, amount, delivery_fee, service_type, customer_name, outlet_id, order_type, receipt_number');
+      let txQuery = supabase.from('transactions').select('*, outlets(name)');
       let memQuery = supabase.from('membership_logs').select('id, created_at, price, package_name, customer_phone, outlet_id, order_type');
       let expQuery = supabase.from('expenses').select('id, created_at, amount, category, description, outlet_id');
 
@@ -243,7 +250,7 @@ setDeleteRequests(delData);
         return true;
       };
 
-      const periodTxs = allTxs?.filter(checkPeriod) || [];
+      const periodTxs = (allTxs?.filter(checkPeriod) || []).filter((t) => !isVoidTransaction(t));
       const periodMems = allMems?.filter(checkPeriod) || [];
       const periodExps = allExps?.filter(checkPeriod) || [];
 
@@ -251,7 +258,7 @@ setDeleteRequests(delData);
       oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
 
       let historyCombined: any[] = [];
-      allTxs?.filter(t => new Date(t.created_at) >= oneYearAgo).forEach(t => historyCombined.push({ id: t.id, date: t.created_at, category: 'transactions', title: `${t.receipt_number || 'TRX'} - ${t.customer_name}`, desc: `${t.service_type} (${t.order_type || 'Offline'})`, amount: t.amount, outlet: t.outlet_id }));
+      allTxs?.filter(t => new Date(t.created_at) >= oneYearAgo).forEach(t => historyCombined.push({ id: t.id, date: t.created_at, category: 'transactions', title: `${t.receipt_number || 'TRX'} - ${t.customer_name}`, desc: `${t.service_type} (${t.order_type || 'Offline'})`, amount: t.amount, outlet: t.outlet_id, rawData: t }));
       allMems?.filter(m => new Date(m.created_at) >= oneYearAgo).forEach(m => historyCombined.push({ id: m.id, date: m.created_at, category: 'members', title: `Member ${m.package_name}`, desc: `No. WA: ${m.customer_phone} (${m.order_type || 'Offline'})`, amount: m.price, outlet: m.outlet_id }));
       allExps?.filter(e => new Date(e.created_at) >= oneYearAgo).forEach(e => historyCombined.push({ id: e.id, date: e.created_at, category: 'expenses', title: `Pengeluaran: ${e.category}`, desc: e.description || '-', amount: -Number(e.amount), outlet: e.outlet_id }));
 
@@ -307,7 +314,7 @@ setDeleteRequests(delData);
       filteredTxs.forEach((t) => { 
         const amt = Number(t.amount) || 0; inc += amt;
         if (t.order_type === 'Online') onlineInc += amt; else offlineInc += amt;
-        combinedData.push({ date: t.created_at, type: 'Income', category: 'Laundry', desc: `${t.service_type} (${t.customer_name})`, amount: amt }); 
+        combinedData.push({ date: t.created_at, type: 'Income', category: 'Laundry', desc: `${t.service_type} (${t.customer_name})`, amount: amt, rawData: t }); 
       });
 
       filteredMems.forEach((m) => { 
@@ -600,6 +607,17 @@ setDeleteRequests(delData);
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-3 md:p-8">
       <div className="max-w-6xl mx-auto space-y-4 md:space-y-6">
+        {selectedTxDetail && (
+          <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setSelectedTxDetail(null)}>
+            <div className="bg-white rounded-2xl p-4 max-w-md w-full max-h-[85vh] overflow-y-auto shadow-xl" onClick={(e) => e.stopPropagation()}>
+              <div className="flex justify-between items-center mb-3">
+                <p className="text-xs font-black text-slate-900">{selectedTxDetail.receipt_number || 'Detail transaksi'}</p>
+                <button onClick={() => setSelectedTxDetail(null)} className="text-xs font-bold text-slate-400">Tutup</button>
+              </div>
+              <StageTimeline logs={txWorkLogs} transaction={selectedTxDetail} title="Tim Crew & Waktu Pengerjaan" />
+            </div>
+          </div>
+        )}
         
         {/* NAV HEADER */}
         <div className="bg-white border border-slate-200 p-4 md:p-6 rounded-2xl shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -614,8 +632,9 @@ setDeleteRequests(delData);
           <button onClick={() => setActiveTab('history')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'history' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>📦 History 1 Thn</button>
           <button onClick={() => setActiveTab('loans')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'loans' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>💸 Kasbon Crew</button>
 
-          {currentUserRole === 'owner' && (
+          {['owner', 'supervisor'].includes(currentUserRole) && (
             <>
+              <Link href="/owner/kpi-settings" className="whitespace-nowrap bg-amber-50 border border-amber-200 text-amber-800 hover:bg-amber-500 hover:text-white text-xs px-4 py-2 rounded-xl font-bold transition">🎯 KPI Settings</Link>
               <button onClick={() => setActiveTab('settings')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'settings' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>⚙️ Settings</button>
               <button onClick={() => setActiveTab('employees')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'employees' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>👥 Karyawan</button>
             </>
@@ -836,7 +855,11 @@ setDeleteRequests(delData);
                   </thead>
                   <tbody>
                     {tableData.map((row, idx) => (
-                      <tr key={idx} className="border-b border-slate-100">
+                      <tr
+                        key={idx}
+                        className={`border-b border-slate-100 ${row.rawData ? 'cursor-pointer hover:bg-indigo-50' : ''}`}
+                        onClick={() => row.rawData && setSelectedTxDetail(row.rawData)}
+                      >
                         <td className="p-3 md:p-4 text-slate-600 font-mono">{new Date(row.date).toLocaleString('id-ID')}</td>
                         <td className="p-3 md:p-4"><span className={`px-2 py-1 rounded text-[9px] md:text-[10px] font-bold ${row.type === 'Income' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{row.category}</span></td>
                         <td className="p-3 md:p-4 text-slate-800 font-medium">{row.desc}</td>
@@ -929,7 +952,11 @@ setDeleteRequests(delData);
                 </thead>
                 <tbody>
                   {filteredHistory.map((item, idx) => (
-                    <tr key={idx} className="border-b border-slate-100 hover:bg-slate-50">
+                    <tr
+                      key={idx}
+                      className={`border-b border-slate-100 ${item.rawData ? 'cursor-pointer hover:bg-indigo-50' : 'hover:bg-slate-50'}`}
+                      onClick={() => item.rawData && setSelectedTxDetail(item.rawData)}
+                    >
                       <td className="p-3 font-mono text-slate-500">{new Date(item.date).toLocaleString('id-ID')}</td>
                       <td className="p-3"><span className={`px-2 py-0.5 rounded text-[9px] font-bold ${item.category === 'transactions' ? 'bg-emerald-100 text-emerald-700' : item.category === 'members' ? 'bg-purple-100 text-purple-700' : 'bg-rose-100 text-rose-700'}`}>{item.category.toUpperCase()}</span></td>
                       <td className="p-3 font-bold text-slate-800">{item.title}</td>
@@ -1325,39 +1352,13 @@ setDeleteRequests(delData);
         </div>
       </div>
       {/* WIDGET TO-DO & SLA MANAGEMENT */}
-      <div className="bg-white border rounded-2xl p-4 md:p-6 space-y-4 shadow-sm mb-6">
-        <h4 className="font-bold text-xs md:text-sm text-slate-800 flex items-center gap-2">
-          📌 Tugas Instruktif Dari Head Management
-        </h4>
-        
-        {tasks.length === 0 ? (
-          <p className="text-xs text-slate-400 italic">Tidak ada tugas instruktif saat ini.</p>
-        ) : (
-          <div className="space-y-3">
-            {tasks.map((t: any) => (
-              <div key={t.id} className="border p-3.5 rounded-xl flex justify-between items-center bg-slate-50 hover:bg-slate-100 transition-all">
-                <div className="space-y-1">
-                  <p className="font-bold text-xs text-slate-800">{t.title}</p>
-                  <p className="text-[11px] text-slate-500">{t.description}</p>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="text-[9px] font-bold px-2 py-0.5 bg-rose-100 text-rose-700 rounded-md">
-                      SLA: {t.sla_hours} Jam | Penalti: -{t.kpi_penalty_points} Poin
-                    </span>
-                    <span className="text-[9px] text-slate-400">
-                      Batas Waktu: {new Date(t.due_date).toLocaleString('id-ID')}
-                    </span>
-                  </div>
-                </div>
-                <button
-                  onClick={() => handleCompleteTask(t.id)}
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-3 py-2 rounded-xl shadow transition-all whitespace-nowrap"
-                >
-                  ✓ Selesaikan
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+        <RoleTaskInbox role={currentUserRole || undefined} />
+        {['owner', 'supervisor'].includes(currentUserRole) && <HeadTaskDelegator />}
+      </div>
+      <KpiRoleMonitoring />
+      <div className="mb-6">
+        <RequisitionForm employeeName={currentUserName} role={currentUserRole} />
       </div>
       {activeTab === 'delete_requests' && (
               <div className="bg-white border rounded-2xl p-4 md:p-6 space-y-4">
@@ -1378,12 +1379,6 @@ setDeleteRequests(delData);
                 ))}
               </div>
             )}
-
-                        {/* TAB KPI MONITORING 7 ROLE — dinonaktifkan sementara
-            {activeTab === 'kpi' && (
-              <KpiRoleMonitoring />
-            )}
-            */}
 
           </>
         )}

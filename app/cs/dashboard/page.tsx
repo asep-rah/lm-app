@@ -3,6 +3,9 @@
 import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
+import RoleTaskInbox from '@/components/RoleTaskInbox';
+import { getStaffSession } from '@/lib/staffSession';
+import { insertChatMessage, threadKeyOf } from '@/lib/csChat';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -57,26 +60,46 @@ export default function CSDashboard() {
     const phone = typeof activeChatOrder === 'object' ? activeChatOrder?.customer_phone : activeChatOrder;
     const orderId = typeof activeChatOrder === 'object' ? activeChatOrder?.id : null;
     const msgText = inputCsChat.trim();
+    const agent = getStaffSession();
+    const key = threadKeyOf({ customer_phone: phone, order_id: orderId });
+    const { data: sess } = await supabase
+      .from('support_chat_sessions')
+      .select('is_claimed, assigned_to_agent_id, assigned_to_agent_name')
+      .eq('thread_key', key)
+      .maybeSingle();
+    if (
+      sess?.is_claimed &&
+      sess.assigned_to_agent_id &&
+      sess.assigned_to_agent_id !== agent.id &&
+      sess.assigned_to_agent_name !== agent.name
+    ) {
+      alert(`Chat ini dipegang oleh ${sess.assigned_to_agent_name}. Balas dari Command Center setelah handover.`);
+      return;
+    }
+
     setInputCsChat('');
-
-    const newMsg = {
-      id: Date.now().toString(),
-      order_id: orderId || null,
-      customer_phone: phone || null,
-      sender_type: 'cs',
-      message: msgText,
-      created_at: new Date().toISOString()
-    };
-    setChatMessages((prev) => [...prev, newMsg]);
-
-    const { error } = await supabase.from('support_chats').insert([
+    setChatMessages((prev) => [
+      ...prev,
       {
+        id: Date.now().toString(),
         order_id: orderId || null,
         customer_phone: phone || null,
         sender_type: 'cs',
         message: msgText,
+        created_at: new Date().toISOString()
       }
     ]);
+
+    const { error } = await insertChatMessage({
+      order_id: orderId || null,
+      customer_phone: phone || null,
+      sender_type: 'cs',
+      message: msgText,
+      sender_name: agent.name,
+      assigned_to_agent_id: agent.id,
+      assigned_to_agent_name: agent.name,
+      is_claimed: true
+    });
 
     if (error) {
       console.error('Error kirim CS chat:', error.message);
@@ -264,6 +287,9 @@ export default function CSDashboard() {
             <p className="text-blue-200 mt-1 text-xs md:text-sm">Pintu Utama Komunikasi, Instruksi Driver, Konfirmasi Tagihan, & Follow-up</p>
           </div>
           <div className="flex items-center gap-2">
+            <Link href="/cs" className="bg-sky-500 hover:bg-sky-600 text-white font-bold py-2.5 px-4 rounded-xl text-xs shadow-sm transition">
+              Command Center
+            </Link>
             <Link href="/admin/pickups" className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs shadow-md transition">
               🛵 Monitor Penjemputan
             </Link>
@@ -280,7 +306,7 @@ export default function CSDashboard() {
                   .limit(1);
 
                 if (data && data.length > 0) {
-                  loadCsChats({ customer_phone: data[0].customer_phone, order_number: 'Chat Umum' });
+                  window.location.href = '/cs';
                 } else {
                   alert('Belum ada chat umum masuk.');
                 }
@@ -291,6 +317,8 @@ export default function CSDashboard() {
             </button>
           </div>
         </div>
+
+        <RoleTaskInbox role="cs" />
 
         {/* FILTER BAR */}
         <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-col md:flex-row gap-3 justify-between items-center">

@@ -1,12 +1,7 @@
 'use client';
 
 import React, { useState, useMemo } from 'react';
-import { createClient } from '@supabase/supabase-js';
-
-const supabase = createClient(
-  'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
-  'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs'
-);
+import { createPickupRoleTasks, insertPickupOrder } from '@/lib/pickupDispatch';
 
 // Database Layanan Satuan Reguler
 const SATUAN_ITEMS = [
@@ -105,25 +100,29 @@ export default function PickupOrderForm() {
     setLoading(true);
 
     try {
-      const orderData = {
-        order_type: 'ONLINE',
+      const { data: inserted, error } = await insertPickupOrder({
         customer_name: customerName,
+        customer_phone: phone,
         phone_number: phone,
+        address,
         pickup_address: address,
-        category: category,
-        service_detail: category === 'KILOAN' 
+        service_type: category === 'KILOAN'
           ? `${kiloanPackage} (~${estimatedKg} kg)`
-          : JSON.stringify(selectedSatuanItems),
-        speed_type: speed,
-        estimated_completion: maxEstimateDays,
-        estimated_subtotal: totalEstimasiLayanan,
-        status: 'PENDING_ONLINE_POS',
-        created_at: new Date().toISOString()
-      };
-
-      const { error } = await supabase.from('pickup_orders').insert([orderData]);
+          : 'Satuan',
+        notes: category === 'SATUAN' ? JSON.stringify(selectedSatuanItems) : kiloanPackage,
+        estimated_weight: category === 'KILOAN' ? estimatedKg : 0,
+        status: 'Baru Masuk'
+      });
 
       if (error) throw error;
+      const pickupId = inserted?.[0]?.id ? String(inserted[0].id) : '';
+      if (pickupId) {
+        await createPickupRoleTasks({
+          id: pickupId,
+          customer_name: customerName,
+          customer_phone: phone
+        });
+      }
 
       alert('🚀 Order Online Berhasil Terkirim ke POS Order Online!');
       setCustomerName('');

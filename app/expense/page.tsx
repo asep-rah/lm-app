@@ -3,6 +3,10 @@
 import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
+import RequisitionForm from '@/components/RequisitionForm';
+import RoleTaskInbox from '@/components/RoleTaskInbox';
+import { getStaffSession, isAdminOpsRole, isOwnerRole } from '@/lib/staffSession';
+import { toast } from '@/lib/toast';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -10,15 +14,22 @@ const supabase = createClient(
 );
 
 export default function ExpensePage() {
+  const [session, setSession] = useState({ name: 'Karyawan', role: 'kasir', outletId: '' });
+  const canDirect = isOwnerRole(session.role) || isAdminOpsRole(session.role);
+
   const [outlets, setOutlets] = useState<any[]>([]);
   const [selectedOutlet, setSelectedOutlet] = useState('');
   const [category, setCategory] = useState('Detergen & Parfum');
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [successMsg, setSuccessMsg] = useState(false);
+  const [showDirect, setShowDirect] = useState(false);
 
   useEffect(() => {
+    const s = getStaffSession();
+    setSession(s);
+    if (s.outletId) setSelectedOutlet(s.outletId);
+
     async function loadOutlets() {
       const { data } = await supabase.from('outlets').select('*');
       if (data) setOutlets(data);
@@ -37,105 +48,108 @@ export default function ExpensePage() {
         category: category,
         amount: Number(amount),
         description: description,
-      },
+        created_at: new Date().toISOString()
+      }
     ]);
-
     if (error) {
-      alert('Gagal simpan pengeluaran: ' + error.message);
-    } else {
-      setAmount('');
-      setDescription('');
-      setSuccessMsg(true);
-      setTimeout(() => setSuccessMsg(false), 3000);
+      const retry = await supabase.from('expenses').insert([
+        { outlet_id: selectedOutlet, category, amount: Number(amount), description }
+      ]);
+      if (retry.error) {
+        toast('Gagal simpan pengeluaran: ' + retry.error.message, 'err');
+        setIsSubmitting(false);
+        return;
+      }
     }
+    setAmount('');
+    setDescription('');
+    toast('Pengeluaran langsung tercatat di laporan pusat', 'ok');
     setIsSubmitting(false);
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-white p-4 md:p-8 flex flex-col items-center">
-      {/* HEADER PENGELUARAN */}
-      <div className="w-full max-w-xl flex justify-between items-center mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-rose-400">💸 Input Pengeluaran Outlet</h1>
-          <p className="text-xs text-slate-400">Pencatatan Beban Operasional Cabang</p>
+    <div className="min-h-screen bg-slate-50 text-slate-900 p-4 md:p-8">
+      <div className="w-full max-w-6xl mx-auto space-y-5">
+        <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-sm flex flex-col md:flex-row justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-sky-600">Admin Ops · CMS</p>
+            <h1 className="text-2xl font-black text-slate-900">Purchase Requisition</h1>
+            <p className="text-xs text-slate-400 mt-0.5">Pending → Approved → Paid (otomatis ke expenses)</p>
+          </div>
+          <Link href="/owner" className="self-start text-xs text-slate-600 hover:text-slate-900 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200">
+            ← Dashboard
+          </Link>
         </div>
-        <Link href="/" className="text-xs text-slate-400 hover:text-white bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-700">
-          ← Ke Dashboard
-        </Link>
-      </div>
 
-      {/* FORM PENGELUARAN */}
-      <div className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
-        {successMsg && (
-          <div className="mb-4 p-3 bg-rose-500/20 border border-rose-500 text-rose-300 rounded-xl text-xs text-center font-bold">
-            ✅ Catatan Pengeluaran Berhasil Disimpan & Masuk ke Laporan Pusat!
+        <RoleTaskInbox role={session.role} />
+        <RequisitionForm
+          selectedOutlet={selectedOutlet || session.outletId}
+          employeeName={session.name}
+          role={session.role}
+        />
+
+        {canDirect && (
+          <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-sm">
+            <button
+              type="button"
+              onClick={() => setShowDirect(!showDirect)}
+              className="w-full text-left text-xs font-bold text-slate-600"
+            >
+              {showDirect ? '▾' : '▸'} Catat pengeluaran langsung (tanpa alur PR)
+            </button>
+
+            {showDirect && (
+              <form onSubmit={handleSubmit} className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                <select
+                  value={selectedOutlet}
+                  onChange={(e) => setSelectedOutlet(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-semibold"
+                  required
+                >
+                  <option value="">-- Pilih Outlet --</option>
+                  {outlets.map((o) => (
+                    <option key={o.id} value={o.id}>{o.name} ({o.city})</option>
+                  ))}
+                </select>
+                <select
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm"
+                >
+                  <option value="Detergen & Parfum">Detergen & Parfum</option>
+                  <option value="Tagihan Listrik & Air">Tagihan Listrik & Air</option>
+                  <option value="Sewa Tempat">Sewa Tempat</option>
+                  <option value="Gaji Karyawan">Gaji Karyawan</option>
+                  <option value="Maintenance & Servis">Maintenance & Servis</option>
+                  <option value="Lain-lain">Lain-lain</option>
+                </select>
+                <input
+                  type="number"
+                  placeholder="Nominal (Rp)"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-lg font-bold text-slate-900"
+                  required
+                />
+                <input
+                  type="text"
+                  placeholder="Deskripsi / bukti"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm"
+                  required
+                />
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="md:col-span-2 bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 rounded-xl text-sm"
+                >
+                  {isSubmitting ? 'Menyimpan…' : 'Simpan pengeluaran langsung'}
+                </button>
+              </form>
+            )}
           </div>
         )}
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1">Pilih Cabang Outlet</label>
-            <select
-              value={selectedOutlet}
-              onChange={(e) => setSelectedOutlet(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm font-semibold text-white focus:outline-none focus:border-rose-500"
-              required
-            >
-              <option value="">-- Pilih Outlet --</option>
-              {outlets.map((o) => (
-                <option key={o.id} value={o.id}>{o.name} ({o.city})</option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1">Kategori Beban / OPEX</label>
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-rose-500"
-            >
-              <option value="Detergen & Parfum">Detergen & Parfum</option>
-              <option value="Tagihan Listrik & Air">Tagihan Listrik & Air</option>
-              <option value="Sewa Tempat">Sewa Tempat</option>
-              <option value="Gaji Karyawan">Gaji Karyawan</option>
-              <option value="Maintenance & Servis">Maintenance & Servis</option>
-              <option value="Lain-lain">Lain-lain</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1">Nominal Biaya (Rp)</label>
-            <input
-              type="number"
-              placeholder="Masukkan nominal, contoh: 150000"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-lg font-bold text-rose-400 focus:outline-none focus:border-rose-500"
-              required
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1">Deskripsi / Catatan Bukti</label>
-            <input
-              type="text"
-              placeholder="Contoh: Beli parfum aroma lavender 5L di agen"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-rose-500"
-              required
-            />
-          </div>
-
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            className="w-full mt-6 bg-rose-600 hover:bg-rose-500 text-white font-bold py-3.5 rounded-xl text-sm transition shadow-lg shadow-rose-600/20"
-          >
-            {isSubmitting ? 'Proses Simpan...' : '💸 SIMPAN PENGELUARAN'}
-          </button>
-        </form>
       </div>
     </div>
   );

@@ -1,43 +1,105 @@
 'use client';
 
-import React from 'react';
+import { useEffect, useState } from 'react';
+import Link from 'next/link';
+import { fetchRoleKpis, type KpiCard } from '@/lib/kpiMetrics';
+import { currentMonthYear } from '@/lib/kpiCatalog';
+import Skeleton from '@/components/ui/Skeleton';
+import StatusBadge from '@/components/ui/StatusBadge';
+
+const toneOf = (score: number) =>
+  score >= 90 ? 'emerald' : score >= 70 ? 'amber' : 'rose';
 
 export default function KpiRoleMonitoring() {
-  const kpis = [
-    { role: '💰 Finance', val: 'Rp 0 Selisih', status: '100% Match', desc: 'Rekonsiliasi Kas POS & Bank', color: 'border-emerald-500/30 text-emerald-400 bg-emerald-500/10' },
-    { role: '📦 Admin Ops', val: '1.2 Jam', status: 'SLA 98%', desc: 'Rata-rata Respon Restock', color: 'border-blue-500/30 text-blue-400 bg-blue-500/10' },
-    { role: '🛡️ Supervisor', val: '94/100 QC', status: 'Audit Clear', desc: 'Kepatuhan SOP Harian', color: 'border-purple-500/30 text-purple-400 bg-purple-500/10' },
-    { role: '🤝 Owner Relation', val: '100% Response', status: 'Active', desc: 'Update Investor & Mitra', color: 'border-indigo-500/30 text-indigo-400 bg-indigo-500/10' },
-    { role: '🚀 Digital Mktg', val: '320 Vouchers', status: 'ROI 3.4x', desc: 'Redeem Promo Ads POS', color: 'border-amber-500/30 text-amber-400 bg-amber-500/10' },
-    { role: '🛒 Kasir / POS', val: '142 Transaksi', status: '98% Speed', desc: 'Avg. Speed: 1.5 Menit', color: 'border-emerald-500/30 text-emerald-400 bg-emerald-500/10' },
-    { role: '🛵 Kurir & CS', val: '4.9 / 5.0 Rating', status: 'SLA 95%', desc: '38/38 Paket On-Time', color: 'border-teal-500/30 text-teal-400 bg-teal-500/10' },
-  ];
+  const [cards, setCards] = useState<KpiCard[]>([]);
+  const [healthyCount, setHealthyCount] = useState(7);
+  const [loading, setLoading] = useState(true);
+  const [lastSynced, setLastSynced] = useState('');
+  const [monthYear, setMonthYear] = useState(currentMonthYear());
+  const [fromConfig, setFromConfig] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await fetchRoleKpis(monthYear);
+      setCards(res.cards);
+      setHealthyCount(res.healthyCount);
+      setFromConfig(res.fromConfig);
+      setLastSynced(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }));
+    } catch (err) {
+      console.error('KPI fetch gagal:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 120_000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [monthYear]);
+
+  const allHealthy = healthyCount === cards.length && cards.length > 0;
 
   return (
-    <div className="my-6 p-6 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl">
-      <div className="flex justify-between items-center mb-6">
+    <div className="bg-white border border-slate-200/80 rounded-2xl p-5 md:p-6 shadow-sm hover:shadow-md transition-all">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-5 gap-3">
         <div>
-          <h3 className="text-xl font-black text-white flex items-center gap-2">
-            <span>📊</span> Monitoring KPI 7 Role Internal
-          </h3>
-          <p className="text-xs text-slate-400 mt-1">Performa realtime operational & execution team</p>
+          <h3 className="text-lg font-black text-slate-900">Monitoring KPI 7 Role</h3>
+          <p className="text-xs text-slate-400 mt-1">
+            Skor = realisasi vs target {monthYear}
+            {fromConfig ? ' · kpi_configs' : ' · katalog default'}
+            {lastSynced ? ` · sync ${lastSynced}` : ''}
+          </p>
         </div>
-        <span className="px-3 py-1 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full text-xs font-bold">
-          ● System Healthy
-        </span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <input
+            type="month"
+            value={monthYear}
+            onChange={(e) => setMonthYear(e.target.value)}
+            className="bg-slate-50 border border-slate-200 text-slate-700 text-[10px] rounded-lg px-2 py-1.5"
+          />
+          <Link
+            href="/owner/kpi-settings"
+            className="text-[10px] font-bold px-3 py-1.5 rounded-lg bg-sky-500 text-white hover:bg-sky-600"
+          >
+            Atur Target
+          </Link>
+          <StatusBadge tone={loading ? 'slate' : allHealthy ? 'emerald' : 'amber'}>
+            {loading ? 'Memuat…' : allHealthy ? 'On Target' : `${healthyCount}/${cards.length} Role`}
+          </StatusBadge>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {kpis.map((item, idx) => (
-          <div key={idx} className="bg-slate-800/60 p-4 rounded-xl border border-slate-700/50 hover:border-slate-600 transition">
-            <div className="flex justify-between items-center mb-2">
-              <span className="font-bold text-slate-200 text-sm">{item.role}</span>
-              <span className={`text-[10px] px-2 py-0.5 rounded font-bold border ${item.color}`}>
-                {item.status}
-              </span>
-            </div>
-            <p className="text-lg font-black text-white mt-1">{item.val}</p>
-            <p className="text-xs text-slate-400 mt-1">{item.desc}</p>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+        {(cards.length ? cards : Array.from({ length: 7 })).map((item: any, idx) => (
+          <div
+            key={item?.roleKey || idx}
+            className="bg-slate-50/80 p-4 rounded-xl border border-slate-200/80 hover:shadow-sm transition-all"
+          >
+            {loading && !cards.length ? (
+              <div className="space-y-2">
+                <Skeleton className="h-3 w-2/3" />
+                <Skeleton className="h-6 w-1/2" />
+                <Skeleton className="h-3 w-full" />
+              </div>
+            ) : (
+              <>
+                <div className="flex justify-between items-center mb-2 gap-2">
+                  <span className="font-bold text-slate-900 text-sm truncate">{item.role}</span>
+                  <StatusBadge tone={toneOf(item.score) as any}>{item.score}%</StatusBadge>
+                </div>
+                <p className="text-base font-black text-slate-900 mt-1">{item.val}</p>
+                <div className="h-1.5 bg-slate-200 rounded-full mt-2 overflow-hidden">
+                  <div
+                    className="h-full bg-emerald-500 rounded-full"
+                    style={{ width: `${Math.min(100, item.score || 0)}%` }}
+                  />
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1 line-clamp-2">{item.desc}</p>
+              </>
+            )}
           </div>
         ))}
       </div>

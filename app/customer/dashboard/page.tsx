@@ -3,6 +3,9 @@
 import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import StageTimeline from '@/components/StageTimeline';
+import { insertChatMessage, isStaffOnlyMessage } from '@/lib/csChat';
+import { mapDbPromo, mapSettingsPromo, promoDiscountRp, promoIsClaimable, type CatalogPromo } from '@/lib/promoCatalog';
+import { createPickupRoleTasks, insertPickupOrder } from '@/lib/pickupDispatch';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -182,14 +185,12 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       };
       setChatMessages((prev) => [...prev, newMsg]);
 
-      const { error } = await supabase.from('support_chats').insert([
-        {
-          order_id: validOrderId,
-          customer_phone: customerPhone || null,
-          sender_type: 'customer',
-          message: messageText,
-        }
-      ]);
+      const { error } = await insertChatMessage({
+        order_id: validOrderId,
+        customer_phone: customerPhone || null,
+        sender_type: 'customer',
+        message: messageText
+      });
 
       if (error) {
         console.error('Error insert chat Supabase:', error.message);
@@ -249,7 +250,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
     }
 
     const { data } = await query.order('created_at', { ascending: true });
-    if (data) setChatMessages(data);
+    if (data) setChatMessages(data.filter((m: any) => !isStaffOnlyMessage(m)));
   };
 
   useEffect(() => {
@@ -267,7 +268,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
             const isMatchingOrder = activeChatOrderId !== 'GENERAL_CS' && newMsg.order_id === activeChatOrderId;
             const isMatchingPhone = cleanPhone(newMsg.customer_phone) === cleanPhone(customerPhone);
 
-            if (isMatchingOrder || isMatchingPhone) {
+            if ((isMatchingOrder || isMatchingPhone) && !isStaffOnlyMessage(newMsg)) {
               setChatMessages((prev) => {
                 if (prev.some((m) => m.id === newMsg.id)) return prev;
                 return [...prev, newMsg];
@@ -338,7 +339,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
     }
     const { data, error } = await query.order('created_at', { ascending: true });
     if (!error && data) {
-      setChatMessages(data);
+      setChatMessages(data.filter((m: any) => !isStaffOnlyMessage(m)));
     }
   };
 
@@ -357,11 +358,10 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
         setDynamicServices(svcs);
         setOutletOverrides(safeParse(dbSettings.outlet_overrides, {}));
 
-        const promos = safeParse(dbSettings.promos_data, [
-          { id: 'ONGKIRFREE', title: '🚚 Gratis Ongkir Antar-Jemput', desc: 'Potongan ongkir hingga Rp 15.000', type: 'ongkir', value: 15000, minTx: 30000 },
-          { id: 'DISC10', title: '🏷️ Diskon 10% Spesial Online', desc: 'Potongan 10% untuk transaksi penjemputan', type: 'percent', value: 10, minTx: 40000 }
-        ]);
-        setAvailablePromos(promos);
+        const { data: dbPromos } = await supabase.from('promos').select('*');
+        const fromTable = (dbPromos || []).map((p: any) => mapDbPromo(p)).filter((p: CatalogPromo) => p.is_active);
+        const fromSettings = safeParse(dbSettings.promos_data, []).map((p: any, i: number) => mapSettingsPromo(p, i));
+        setAvailablePromos(fromTable.length ? fromTable : fromSettings);
 
         const defaultKiloan = svcs.find((s: any) => s.type !== 'pcs') || svcs[0];
         const defaultSatuan = svcs.find((s: any) => s.type === 'pcs') || svcs[0];
@@ -605,22 +605,17 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
   const rawOngkir = deliveryFee || 0;
   const rawSubtotal = kiloanSubtotal + satuanSubtotal;
 
-  let promoDiscountVal = 0;
-  if (claimedPromo) {
-    if (claimedPromo.type === 'ongkir') {
-      promoDiscountVal = Math.min(rawOngkir, Number(claimedPromo.value) || 0);
-    } else if (claimedPromo.type === 'percent') {
-      promoDiscountVal = Math.round((rawSubtotal * (Number(claimedPromo.value) || 0)) / 100);
-    } else if (claimedPromo.type === 'nominal') {
-      promoDiscountVal = Number(claimedPromo.value) || 0;
-    }
-  }
+  const promoDiscountVal = promoDiscountRp(claimedPromo, rawSubtotal, rawOngkir);
 
   const finalOngkir = Math.max(0, rawOngkir - (claimedPromo?.type === 'ongkir' ? promoDiscountVal : 0));
-  const grandTotalEstimate = Math.max(0, rawSubtotal + rawOngkir - promoDiscountVal);
+  const grandTotalEstimate = Math.max(0, Math.round(rawSubtotal + rawOngkir - promoDiscountVal));
 
-  const handleClaimPromo = (promo: any) => {
-    if (rawSubtotal + rawOngkir < (Number(promo.minTx) || 0)) {
+  const handleClaimPromo = (promo: CatalogPromo) => {
+    const basket = rawSubtotal + rawOngkir;
+    if (!promoIsClaimable(promo, basket)) {
+      if (promo.max_quota > 0 && promo.used_count >= promo.max_quota) {
+        return alert('⚠️ Kuota voucher ini sudah habis.');
+      }
       return alert(`⚠️ Minimal transaksi untuk promo ini adalah Rp ${Number(promo.minTx || 0).toLocaleString('id-ID')}`);
     }
     setClaimedPromo(promo);
@@ -702,9 +697,19 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       created_at: nowIso
     };
 
-    const { data: insertedData, error } = await supabase.from('pickup_orders').insert([payload]).select();
+    const { data: insertedData, error } = await insertPickupOrder(payload);
 
     if (!error && insertedData && insertedData.length > 0) {
+      await createPickupRoleTasks({
+        id: insertedData[0].id,
+        customer_name: payload.customer_name as string,
+        customer_phone: normPhone,
+        outlet_id: selectedOutlet
+      });
+      if (claimedPromo?.id && !String(claimedPromo.id).startsWith('settings-')) {
+        const nextUsed = (Number(claimedPromo.used_count) || 0) + 1;
+        await supabase.from('promos').update({ used_count: nextUsed }).eq('id', claimedPromo.id);
+      }
       // Simpan data order terbaru & buka Modal Live Tracking Success
       setLatestCreatedOrder(insertedData[0]);
       setShowOrderSuccessModal(true);

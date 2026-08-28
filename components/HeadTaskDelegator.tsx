@@ -1,5 +1,8 @@
+'use client';
+
 import React, { useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
+import { getStaffSession } from '@/lib/staffSession';
 
 export default function HeadTaskDelegator() {
   const [title, setTitle] = useState('');
@@ -15,16 +18,26 @@ export default function HeadTaskDelegator() {
 
     const dueDate = new Date();
     dueDate.setHours(dueDate.getHours() + Number(slaHours));
+    const session = getStaffSession();
 
-    const { error } = await supabase.from('system_tasks').insert([{
+    const payload: Record<string, any> = {
       title,
       description,
       assigned_to_role: role,
       sla_hours: Number(slaHours),
       due_date: dueDate.toISOString(),
       kpi_penalty_points: Number(penaltyPoints),
-      created_by_name: 'Head of Laundry Management'
-    }]);
+      created_by_name: session.name || 'Head of Laundry Management',
+      status: 'pending'
+    };
+
+    let { error } = await supabase.from('system_tasks').insert([payload]);
+    if (error) {
+      const withoutName = { ...payload };
+      delete withoutName.created_by_name;
+      const retry = await supabase.from('system_tasks').insert([withoutName]);
+      error = retry.error;
+    }
 
     if (!error) {
       alert('🚀 Task & SLA berhasil dikirim ke Dashboard ' + role.toUpperCase());
@@ -62,12 +75,15 @@ export default function HeadTaskDelegator() {
               onChange={(e) => setRole(e.target.value)}
               className="w-full border rounded-xl p-2.5 text-xs bg-white"
             >
-              <option value="supervisor">Supervisor Operasional</option>
-              <option value="head_cs">Head Customer Service</option>
-              <option value="head_finance">Head Finance & PNL</option>
-              <option value="quality_service">Quality Service (QS)</option>
-              <option value="k3">K3 & Maintenance</option>
-              <option value="digital_marketing">Digital Marketing</option>
+              <option value="kasir">🛒 Kasir / POS</option>
+              <option value="cs">🛵 Kurir & CS</option>
+              <option value="driver">🛵 Kurir (Driver)</option>
+              <option value="courier">🛵 Kurir (Courier)</option>
+              <option value="supervisor">🛡️ Supervisor Operasional</option>
+              <option value="admin_ops">📦 Admin Ops</option>
+              <option value="digital_marketing">🚀 Digital Marketing</option>
+              <option value="finance">💰 Finance</option>
+              <option value="owner_relation">🤝 Owner Relation</option>
             </select>
           </div>
           <div>

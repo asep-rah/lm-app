@@ -7,6 +7,9 @@ import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
 import StageTimeline from '@/components/StageTimeline';
 import { PAID_STAGE_KEYS, stageKeyOf } from '@/lib/stageTimeline';
+import { createSupervisorIssueTask } from '@/lib/createOutletIssueTask';
+import RequisitionForm from '@/components/RequisitionForm';
+import RoleTaskInbox from '@/components/RoleTaskInbox';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -488,6 +491,8 @@ const handleReportIncident = async (e: React.FormEvent) => {
 
   // STATE KERANJANG MULTI-ITEM BARU
   const [cartItems, setCartItems] = useState<Array<{ id: string; name: string; type: 'kg' | 'pcs'; basePrice: number; price: number; qty: number; note: string }>>([]);
+  const [serviceQuery, setServiceQuery] = useState('');
+  const [serviceCat, setServiceCat] = useState<'all' | 'kg' | 'pcs'>('all');
   const [selectedServiceInput, setSelectedServiceInput] = useState('');
   const [inputQtyKg, setInputQtyKg] = useState('');
   const [inputQtyPcs, setInputQtyPcs] = useState('');
@@ -853,7 +858,7 @@ const handleSubmitIssue = async (e: React.FormEvent) => {
   if (!issueDescription.trim()) return alert('⚠️ Tuliskan deskripsi kendala!');
 
   setIsSubmittingIssue(true);
-  const { error } = await supabase.from('outlet_issues').insert([
+  const { data: inserted, error } = await supabase.from('outlet_issues').insert([
     {
       outlet_id: selectedOutlet || null,
       reporter_name: employeeName || 'Kasir Outlet',
@@ -862,14 +867,21 @@ const handleSubmitIssue = async (e: React.FormEvent) => {
       description: issueDescription.trim(),
       status: 'Perlu Penanganan'
     }
-  ]);
+  ]).select('id').single();
 
-  if (!error) {
-    alert('✅ Laporan kendala berhasil dikirim ke To-Do List Supervisor!');
+  if (!error && inserted?.id) {
+    await createSupervisorIssueTask({
+      id: inserted.id,
+      category: issueCategory,
+      description: issueDescription.trim(),
+      reporter_name: employeeName || 'Kasir Outlet',
+      urgency: issueUrgency
+    });
+    alert('✅ Laporan kendala terkirim. Tugas SLA Supervisor otomatis dibuat.');
     setIssueDescription('');
     setShowIssueModal(false);
   } else {
-    alert('❌ Gagal mengirim laporan: ' + error.message);
+    alert('❌ Gagal mengirim laporan: ' + (error?.message || 'Koneksi bermasalah'));
   }
   setIsSubmittingIssue(false);
 };
@@ -2014,20 +2026,19 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
         </div>
       )}
 
-<div className="print:hidden min-h-screen bg-slate-950 text-slate-100 p-3 md:p-6 pb-24 md:pb-8 font-sans">
-      {/* TOP HEADER GLASSMORPHISM (ANDROID & MOBILE FRIENDLY) */}
-      <div className="w-full max-w-6xl mx-auto bg-slate-900/90 border border-slate-800 rounded-3xl p-4 md:p-5 mb-6 backdrop-blur-xl shadow-2xl flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4">
+<div className="print:hidden min-h-screen bg-slate-50 text-slate-900 p-3 md:p-6 pb-24 md:pb-8 font-sans">
+      <div className="w-full max-w-7xl mx-auto bg-white border border-slate-200/80 rounded-2xl p-4 md:p-5 mb-5 shadow-sm hover:shadow-md transition-all flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4">
         <div className="flex items-center gap-3">
-          <div className="w-12 h-12 bg-gradient-to-tr from-emerald-500 to-teal-400 rounded-2xl flex items-center justify-center text-2xl shadow-lg shadow-emerald-500/20 shrink-0">
+          <div className="w-11 h-11 bg-emerald-500 rounded-2xl flex items-center justify-center text-xl text-white shadow-sm shrink-0">
             🛒
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-lg md:text-xl font-black tracking-tight text-white">Portal Kasir POS</h1>
-              <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[9px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider">Active</span>
+              <h1 className="text-lg md:text-xl font-black tracking-tight text-slate-900">Kasir POS</h1>
+              <span className="bg-emerald-50 text-emerald-700 text-[9px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider">Live</span>
             </div>
             <p className="text-xs text-slate-400 font-medium mt-0.5">
-              Kasir: <span className="text-indigo-400 font-bold">{employeeName || 'Kasir'}</span> (@{employeeUsername})
+              {employeeName || 'Kasir'} <span className="text-slate-500">@{employeeUsername}</span>
             </p>
           </div>
         </div>
@@ -2037,7 +2048,7 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
             <select 
               value={selectedOutlet} 
               onChange={(e) => handleOutletChange(e.target.value)} 
-              className="flex-1 md:flex-initial bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded-2xl px-3 py-2.5 font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              className="flex-1 md:flex-initial bg-slate-50 border border-slate-200 text-slate-800 text-xs rounded-xl px-3 py-2.5 font-bold focus:outline-none focus:ring-2 focus:ring-sky-500"
             >
               {outletsList.map((o) => (
                 <option key={o.id} value={o.id}>{o.name}</option>
@@ -2046,7 +2057,7 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
           )}
           <button 
             onClick={handleLogout} 
-            className="bg-rose-500/10 hover:bg-rose-600 border border-rose-500/30 text-rose-400 hover:text-white active:scale-95 text-xs font-bold px-4 py-2.5 rounded-2xl transition-all"
+            className="bg-rose-50 hover:bg-rose-500 border border-rose-200 text-rose-600 hover:text-white active:scale-95 text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
           >
             Keluar
           </button>
@@ -2054,7 +2065,7 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
       </div>
 
         {/* DESKTOP NAV BAR */}
-        <div className="hidden md:grid w-full max-w-xl grid-cols-7 gap-1 p-1.5 bg-white border rounded-xl mb-6 shadow-sm">
+        <div className="hidden md:grid w-full max-w-7xl mx-auto grid-cols-7 gap-1 p-1.5 bg-white border border-slate-200/80 rounded-xl mb-5 shadow-sm">
           <button onClick={() => setActiveTab('pos')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'pos' ? 'bg-emerald-600 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>🛒 POS</button>
           
           <Link href="/admin/pickups" className="py-2 rounded-lg text-[10px] font-bold text-center bg-blue-50 text-blue-800 border border-blue-200 hover:bg-blue-100 flex items-center justify-center gap-0.5 relative transition">
@@ -2096,7 +2107,7 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
           <button onClick={() => setActiveTab('performance')} className={`flex flex-col items-center flex-1 p-1 ${activeTab === 'performance' ? 'text-indigo-600' : 'text-slate-400'}`}><span className="text-xl">📊</span><span className="text-[9px] font-bold mt-1">Gaji</span></button>
         </div>
 
-        <div className="w-full max-w-xl bg-white border border-slate-200 rounded-2xl p-4 md:p-6 shadow-sm">
+        <div className="w-full max-w-7xl mx-auto bg-white border border-slate-200/80 rounded-2xl p-4 md:p-6 shadow-sm">
           {successMsg && (
             <div className="mb-4 p-3 bg-emerald-50 border border-emerald-200 rounded-xl">
               <p className="text-xs text-center font-bold text-emerald-700">{successMsg}</p>
@@ -2236,63 +2247,90 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
                 </select>
               </div>
 
-              {/* KOTAK INPUT ITEM / LAYANAN (DARK MODE GLASSMORPHISM) */}
-          <div className="bg-slate-900 border border-slate-800 p-4 rounded-3xl space-y-3 shadow-xl">
-            <div className="flex justify-between items-center pb-2 border-b border-slate-800">
-              <span className="text-xs font-black tracking-wider uppercase text-emerald-400">
-                ➕ Input Layanan & Items
+              <div className="lg:grid lg:grid-cols-12 lg:gap-5 lg:items-start">
+              <div className="lg:col-span-7 space-y-3">
+              {/* KOTAK INPUT ITEM / LAYANAN */}
+          <div className="bg-slate-50 border border-slate-200/80 p-4 rounded-2xl space-y-3">
+            <div className="flex justify-between items-center pb-2 border-b border-slate-200">
+              <span className="text-xs font-black tracking-wider uppercase text-slate-900">
+                Layanan
               </span>
-              <span className="text-[10px] font-bold text-teal-300 bg-teal-500/10 px-2.5 py-0.5 rounded-full border border-teal-500/30">
-                Bisa Multi-Item
+              <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full">
+                Multi-item
               </span>
             </div>
 
-            <div className="space-y-3">
-              <select
-                value={selectedServiceInput || serviceType}
-                onChange={(e) => {
-                  setSelectedServiceInput(e.target.value);
-                  setServiceType(e.target.value);
-                }}
-                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-xs font-bold rounded-2xl p-3 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              >
-                {/* Layanan dari penjemputan bisa tidak ada di daftar outlet ini.
-                    Tanpa option cadangan, dropdown tampil kosong walau state terisi. */}
-                {(() => {
-                  const current = selectedServiceInput || serviceType;
-                  const known = services.some(
-                    (s) => (s.name || '').trim().toLowerCase() === current.trim().toLowerCase()
-                  );
-                  return current && !known ? (
-                    <option value={current}>{current} (Dari Penjemputan)</option>
-                  ) : null;
-                })()}
-                {services.map((s, i) => (
-                  <option key={i} value={s.name}>
-                    {s.name} ({s.type === 'pcs' ? 'Satuan/Pcs' : 'Kiloan/Kg'})
-                  </option>
-                ))}
-                <option value="Bedcover Double">Bedcover Double (Satuan/Pcs)</option>
-                <option value="Bedcover Single">Bedcover Single (Satuan/Pcs)</option>
-                <option value="Sprei Single">Sprei Single (Satuan/Pcs)</option>
-                <option value="Jaket / Jas / Sepatu">Jaket / Jas / Sepatu (Satuan/Pcs)</option>
-              </select>
+            <input
+              type="search"
+              placeholder="Cari layanan…"
+              value={serviceQuery}
+              onChange={(e) => setServiceQuery(e.target.value)}
+              className="w-full bg-white border border-slate-200 text-slate-900 text-sm font-semibold rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-sky-500"
+            />
+            <div className="flex gap-1.5">
+              {(['all', 'kg', 'pcs'] as const).map((cat) => (
+                <button
+                  key={cat}
+                  type="button"
+                  onClick={() => setServiceCat(cat)}
+                  className={`px-3 py-1.5 rounded-lg text-[10px] font-bold ${
+                    serviceCat === cat ? 'bg-sky-500 text-white' : 'bg-white border border-slate-200 text-slate-600'
+                  }`}
+                >
+                  {cat === 'all' ? 'Semua' : cat === 'kg' ? 'Kiloan' : 'Satuan'}
+                </button>
+              ))}
+            </div>
 
-              <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-64 overflow-y-auto pr-1">
+              {services
+                .filter((s) => {
+                  const name = String(s.name || '');
+                  const q = serviceQuery.trim().toLowerCase();
+                  if (q && !name.toLowerCase().includes(q)) return false;
+                  if (serviceCat !== 'all' && String(s.type || 'kg') !== serviceCat) return false;
+                  return true;
+                })
+                .map((s, i) => {
+                  const selected = (selectedServiceInput || serviceType) === s.name;
+                  return (
+                    <button
+                      key={s.id || i}
+                      type="button"
+                      onClick={() => {
+                        setSelectedServiceInput(s.name);
+                        setServiceType(s.name);
+                      }}
+                      className={`min-h-[72px] text-left p-3 rounded-xl border shadow-sm hover:shadow-md transition-all ${
+                        selected
+                          ? 'border-sky-400 bg-sky-50 ring-2 ring-sky-200'
+                          : 'border-slate-200/80 bg-white'
+                      }`}
+                    >
+                      <p className="text-xs font-black text-slate-900 leading-tight">{s.name}</p>
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        {s.type === 'pcs' ? 'Satuan / Pcs' : 'Kiloan / Kg'}
+                      </p>
+                    </button>
+                  );
+                })}
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
                 <input
                   type="number"
                   step="0.1"
                   placeholder="Berat (Kg)"
                   value={inputQtyKg || weightKg}
                   onChange={(e) => setInputQtyKg(e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-xs font-bold rounded-2xl p-3 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full bg-white border border-slate-200 text-slate-900 text-sm font-bold rounded-xl p-3 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
                 />
                 <input
                   type="number"
                   placeholder="Jumlah (Pcs)"
                   value={inputQtyPcs || pcsCount}
                   onChange={(e) => setInputQtyPcs(e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-xs font-bold rounded-2xl p-3 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="w-full bg-white border border-slate-200 text-slate-900 text-sm font-bold rounded-xl p-3 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
                 />
               </div>
 
@@ -2301,24 +2339,29 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
                 placeholder="Catatan khusus item ini (misal: Kantong A / Kemeja Putih)"
                 value={inputItemNote}
                 onChange={(e) => setInputItemNote(e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-xs font-bold rounded-2xl p-3 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                className="w-full bg-white border border-slate-200 text-slate-900 text-xs font-bold rounded-xl p-3 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
               />
 
               <button
                 type="button"
                 onClick={handleAddToCart}
-                className="w-full bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 active:scale-95 text-white font-black py-3 rounded-2xl text-xs shadow-lg shadow-emerald-500/20 transition-all"
+                className="w-full bg-sky-500 hover:bg-sky-600 active:scale-[0.99] text-white font-black py-3.5 rounded-xl text-xs shadow-sm transition-all"
               >
-                ➕ TAMBAHKAN KE DAFTAR KERANJANG NOTA
+                Tambahkan ke Nota
               </button>
             </div>
-          </div>
-                {/* DAFTAR ITEM KERANJANG */}
-          {cartItems.length > 0 && (
-            <div className="space-y-1.5 pt-2 border-t border-slate-800">
-              <p className="text-[10px] font-bold text-slate-400 uppercase">
-                Daftar Item Dalam Nota Ini ({cartItems.length}):
-              </p>
+              </div>
+
+              <div className="lg:col-span-5 mt-4 lg:mt-0 lg:sticky lg:top-4 space-y-3">
+                <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-sm space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-black text-slate-900 uppercase">Nota</p>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${typeof navigator !== 'undefined' && navigator.onLine ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
+                      {typeof navigator !== 'undefined' && navigator.onLine ? 'Online · Printer siap' : 'Offline'}
+                    </span>
+                  </div>
+          {cartItems.length > 0 ? (
+            <div className="space-y-1.5">
               {cartItems.map((item, idx) => {
                 let durationMultiplier = 1.0;
                 if (duration.includes('Oneday') || duration.includes('1 Hari')) durationMultiplier = 1.5;
@@ -2329,20 +2372,20 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
                 const itemSubtotal = activeUnitPrice * item.qty;
 
                 return (
-                  <div key={idx} className="bg-slate-800/80 p-2.5 rounded-xl border border-slate-700 flex justify-between items-center text-xs shadow-sm">
+                  <div key={idx} className="bg-slate-50 p-2.5 rounded-xl border border-slate-200/80 flex justify-between items-center text-xs">
                     <div>
-                      <p className="font-bold text-slate-100">{item.name}</p>
+                      <p className="font-bold text-slate-900">{item.name}</p>
                       <p className="text-[10px] text-slate-400">
                         {item.qty} x Rp {activeUnitPrice.toLocaleString('id-ID')}
-                        {item.note && <span className="italic text-emerald-400 ml-1">({item.note})</span>}
+                        {item.note && <span className="italic text-emerald-600 ml-1">({item.note})</span>}
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="font-black text-emerald-400">Rp {itemSubtotal.toLocaleString('id-ID')}</span>
+                      <span className="font-black text-emerald-600">Rp {itemSubtotal.toLocaleString('id-ID')}</span>
                       <button
                         type="button"
                         onClick={() => setCartItems(cartItems.filter((_, i) => i !== idx))}
-                        className="text-rose-400 hover:text-rose-300 text-xs font-bold px-1.5 py-0.5 rounded bg-rose-500/10"
+                        className="text-rose-600 hover:text-rose-700 text-xs font-bold px-1.5 py-0.5 rounded bg-rose-50"
                       >
                         ✕
                       </button>
@@ -2351,27 +2394,28 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
                 );
               })}
             </div>
+          ) : (
+            <p className="text-xs text-slate-400 italic py-6 text-center">Keranjang kosong — pilih layanan di kiri.</p>
           )}
 
-          {/* INPUT ONGKIR & DISKON (DARK MODE GLASSMORPHISM) */}
           {orderType === 'Online' && (
             <input
               type="number"
               placeholder="Biaya Ongkir (Rp)"
               value={deliveryFee}
               onChange={(e) => setDeliveryFee(e.target.value)}
-              className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-xs font-bold rounded-2xl p-3 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              className="w-full bg-slate-50 border border-slate-200 text-slate-900 text-xs font-bold rounded-xl p-3 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
             />
           )}
 
-          <div className="bg-slate-800/60 border border-rose-500/30 p-3 rounded-2xl flex items-center gap-2">
-            <span className="text-xs font-bold text-rose-400 whitespace-nowrap">
-              🏷️ Diskon:
+          <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl flex items-center gap-2">
+            <span className="text-xs font-bold text-amber-700 whitespace-nowrap">
+              Diskon
             </span>
             <select
               value={discountType}
               onChange={(e) => setDiscountType(e.target.value as any)}
-              className="bg-slate-900 border border-slate-700 text-slate-200 text-xs font-bold rounded-xl p-2 focus:outline-none"
+              className="bg-white border border-amber-200 text-slate-800 text-xs font-bold rounded-xl p-2 focus:outline-none"
             >
               <option value="rp">Rp</option>
               <option value="percent">%</option>
@@ -2381,21 +2425,21 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
               placeholder={discountType === 'percent' ? '10 (%)' : '5000 (Rp)'}
               value={discountValue}
               onChange={(e) => setDiscountValue(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-700 text-slate-100 text-xs font-bold rounded-xl p-2 focus:outline-none focus:ring-1 focus:ring-rose-500"
+              className="w-full bg-white border border-amber-200 text-slate-900 text-xs font-bold rounded-xl p-2 focus:outline-none"
             />
           </div>
-              <input type="text" placeholder="Catatan Umum Nota Ini (Noda, dll)" value={notes} onChange={(e) => setNotes(e.target.value)} className="w-full border rounded-xl px-4 py-3 text-xs" />
+              <input type="text" placeholder="Catatan umum nota (noda, dll)" value={notes} onChange={(e) => setNotes(e.target.value)} className="w-full border border-slate-200 rounded-xl px-4 py-3 text-xs" />
               
-              <div><label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">Total Bayar Final (Rp) (Terhitung Otomatis)</label><input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} className="w-full bg-slate-50 border rounded-xl px-4 py-3.5 text-2xl font-black text-emerald-600 text-center" required /></div>
+              <div><label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">Total Bayar</label><input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3.5 text-2xl font-black text-emerald-600 text-center" required /></div>
 
               <div>
                 <label className="block text-[10px] font-bold text-slate-500 mb-1 uppercase">Metode Pembayaran</label>
-                <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className="w-full border rounded-xl px-4 py-3 text-sm font-bold bg-white">
+                <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold bg-white">
                   <option value="QRIS">QRIS</option>
                   <option value="Cash">Cash (Tunai)</option>
-                  <option value="Deposit Saldo">💳 Deposit Member</option>
+                  <option value="Deposit Saldo">Deposit Member</option>
                   <option value="Transfer">Transfer Bank</option>
-                  <option value="Split Payment">🔀 Split Payment (Kombinasi 2 Metode)</option>
+                  <option value="Split Payment">Split Payment (Kombinasi 2 Metode)</option>
                 </select>
               </div>
 
@@ -2448,7 +2492,10 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
                 </div>
               )}
 
-              <button type="submit" disabled={isSubmitting} className="w-full mt-2 bg-emerald-600 text-white font-black py-4 rounded-xl text-sm shadow-md">⚡ SIMPAN TRANSAKSI</button>
+              <button type="submit" disabled={isSubmitting} className="w-full mt-1 bg-emerald-500 hover:bg-emerald-600 text-white font-black py-4 rounded-xl text-sm shadow-sm">Bayar & Simpan Transaksi</button>
+                </div>
+              </div>
+              </div>
             </form>
           )}
 
@@ -2599,13 +2646,12 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
               Setor Sekarang
             </button>
           </div>
-              <form onSubmit={handleExpenseSubmit} className="space-y-3 border rounded-xl p-4 shadow-sm">
-                <h3 className="text-xs font-bold text-rose-600 border-b pb-2">💸 Pengeluaran Kas</h3>
-                <select value={expCategory} onChange={(e) => setExpCategory(e.target.value)} className="w-full border rounded-xl px-3 py-3 text-xs md:text-sm">{settings?.coas?.map((c: string, i: number) => <option key={i} value={c}>{c}</option>)}</select>
-                <input type="number" placeholder="Nominal Rp" value={expAmount} onChange={(e) => setExpAmount(e.target.value)} className="w-full border rounded-xl px-3 py-3 text-lg font-bold text-rose-600" required />
-                <input type="text" placeholder="Catatan Beli" value={expDesc} onChange={(e) => setExpDesc(e.target.value)} className="w-full border rounded-xl px-3 py-3 text-xs md:text-sm" required />
-                <button type="submit" disabled={isSubmitting} className="w-full bg-rose-600 text-white font-bold py-3.5 rounded-xl text-sm">SIMPAN</button>
-              </form>
+              <RequisitionForm
+                selectedOutlet={selectedOutlet}
+                employeeName={employeeName || 'Kasir'}
+                role="kasir"
+              />
+              <RoleTaskInbox role="kasir" />
               <form onSubmit={handleAddStock} className="space-y-3 border rounded-xl p-4 shadow-sm">
                 <h3 className="text-xs font-bold text-indigo-600 border-b pb-2">📦 Tambah Stok</h3>
                 <select value={stockItem} onChange={(e) => setStockItem(e.target.value)} className="w-full border rounded-xl px-3 py-3 text-xs md:text-sm"><option value="Detergen Premium (ml)">Detergen Premium</option><option value="Parfum Lavender (ml)">Parfum Lavender</option></select>
