@@ -27,12 +27,14 @@ const normalizeHistory = (raw: any): GeminiTurn[] => {
 };
 
 export async function POST(req: Request) {
+  // Dideklarasikan di luar try agar tetap terbaca saat logging di blok catch.
+  const model = (process.env.GEMINI_MODEL || 'gemini-2.5-flash').trim();
+
   try {
     const body = await req.json().catch(() => ({}));
     const { message, messages, customerPhone, brandName } = body || {};
 
     const apiKey = (process.env.GEMINI_API_KEY || '').trim();
-    const model = (process.env.GEMINI_MODEL || 'gemini-1.5-flash').trim();
     const supabaseUrl = process.env.SUPABASE_URL || 'https://qlgbjvzabnfqmfnjdkmo.supabase.co';
     const supabaseKey = process.env.SUPABASE_ANON_KEY || 'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs';
 
@@ -231,9 +233,16 @@ DATA TRANSAKSI AKTIF CUSTOMER:
     if (!res.ok) {
       // Error asli Gemini (kunci invalid, model tidak tersedia, kuota habis)
       // diteruskan apa adanya supaya penyebabnya bisa dilacak, bukan disamarkan
-      // sebagai jawaban AI palsu.
+      // sebagai jawaban AI palsu. Detail lengkap dicetak agar terbaca di Vercel Logs.
       const detail = data?.error?.message || `Gemini merespons status ${res.status}.`;
-      console.error('Gemini API error:', detail);
+      console.error('[GEMINI ERROR]', {
+        model,
+        httpStatus: res.status,
+        status: data?.error?.status,
+        code: data?.error?.code,
+        message: detail,
+        raw: JSON.stringify(data).slice(0, 1000)
+      });
       return Response.json(
         {
           error: detail,
@@ -247,7 +256,12 @@ DATA TRANSAKSI AKTIF CUSTOMER:
 
     if (!aiText) {
       const blockReason = data?.promptFeedback?.blockReason;
-      console.error('Gemini tidak mengembalikan teks. blockReason:', blockReason);
+      console.error('[GEMINI EMPTY]', {
+        model,
+        blockReason,
+        finishReason: data?.candidates?.[0]?.finishReason,
+        raw: JSON.stringify(data).slice(0, 1000)
+      });
       return Response.json(
         {
           error: blockReason ? `Jawaban diblokir: ${blockReason}` : 'Gemini tidak mengembalikan teks.',
@@ -259,7 +273,12 @@ DATA TRANSAKSI AKTIF CUSTOMER:
 
     return Response.json({ reply: aiText });
   } catch (error: any) {
-    console.error('Chat route error:', error);
+    console.error('[CHAT ROUTE ERROR]', {
+      model,
+      message: error?.message,
+      name: error?.name,
+      stack: error?.stack
+    });
     return Response.json(
       {
         error: error?.message || 'Kesalahan tidak diketahui pada server chat.',

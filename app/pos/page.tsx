@@ -61,6 +61,25 @@ const getStageKey = (stageStr: string) => {
   return s;
 };
 
+// Aplikasi customer menyimpan durasi dengan label pendek ('Oneday', 'Express'),
+// sedangkan dropdown POS memakai label panjang. Tanpa normalisasi, <select> POS
+// tidak menemukan option yang cocok sehingga tampil kosong.
+const normalizePosDuration = (raw: any) => {
+  const d = String(raw || '').toLowerCase();
+  if (d.includes('oneday') || d.includes('1 hari') || d.includes('24 jam')) return 'Oneday (1 Hari / 24 Jam)';
+  if (d.includes('express') || d.includes('6 jam')) return 'Express (6 Jam)';
+  if (d.includes('quick') || d.includes('3 jam')) return 'Quick (3 Jam)';
+  return 'Reguler (3 Hari)';
+};
+
+// service_type dari aplikasi customer berbentuk "Cuci Kering Gosok (Oneday)".
+// Imbuhan durasi di dalam tanda kurung harus dibuang, kalau tidak nama layanan
+// tidak akan cocok dengan daftar `services` dan harga jatuh ke tarif default.
+const cleanServiceName = (raw: any) =>
+  String(raw || '')
+    .replace(/\s*\([^)]*\)\s*$/, '')
+    .trim();
+
 const getEstDate = (createdDateStr: string, durationStr: string) => {
   const d = createdDateStr ? new Date(createdDateStr) : new Date();
   const dur = (durationStr || '').toLowerCase();
@@ -172,62 +191,57 @@ export function POSContent() {
     setCustomerName(data.customer_name || 'Pelanggan Online');
     setCustomerPhone(data.customer_phone || data.phone_number || '');
     setAddress(data.address || '');
-    setDuration(data.duration || 'Reguler (3 Hari)');
+    setDuration(normalizePosDuration(data.duration));
     setBagCount(String(data.bag_count ?? '1'));
     setWashProcess(data.wash_process || 'Pisah');
     setHasFading(Boolean(data.has_fading));
     setHasValuables(Boolean(data.has_valuables));
     setNotes(data.notes || '');
 
-    if (data.service_type) {
-      setServiceType(data.service_type);
-      setSelectedServiceInput(data.service_type);
+    const serviceName = cleanServiceName(data.service_type);
+    if (serviceName) {
+      setServiceType(serviceName);
+      setSelectedServiceInput(serviceName);
     }
 
     if (data.delivery_fee) setDeliveryFee(String(data.delivery_fee));
 
-    // Parse item dari JSON/Array secara presisi ke cartItems POS
+    // Hanya item satuan yang sudah punya harga asli yang masuk keranjang.
+    // Entri tanpa harga sengaja dilewati supaya tidak muncul baris palsu
+    // "1 x Rp 0"; layanan kiloan cukup mengisi form lalu kasir menekan
+    // "Tambahkan ke Keranjang" agar harganya dihitung dari berat timbangan.
     const rawItems = safeParse(data.items, []);
-    
     if (Array.isArray(rawItems) && rawItems.length > 0) {
       const mappedCart = rawItems
         .filter((it: any) => it && (it.name || it.service_name))
         .map((it: any, idx: number) => {
           const isKg = (it.type || it.unit || '').toLowerCase() === 'kg';
           const itemPrice = Number(it.price || it.unit_price || 0);
+          const itemBase = Number(it.basePrice || it.base_price || itemPrice);
           return {
             id: it.id || `pickup-${idx}-${Date.now()}`,
             name: String(it.name || it.service_name),
             type: isKg ? ('kg' as const) : ('pcs' as const),
-            basePrice: itemPrice,
+            basePrice: itemBase,
             price: itemPrice,
-            qty: isKg ? Number(it.qty || it.quantity || 0) : Number(it.qty || it.quantity || 1),
+            qty: Number(it.qty || it.quantity) || 1,
             note: it.notes || it.note || ''
           };
-        });
+        })
+        .filter((it) => it.price > 0);
 
       setCartItems(mappedCart);
-    } else if (data.service_type) {
-      // Fallback jika item tidak berbentuk array
-      const isKg = data.service_type.toLowerCase().includes('kilo');
-      const fallbackPrice = Number((data as any).estimated_price || (data as any).price || 0);
-      setCartItems([
-        {
-          id: `pickup-single-${Date.now()}`,
-          name: data.service_type,
-          type: isKg ? ('kg' as const) : ('pcs' as const),
-          basePrice: fallbackPrice,
-          price: fallbackPrice,
-          qty: isKg ? 0 : 1,
-          note: data.notes || ''
-        }
-      ]);
+    } else {
+      setCartItems([]);
     }
 
-    // Berat kiloan sengaja TIDAK diisi otomatis. Angka dari pelanggan hanya estimasi,
-    // kasir wajib menimbang di outlet lalu mengisi sendiri.
+    // Estimasi berat pelanggan diisi ke input Kg agar kasir tidak mengetik ulang.
+    // Ini hanya nilai awal: kasir wajib menimbang di outlet dan bebas menimpanya.
+    // Hanya `inputQtyKg` yang diisi (bukan weightKg) supaya field benar-benar
+    // kosong ketika kasir menghapusnya — input memakai value={inputQtyKg || weightKg}.
+    const estWeight = Number(data.estimated_weight) || 0;
     setWeightKg('');
-    setInputQtyKg('');
+    setInputQtyKg(estWeight > 0 ? String(estWeight) : '');
   };
 
   useEffect(() => {
@@ -237,14 +251,21 @@ export function POSContent() {
     const urlService = searchParams.get('service');
     const urlDeliveryFee = searchParams.get('delivery_fee');
     const urlOrderType = searchParams.get('order_type');
-  
+    const urlDuration = searchParams.get('duration');
+    const urlAddress = searchParams.get('address');
+    const urlWeight = searchParams.get('estimated_weight') || searchParams.get('weight');
+
     // Layer 1: isi instan dari query param
     if (urlName) setCustomerName(decodeURIComponent(urlName));
     if (urlPhone) setCustomerPhone(decodeURIComponent(urlPhone));
+    if (urlAddress) setAddress(decodeURIComponent(urlAddress));
     if (urlService) {
-      setSelectedServiceInput(decodeURIComponent(urlService));
-      setServiceType(decodeURIComponent(urlService));
+      const svc = cleanServiceName(decodeURIComponent(urlService));
+      setSelectedServiceInput(svc);
+      setServiceType(svc);
     }
+    if (urlDuration) setDuration(normalizePosDuration(decodeURIComponent(urlDuration)));
+    if (urlWeight && Number(urlWeight) > 0) setInputQtyKg(String(Number(urlWeight)));
     if (urlDeliveryFee) setDeliveryFee(urlDeliveryFee);
     if (urlName || urlPhone || pickupId) setOrderType(urlOrderType || 'Online');
   
@@ -588,9 +609,15 @@ const handleReportIncident = async (e: React.FormEvent) => {
     const finalUnitPrice = Math.round(basePrice * durationMultiplier);
 
     const isPcs = activeSvc ? activeSvc.type === 'pcs' : (Number(inputQtyPcs) > 0 || Number(pcsCount) > 0);
-    const qty = isPcs 
-      ? (Number(inputQtyPcs) || Number(pcsCount) || 1) 
-      : (Number(inputQtyKg) || Number(weightKg) || 1);
+    const qty = isPcs
+      ? (Number(inputQtyPcs) || Number(pcsCount) || 1)
+      : (Number(inputQtyKg) || Number(weightKg) || 0);
+
+    // Tanpa penjaga ini, berat kosong diam-diam dihitung sebagai 1 Kg sehingga
+    // harga baris nota salah.
+    if (!isPcs && qty <= 0) {
+      return alert('⚠️ Isi berat (Kg) hasil timbangan terlebih dahulu sebelum menambahkan ke keranjang!');
+    }
 
     const newItem = {
       id: Math.random().toString(),
@@ -2209,6 +2236,17 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
                 }}
                 className="w-full bg-slate-800 border border-slate-700 text-slate-100 text-xs font-bold rounded-2xl p-3 focus:outline-none focus:ring-2 focus:ring-emerald-500"
               >
+                {/* Layanan dari penjemputan bisa tidak ada di daftar outlet ini.
+                    Tanpa option cadangan, dropdown tampil kosong walau state terisi. */}
+                {(() => {
+                  const current = selectedServiceInput || serviceType;
+                  const known = services.some(
+                    (s) => (s.name || '').trim().toLowerCase() === current.trim().toLowerCase()
+                  );
+                  return current && !known ? (
+                    <option value={current}>{current} (Dari Penjemputan)</option>
+                  ) : null;
+                })()}
                 {services.map((s, i) => (
                   <option key={i} value={s.name}>
                     {s.name} ({s.type === 'pcs' ? 'Satuan/Pcs' : 'Kiloan/Kg'})
