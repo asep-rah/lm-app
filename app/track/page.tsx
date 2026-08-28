@@ -54,7 +54,7 @@ export default function TrackingPage() {
   const getStatusColor = (status: string) => {
     if (status === 'Diterima' || status === 'Sortir') return 'bg-slate-200 text-slate-700';
     if (status === 'Mencuci') return 'bg-cyan-100 text-cyan-700';
-    if (status === 'Pengeringan') return 'bg-amber-100 text-amber-700';
+    if (status === 'Pengeringan' || status === 'Mengeringkan') return 'bg-amber-100 text-amber-700';
     if (status === 'Setrika') return 'bg-orange-100 text-orange-700';
     if (status === 'Packing') return 'bg-purple-100 text-purple-700';
     if (status === 'Siap Diambil') return 'bg-blue-600 text-white shadow-lg animate-pulse';

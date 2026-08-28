@@ -14,6 +14,19 @@ const safeParse = (data: any, fallback: any) => {
   try { return JSON.parse(data); } catch (e) { return fallback; }
 };
 
+// Status dari POS/driver datang dengan kapitalisasi yang tidak konsisten
+// ('Selesai', 'selesai', 'Sudah Diambil'), jadi pencocokan harus case-insensitive.
+// Selama status belum mengandung selesai/diambil/batal, pesanan tetap dianggap aktif.
+const isOrderFinished = (order: any) => {
+  const st = String(order?.status || '').toLowerCase().trim();
+
+  // 'Siap Diambil' mengandung kata 'diambil' padahal cucian belum diserahkan.
+  // Tanpa pengecualian ini pesanan pindah ke Riwayat terlalu cepat.
+  if (st.includes('siap')) return false;
+
+  return st.includes('selesai') || st.includes('diambil') || st.includes('batal');
+};
+
 const cleanPhone = (phoneStr: string) => {
   if (!phoneStr) return '';
   let cleaned = phoneStr.trim().replace(/\D/g, '');
@@ -194,6 +207,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
             message: messageText,
+            // Riwayat penuh (termasuk pesan yang baru ditambahkan) agar AI
+            // mengingat konteks, bukan menjawab tiap pesan dari nol.
+            messages: [...aiMessages, userMsg],
             customerPhone: customerPhone || '' // Kirim nomor HP customer ke API
           }),
         });
@@ -808,7 +824,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
           <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
           <h3 className="text-xs font-bold text-slate-800 tracking-wide uppercase">
             {activeTab === 'home'
-              ? `Pesanan Berlangsung (${activeOrders.filter((o: any) => !['Selesai', 'Diambil'].includes(o.status)).length})`
+              ? `Pesanan Berlangsung (${activeOrders.filter((o: any) => !isOrderFinished(o)).length})`
               : 'Riwayat Pesanan Selesai'}
           </h3>
         </div>
@@ -822,15 +838,8 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
       {/* Render Pesanan */}
       {(() => {
-        const berandaOrders = activeOrders.filter((o: any) => {
-  const st = String(o?.status || '').toLowerCase().trim();
-  return !st.includes('selesai') && !st.includes('diambil') && !st.includes('batal');
-});
-
-const riwayatOrders = activeOrders.filter((o: any) => {
-  const st = String(o?.status || '').toLowerCase().trim();
-  return st.includes('selesai') || st.includes('diambil') || st.includes('batal');
-});
+        const berandaOrders = activeOrders.filter((o: any) => !isOrderFinished(o));
+        const riwayatOrders = activeOrders.filter((o: any) => isOrderFinished(o));
         const displayOrders = activeTab === 'home' ? berandaOrders : riwayatOrders;
 
         if (displayOrders.length === 0) {
@@ -848,9 +857,14 @@ const riwayatOrders = activeOrders.filter((o: any) => {
           const stages = [
             { label: 'Jemput', icon: '🛺', match: ['jemput', 'menuju', 'diambil driver'] },
             { label: 'Diterima', icon: '🏠', match: ['diterima', 'tiba'] },
-            { label: 'Proses', icon: '🧼', match: ['cuci', 'mencuci', 'sortir', 'kering'] },
-            { label: 'Setrika', icon: '👔', match: ['setrika', 'gosok'] },
-            { label: 'Siap', icon: '📦', match: ['siap', 'packing'] },
+            // 'ering' (bukan 'kering') dipakai karena 'Mengeringkan' tidak mengandung
+            // substring 'kering' — awalan meng- melebur dengan huruf k akar katanya.
+            { label: 'Proses', icon: '🧼', match: ['cuci', 'mencuci', 'sortir', 'ering'] },
+            // Packing masih tahap pengerjaan, jadi digabung ke tahap penyelesaian.
+            // Kalau dimasukkan ke 'Siap', pelanggan dikabari cucian sudah siap
+            // padahal masih dikemas. 'emas' menangkap 'Kemas'/'Mengemas'/'Pengemasan'.
+            { label: 'Setrika', icon: '👔', match: ['setrika', 'gosok', 'pack', 'emas'] },
+            { label: 'Siap', icon: '📦', match: ['siap'] },
             { label: 'Selesai', icon: '✅', match: ['selesai', 'diambil'] }
           ];
 

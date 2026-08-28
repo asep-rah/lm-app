@@ -48,6 +48,8 @@ export default function AIChatWidget({ customerPhone = "" }: AIChatWidgetProps) 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: query,
+          // Riwayat penuh dikirim agar AI mengingat konteks percakapan sebelumnya.
+          messages: newHistory,
           customerPhone: customerPhone,
         }),
       });

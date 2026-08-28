@@ -209,23 +209,26 @@ export default function CSDashboard() {
 
   const handleApproveByCS = async (txId: string) => {
     if (!confirm('Setujui transaksi ini atas nama customer setelah konfirmasi via WA?')) return;
-    
-    // Update status menjadi 'Sortir' dan set persetujuan CS agar tombol pengerjaan kasir aktif kembali
+
+    // Tabel `transactions` hanya menyimpan tahapan pengerjaan di kolom `status`.
+    // Mengirim kolom lain (mis. confirmation_status / updated_at) membuat Postgres
+    // menolak seluruh update, sehingga persetujuan gagal tanpa pesan apa pun.
+    // Mengembalikan status ke 'Sortir' sudah cukup untuk mengaktifkan lagi tombol
+    // pengerjaan kasir di POS, karena status 'Menunggu Konfirmasi Customer'
+    // menonaktifkan tombol tersebut.
     const { error } = await supabase
       .from('transactions')
-      .update({ 
-        status: 'Sortir',
-        confirmation_status: 'approved',
-        updated_at: new Date().toISOString()
-      })
+      .update({ status: 'Sortir' })
       .eq('id', txId);
 
-    if (!error) {
-      alert('✅ Transaksi disetujui! Kasir dapat melanjutkan pengerjaan.');
-      loadCSData();
-    } else {
-      alert('❌ Gagal: ' + error.message);
+    if (error) {
+      console.error('Gagal menyetujui transaksi:', error);
+      alert('❌ Gagal menyetujui transaksi: ' + (error.message || 'Koneksi bermasalah'));
+      return;
     }
+
+    alert('✅ Transaksi disetujui! Kasir dapat melanjutkan pengerjaan.');
+    loadCSData();
   };
 
   const filteredConfirmations = pendingConfirmations.filter(

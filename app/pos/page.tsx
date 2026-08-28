@@ -33,13 +33,31 @@ const getDistanceInMeters = (lat1: number, lon1: number, lat2: number, lon2: num
   return R * c;
 };
 
+// Awalan "meng-" melebur dengan huruf k pada akar katanya (meng + kering ->
+// mengeringkan), sehingga 'Mengeringkan' TIDAK mengandung substring 'kering'.
+// Pencocokan tahap pengeringan memakai akar 'ering' supaya 'Kering',
+// 'Pengeringan', dan 'Mengeringkan' sama-sama terdeteksi.
+const isDryingStatus = (statusStr: string) =>
+  String(statusStr || '').toLowerCase().trim().includes('ering');
+
+// Peleburan yang sama terjadi pada 'Mengemas' (meng + kemas -> mengemas), jadi
+// akar 'emas' dipakai agar 'Kemas', 'Mengemas', dan 'Pengemasan' ikut terdeteksi
+// selain istilah Inggris 'Packing'.
+const isPackingStatus = (statusStr: string) => {
+  const s = String(statusStr || '').toLowerCase().trim();
+  return s.includes('pack') || s.includes('emas');
+};
+
+// Kunci tahap yang punya tarif komisi di pengaturan layanan (Owner).
+const PAID_STAGE_KEYS = ['sortir', 'cuci', 'kering', 'setrika', 'packing'];
+
 const getStageKey = (stageStr: string) => {
   const s = (stageStr || '').toLowerCase();
   if (s.includes('sortir')) return 'sortir';
   if (s.includes('cuci') || s.includes('mencuci')) return 'cuci';
-  if (s.includes('kering') || s.includes('pengeringan')) return 'kering';
+  if (isDryingStatus(s)) return 'kering';
   if (s.includes('setrika') || s.includes('gosok')) return 'setrika';
-  if (s.includes('pack') || s.includes('packing')) return 'packing';
+  if (isPackingStatus(s)) return 'packing';
   return s;
 };
 
@@ -511,6 +529,9 @@ const handleReportIncident = async (e: React.FormEvent) => {
   const [editAmount, setEditAmount] = useState('');
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Kunci per-tombol (id transaksi + index item) supaya hanya tombol yang sedang
+  // diproses yang nonaktif, bukan seluruh halaman POS.
+  const [statusUpdatingKey, setStatusUpdatingKey] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState('');
   const [lastOrderInfo, setLastOrderInfo] = useState<any>(null);
 
@@ -1299,46 +1320,105 @@ const handleSubmitIssue = async (e: React.FormEvent) => {
   }
 };
 
+const statusKeyOf = (order: any) =>
+  `${order?.id}-${typeof order?.item_index === 'number' ? order.item_index : 'main'}`;
+
+// Kegagalan pencatatan work_logs hanya diberitahukan sekali per sesi supaya kasir
+// tidak dibanjiri popup, tapi tetap tahu kalau upah tahap tidak ikut tercatat.
+let workLogWarningShown = false;
+
 const handleStatusChange = async (order: any, targetStatus: string) => {
+  if (!order?.id) {
+    alert('Gagal mengubah status: data pesanan tidak valid.');
+    return;
+  }
+
+  const key = statusKeyOf(order);
+  if (statusUpdatingKey === key) return;
+
   try {
-    setIsSubmitting(true);
-    const updatePayload = {
-      status: targetStatus,
-      updated_at: new Date().toISOString()
-    };
+    setStatusUpdatingKey(key);
 
-    // 1. Jika ini item turunan dari Multi-Item, update array items-nya
-    if (typeof order.item_index === 'number' && Array.isArray(order.items)) {
-      const updatedItems = [...order.items];
-      updatedItems[order.item_index] = {
-        ...updatedItems[order.item_index],
-        status: targetStatus
-      };
+    const isSubItem = typeof order.item_index === 'number';
+    // `items` bisa datang sebagai array atau string JSON, jadi selalu diparse dulu.
+    const currentItems = isSubItem ? safeParse(order.items, []) : [];
+    const subItem =
+      isSubItem && Array.isArray(currentItems) ? currentItems[order.item_index] : null;
+    let updateError: any = null;
 
-      await supabase
+    if (isSubItem) {
+      // 1. Item turunan Multi-Item: status disimpan di dalam elemen array `items`.
+      if (!subItem) {
+        alert('Gagal mengubah status: rincian item tidak ditemukan.');
+        return;
+      }
+
+      const updatedItems = currentItems.map((it: any, idx: number) =>
+        idx === order.item_index ? { ...it, status: targetStatus } : it
+      );
+
+      const { error } = await supabase
         .from('transactions')
-        .update({ items: updatedItems, updated_at: new Date().toISOString() })
+        .update({ items: updatedItems })
         .eq('id', order.id);
+      updateError = error;
     } else {
-      // 2. Update transaksi tunggal biasa
-      const { error: txErr } = await supabase
+      // 2. Transaksi tunggal biasa.
+      const { error } = await supabase
         .from('transactions')
-        .update(updatePayload)
+        .update({ status: targetStatus })
         .eq('id', order.id);
-
-      if (txErr) console.error('Error updating transaction:', txErr);
+      updateError = error;
     }
 
-    // 3. Update tabel pickup_orders jika berasal dari aplikasi driver
-    const pickupId = order.pickup_id || order.id;
-    if (pickupId) {
-      await supabase
+    if (updateError) {
+      console.error('Error updating transaction status:', updateError);
+      alert('Gagal mengubah status: ' + (updateError.message || 'Koneksi bermasalah'));
+      return;
+    }
+
+    // 3. Sinkronkan pickup_orders hanya bila transaksi benar-benar punya referensi
+    // penjemputan. Tanpa penjaga ini, id transaksi ikut dikirim ke tabel lain.
+    if (order.pickup_id) {
+      const { error: pickupErr } = await supabase
         .from('pickup_orders')
-        .update(updatePayload)
-        .eq('id', pickupId);
+        .update({ status: targetStatus })
+        .eq('id', order.pickup_id);
+      if (pickupErr) console.warn('Sinkronisasi pickup_orders dilewati:', pickupErr.message);
     }
 
-    // 4. Potong stok bahan kimia & refresh data UI secara instan
+    // 4. Catat work log untuk tahap yang BARU SAJA diselesaikan, yaitu status
+    // sebelum perubahan. Contoh: menekan "Siap Diambil" saat status 'Packing'
+    // berarti tahap packing selesai, sehingga upah packing yang dicatat.
+    // Transisi 'Diterima' -> 'Sortir' tidak dicatat karena belum ada tahap selesai.
+    const completedStage = String(order.status || '').trim();
+    if (PAID_STAGE_KEYS.includes(getStageKey(completedStage))) {
+      const { error: logErr } = await supabase.from('work_logs').insert([
+        {
+          transaction_id: order.id,
+          employee_name: employeeName || 'Kasir',
+          stage: completedStage,
+          service_type: subItem?.name || order.service_type || '',
+          weight_kg: Number(subItem?.weight ?? order.weight_kg) || 0,
+          pcs_count: Number(subItem?.qty ?? order.pcs_count) || 0,
+          created_at: new Date().toISOString()
+        }
+      ]);
+
+      if (logErr) {
+        console.error('Gagal mencatat work_logs (upah tahap ini tidak terhitung):', logErr);
+        if (!workLogWarningShown) {
+          workLogWarningShown = true;
+          alert(
+            '⚠️ Status berhasil diubah, tetapi pencatatan upah tahap gagal:\n' +
+              (logErr.message || 'Koneksi bermasalah') +
+              '\n\nMinta admin memeriksa struktur tabel work_logs.'
+          );
+        }
+      }
+    }
+
+    // 5. Potong stok bahan kimia (best-effort, tidak boleh membatalkan perubahan status)
     try {
       if (typeof deductChemicalInventory === 'function') {
         const itemName = order.service_name || order.service_type || 'Laundry';
@@ -1350,15 +1430,31 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
       console.warn('Inventory deduction skipped:', chemErr);
     }
 
+    // 6. Perbarui state lokal lebih dulu agar kartu langsung berubah,
+    // lalu tarik data terbaru dari server.
+    setActiveOrders((prev) =>
+      prev.map((o) => {
+        if (o.id !== order.id) return o;
+        if (!isSubItem) return { ...o, status: targetStatus };
+        const parsed = safeParse(o.items, []);
+        if (!Array.isArray(parsed)) return o;
+        return {
+          ...o,
+          items: parsed.map((it: any, idx: number) =>
+            idx === order.item_index ? { ...it, status: targetStatus } : it
+          )
+        };
+      })
+    );
+
     if (typeof refreshData === 'function') {
       await refreshData();
     }
-
   } catch (err: any) {
     console.error('Error in handleStatusChange:', err);
-    alert('Gagal mengubah status: ' + err.message);
+    alert('Gagal mengubah status: ' + (err?.message || 'Terjadi kesalahan'));
   } finally {
-    setIsSubmitting(false);
+    setStatusUpdatingKey(null);
   }
 };
 
@@ -1404,114 +1500,106 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
   };
 
   const renderNextStepButton = (order: any) => {
-    const s = (order.status || '').toLowerCase();
-    const confirmationStatus = (order.confirmation_status || '').toLowerCase();
-  
+    const s = String(order?.status || '').toLowerCase().trim();
+    const isBusy = statusUpdatingKey === statusKeyOf(order);
+
+    // Pembungkus wajib: kartu induk punya onClick pembuka modal detail, sehingga klik
+    // tombol harus dihentikan di sini agar tidak menembus ke atas.
+    const wrap = (child: React.ReactNode) => (
+      <div onClick={(e) => e.stopPropagation()} className="relative z-30 pointer-events-auto">
+        {child}
+      </div>
+    );
+
+    const stepButton = (label: string, targetStatus: string, color: string) =>
+      wrap(
+        <button
+          type="button"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            handleStatusChange(order, targetStatus);
+          }}
+          disabled={isBusy}
+          className={`w-full ${color} text-white text-xs font-black py-2.5 rounded-xl shadow transition active:scale-[0.98] disabled:opacity-60 disabled:cursor-wait`}
+        >
+          {isBusy ? '⏳ Menyimpan...' : label}
+        </button>
+      );
+
     // 1. Jika sedang menunggu persetujuan CS -> Tampilkan Badge Peringatan
-    if (s.includes('menunggu konfirmasi') || confirmationStatus === 'pending') {
+    if (s.includes('menunggu konfirmasi')) {
       return (
         <div className="w-full bg-amber-50 border border-amber-200 text-amber-700 text-[11px] font-bold py-2 px-3 rounded-xl text-center flex items-center justify-center gap-1.5 animate-pulse">
           <span>⏳</span> Menunggu Persetujuan CS / Admin
         </div>
       );
     }
-  
+
     // 2. TAHAP 1: Diterima / Baru / Telah Tiba di Outlet / Disetujui CS / Penjemputan -> Lanjut ke SORTIR
     if (
-      s.includes('diterima') || 
-      s.includes('baru') || 
-      s.includes('penjemputan') || 
-      s.includes('tiba') || 
-      s.includes('disetujui') || 
+      s.includes('diterima') ||
+      s.includes('baru') ||
+      s.includes('penjemputan') ||
+      s.includes('tiba') ||
+      s.includes('disetujui') ||
       s.includes('dikonfirmasi') ||
       s.includes('menunggu cuci') ||
       !s
     ) {
-      return (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            handleStatusChange(order, 'Sortir');
-          }}
-          disabled={false}
-          className="w-full bg-slate-700 hover:bg-slate-800 text-white text-xs font-black py-2.5 rounded-xl shadow transition active:scale-[0.98]"
-        >
-          🔍 Mulai Sortir
-        </button>
-      );
+      return stepButton('🔍 Mulai Sortir', 'Sortir', 'bg-slate-700 hover:bg-slate-800');
     }
-  
-    // 3. TAHAP 2: Sortir -> Lanjut ke MENCUCI
-    if (s.includes('sortir')) {
-      return (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            handleStatusChange(order, 'Mencuci');
-          }}
-          disabled={false}
-          className="w-full bg-cyan-500 hover:bg-cyan-600 text-white text-xs font-black py-2.5 rounded-xl shadow transition active:scale-[0.98]"
-        >
-          🧼 Mulai Mencuci
-        </button>
-      );
+
+    // 3. TAHAP 2: Sortir -> Lanjut ke MENCUCI.
+    // Status 'Proses' (hasil verifikasi ulang kasir/CS) ikut di sini supaya cucian
+    // melanjutkan ke tahap mencuci, bukan mundur lagi ke sortir.
+    if (s.includes('sortir') || s.includes('proses')) {
+      return stepButton('🧼 Mulai Mencuci', 'Mencuci', 'bg-cyan-500 hover:bg-cyan-600');
     }
-  
-    // 4. TAHAP 3: Mencuci / Cuci -> Lanjut ke MENGERINGKAN / SETRIKA
+
+    // 4. TAHAP 3: Mencuci / Cuci -> Lanjut ke MENGERINGKAN
     if (s.includes('cuci') || s.includes('mencuci')) {
+      return stepButton('🌀 Mulai Mengeringkan', 'Mengeringkan', 'bg-sky-500 hover:bg-sky-600');
+    }
+
+    // 5. TAHAP 4: Mengeringkan / Kering / Pengeringan -> Lanjut ke SETRIKA
+    if (isDryingStatus(s)) {
+      return stepButton('👔 Mulai Setrika', 'Setrika', 'bg-amber-500 hover:bg-amber-600');
+    }
+
+    // 6. TAHAP 5: Setrika / Gosok -> Lanjut ke PACKING
+    if (s.includes('setrika') || s.includes('gosok')) {
+      return stepButton('🎁 Mulai Packing', 'Packing', 'bg-violet-500 hover:bg-violet-600');
+    }
+
+    // 7. TAHAP 6: Packing / Kemas -> Lanjut ke SIAP DIAMBIL.
+    // Nilai status harus tepat 'Siap Diambil' agar cocok dengan filter tab "Siap Diambil"
+    // di refreshData dan dengan handleSubmitRack.
+    if (isPackingStatus(s)) {
+      return stepButton('📦 Siap Diambil / Diantar', 'Siap Diambil', 'bg-emerald-600 hover:bg-emerald-700');
+    }
+
+    // 8. TAHAP AKHIR: sudah siap diambil. Tanpa cabang ini status 'Siap Ambil'/'Siap Diambil'
+    // jatuh ke fallback dan justru dikembalikan ke 'Sortir'.
+    if (s.includes('siap')) {
       return (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            handleStatusChange(order, 'Setrika');
-          }}
-          disabled={false}
-          className="w-full bg-amber-500 hover:bg-amber-600 text-white text-xs font-black py-2.5 rounded-xl shadow transition active:scale-[0.98]"
-        >
-          👔 Mulai Setrika / Packing
-        </button>
+        <div className="w-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-[11px] font-bold py-2 px-3 rounded-xl text-center">
+          ✅ Siap Diambil — proses pengerjaan selesai
+        </div>
       );
     }
-  
-    // 5. TAHAP 4: Setrika / Gosok -> Lanjut ke SIAP AMBIL
-    if (s.includes('setrika') || s.includes('gosok') || s.includes('kering')) {
+
+    // 9. Sudah diserahkan / dibatalkan: tidak ada langkah lanjutan.
+    if (s.includes('selesai') || s.includes('diambil') || s.includes('batal')) {
       return (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            handleStatusChange(order, 'Siap Ambil');
-          }}
-          disabled={false}
-          className="w-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black py-2.5 rounded-xl shadow transition active:scale-[0.98]"
-        >
-          📦 Siap Ambil / Diantar
-        </button>
+        <div className="w-full bg-slate-50 border border-slate-200 text-slate-500 text-[11px] font-bold py-2 px-3 rounded-xl text-center">
+          {s.includes('batal') ? '🚫 Pesanan dibatalkan' : '🎉 Pesanan sudah diserahkan'}
+        </div>
       );
     }
-  
+
     // Fallback jika status tidak dikenal
-    return (
-      <button
-        type="button"
-        onClick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          handleStatusChange(order, 'Sortir');
-        }}
-        disabled={false}
-        className="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black py-2.5 rounded-xl shadow transition active:scale-[0.98]"
-      >
-        🔄 Lanjutkan Pengerjaan
-      </button>
-    );
+    return stepButton('🔄 Lanjutkan Pengerjaan', 'Sortir', 'bg-indigo-600 hover:bg-indigo-700');
   };
 
   const baseSalaryUsed = Math.max(empBasicSalary, calcStats.productionPay);
@@ -2352,13 +2440,24 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
                   )}
 
                   {/* TAMPILAN ITEM MULTI-SERVICES DENGAN TOMBOL PENGERJAAN TERPISAH PER ITEM */}
-            {order.items && Array.isArray(order.items) && order.items.length > 0 ? (
+            {(() => {
+              // Kolom `items` bisa terkirim sebagai array maupun string JSON dari Supabase.
+              const orderItems = safeParse(order.items, []);
+              const hasItems = Array.isArray(orderItems) && orderItems.length > 0;
+
+              return !hasItems ? (
+              /* Pengerjaan Pesanan Single-Item Biasa */
+              <div className="pt-2 border-t border-slate-100">
+                {renderNextStepButton(order)}
+              </div>
+            ) : (
               <div className="space-y-3 mt-2">
-                {order.items.map((item: any, idx: number) => {
+                {orderItems.map((item: any, idx: number) => {
                   // Membuat sub-task item tiruan agar tombol status bekerja per-item
                   const itemTask = {
                     ...order,
                     id: order.id,
+                    items: orderItems,
                     item_index: idx,
                     service_type: item.name || item.service_type || 'Item Cucian',
                     status: item.status || order.status || 'Diterima'
@@ -2389,8 +2488,8 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
                       </div>
     
                       {/* Isolasi Tombol Pengerjaan dari Klik Modal Parent */}
-                      <div 
-                        onClick={(e) => e.stopPropagation()} 
+                      <div
+                        onClick={(e) => e.stopPropagation()}
                         className="pt-1 border-t border-slate-200 relative z-30 pointer-events-auto"
                       >
                         {renderNextStepButton(itemTask)}
@@ -2399,12 +2498,8 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
                   );
                 })}
               </div>
-            ) : (
-              /* Pengerjaan Pesanan Single-Item Biasa */
-              <div className="pt-2 border-t border-slate-100">
-                {renderNextStepButton(order)}
-              </div>
-            )}
+              );
+            })()}
                 </div>
               ))}
               {activeOrders.length === 0 && <p className="text-xs text-slate-400 text-center py-8">Tidak ada antrean cucian saat ini.</p>}

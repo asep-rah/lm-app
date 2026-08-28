@@ -184,7 +184,7 @@ const handleCompleteTask = async (taskId: string) => {
 
       const { data: attLogs } = await supabase.from('attendance_logs').select('*').order('created_at', { ascending: false }).limit(200);
       if (attLogs) setAttendances(attLogs);
-      
+
 // Fetch data pengajuan hapus dari kasir untuk approval Owner
 const { data: delData } = await supabase
 .from('delete_requests')
@@ -709,6 +709,47 @@ setDeleteRequests(delData);
         </div>
       </div>
 
+            {/* FILTER CABANG, PERIODE & EXPORT PnL */}
+            <div className="bg-white border border-slate-200 p-3 md:p-4 rounded-2xl shadow-sm flex flex-col md:flex-row gap-3 md:items-end">
+              <div className="flex-1">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Cabang Outlet</label>
+                <select
+                  value={selectedOutlet}
+                  onChange={(e) => setSelectedOutlet(e.target.value)}
+                  className="w-full text-xs font-bold border border-slate-300 rounded-xl px-3 py-2.5 bg-white text-slate-800 cursor-pointer focus:outline-none focus:border-indigo-500 transition"
+                >
+                  <option value="ALL">🏢 Semua Cabang</option>
+                  {outlets.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex-1">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Periode Laporan</label>
+                <select
+                  value={period}
+                  onChange={(e) => setPeriod(e.target.value)}
+                  className="w-full text-xs font-bold border border-slate-300 rounded-xl px-3 py-2.5 bg-white text-slate-800 cursor-pointer focus:outline-none focus:border-indigo-500 transition"
+                >
+                  <option value="THIS_MONTH">Bulan Ini</option>
+                  <option value="LAST_MONTH">Bulan Lalu</option>
+                  <option value="THIS_YEAR">Tahun Ini</option>
+                  <option value="ALL">Semua Periode</option>
+                </select>
+              </div>
+
+              <button
+                type="button"
+                onClick={exportCSV}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-5 py-2.5 rounded-xl shadow transition whitespace-nowrap"
+              >
+                📥 Export PnL CSV
+              </button>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
               <div className="bg-white border border-slate-200 p-4 md:p-6 rounded-2xl shadow-sm">
                 <p className="text-[10px] md:text-xs font-bold text-slate-500 uppercase">Gross Revenue (Total Omset)</p>
@@ -742,7 +783,12 @@ setDeleteRequests(delData);
                     </thead>
                     <tbody>
                       {outletLeaderboard.map((o, i) => (
-                        <tr key={i} className={`border-b border-slate-100 hover:bg-slate-50 ${selectedOutlet === o.id ? 'bg-emerald-50/60 font-bold' : ''}`}>
+                        <tr
+                          key={i}
+                          onClick={() => setSelectedOutlet(selectedOutlet === o.id ? 'ALL' : o.id)}
+                          title="Klik untuk memfilter laporan ke cabang ini"
+                          className={`border-b border-slate-100 hover:bg-slate-50 cursor-pointer ${selectedOutlet === o.id ? 'bg-emerald-50/60 font-bold' : ''}`}
+                        >
                           <td className="p-3 font-bold text-slate-800"><span className="inline-block w-4 text-emerald-600">{i + 1}.</span> {o.name} {selectedOutlet === o.id && '(Terpilih)'}</td>
                           <td className="p-3 font-semibold text-indigo-600 text-[10px] uppercase">{o.supervisor}</td>
                           <td className="p-3 text-right font-medium text-slate-600">Rp {o.offline_rev.toLocaleString('id-ID')}</td>

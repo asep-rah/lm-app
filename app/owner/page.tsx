@@ -17,6 +17,20 @@ const safeParse = (data: any, fallback: any) => {
   try { return JSON.parse(data); } catch (e) { return fallback; }
 };
 
+// Memetakan nama tahap bebas dari work_logs ke kunci baku.
+// Catatan bahasa: 'Mengeringkan' tidak mengandung 'kering' dan 'Mengemas' tidak
+// mengandung 'kemas' (awalan meng- melebur dengan huruf k), sehingga dipakai
+// akar 'ering' dan 'emas'. Harus konsisten dengan getStageKey di app/pos.
+const stageKeyOf = (stageStr: string) => {
+  const s = String(stageStr || '').toLowerCase().trim();
+  if (s.includes('sortir')) return 'sortir';
+  if (s.includes('cuci') || s.includes('mencuci')) return 'cuci';
+  if (s.includes('ering')) return 'kering';
+  if (s.includes('setrika') || s.includes('gosok')) return 'setrika';
+  if (s.includes('pack') || s.includes('emas')) return 'packing';
+  return s;
+};
+
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<'pnl' | 'settings' | 'employees' | 'delete_requests' | 'loans' | 'history'>('pnl');
   
@@ -147,6 +161,47 @@ export default function Dashboard() {
   const [historyDateFilter, setHistoryDateFilter] = useState('');
   const [fullYearHistory, setFullYearHistory] = useState<any[]>([]);
   const [selectedTxDetail, setSelectedTxDetail] = useState<any>(null);
+  const [txWorkLogs, setTxWorkLogs] = useState<any[]>([]);
+
+  // Nama crew per tahap. Kolom by_* hanya sebagian yang ada di schema, jadi
+  // work_logs dipakai sebagai sumber cadangan. Kegagalan kueri sengaja
+  // ditelan agar modal detail tetap tampil (nilai jatuh ke '-').
+  useEffect(() => {
+    if (!selectedTxDetail?.id) {
+      setTxWorkLogs([]);
+      return;
+    }
+
+    let cancelled = false;
+    supabase
+      .from('work_logs')
+      .select('stage, employee_name, created_at')
+      .eq('transaction_id', selectedTxDetail.id)
+      .order('created_at', { ascending: true })
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) {
+          console.warn('work_logs tidak dapat dibaca:', error.message);
+          setTxWorkLogs([]);
+          return;
+        }
+        setTxWorkLogs(data || []);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTxDetail?.id]);
+
+  const getStageCrew = (stageKey: string) => {
+    const direct = selectedTxDetail?.[`by_${stageKey}`];
+    if (direct) return direct;
+
+    const match = [...txWorkLogs]
+      .reverse()
+      .find((w) => stageKeyOf(w?.stage) === stageKey);
+    return match?.employee_name || '-';
+  };
 
   useEffect(() => {
     const ownerStr = localStorage.getItem('laundry_owner_user');
@@ -743,23 +798,23 @@ export default function Dashboard() {
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[10px]">
                   <div className="bg-slate-50 p-2 rounded-xl border">
                     <span className="text-slate-400 font-bold block">1. Sortir</span>
-                    <b className="text-slate-800">{selectedTxDetail.by_sortir || '-'}</b>
+                    <b className="text-slate-800">{getStageCrew('sortir')}</b>
                   </div>
                   <div className="bg-slate-50 p-2 rounded-xl border">
                     <span className="text-slate-400 font-bold block">2. Cuci</span>
-                    <b className="text-slate-800">{selectedTxDetail.by_cuci || '-'}</b>
+                    <b className="text-slate-800">{getStageCrew('cuci')}</b>
                   </div>
                   <div className="bg-slate-50 p-2 rounded-xl border">
                     <span className="text-slate-400 font-bold block">3. Kering</span>
-                    <b className="text-slate-800">{selectedTxDetail.by_kering || '-'}</b>
+                    <b className="text-slate-800">{getStageCrew('kering')}</b>
                   </div>
                   <div className="bg-slate-50 p-2 rounded-xl border">
                     <span className="text-slate-400 font-bold block">4. Setrika</span>
-                    <b className="text-slate-800">{selectedTxDetail.by_setrika || '-'}</b>
+                    <b className="text-slate-800">{getStageCrew('setrika')}</b>
                   </div>
                   <div className="bg-slate-50 p-2 rounded-xl border">
                     <span className="text-slate-400 font-bold block">5. Packing</span>
-                    <b className="text-slate-800">{selectedTxDetail.by_packing || '-'}</b>
+                    <b className="text-slate-800">{getStageCrew('packing')}</b>
                   </div>
                 </div>
               </div>

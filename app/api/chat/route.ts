@@ -2,16 +2,63 @@ import { createClient } from '@supabase/supabase-js';
 
 export const dynamic = 'force-dynamic';
 
+type GeminiTurn = { role: 'user' | 'model'; parts: { text: string }[] };
+
+// Menerima beberapa bentuk pesan sekaligus: {role,content} standar LLM,
+// {sender,text} dari AIChatWidget, dan {sender_type,message} dari dashboard customer.
+const normalizeHistory = (raw: any): GeminiTurn[] => {
+  if (!Array.isArray(raw)) return [];
+
+  const turns = raw
+    .map((m: any) => {
+      const text = String(m?.content ?? m?.text ?? m?.message ?? '').trim();
+      const who = String(m?.role ?? m?.sender ?? m?.sender_type ?? 'user').toLowerCase();
+      const isAi = ['assistant', 'ai', 'model', 'bot'].includes(who);
+      return { role: isAi ? ('model' as const) : ('user' as const), parts: [{ text }] };
+    })
+    .filter((t) => t.parts[0].text.length > 0);
+
+  // Gemini menolak riwayat yang dibuka oleh peran 'model', sedangkan widget chat
+  // selalu memulai dengan sapaan AI. Sapaan pembuka itu dibuang di sini.
+  while (turns.length > 0 && turns[0].role === 'model') turns.shift();
+
+  // Batasi agar prompt tidak membengkak pada obrolan panjang.
+  return turns.slice(-20);
+};
+
 export async function POST(req: Request) {
   try {
-    const { message, customerPhone, brandName } = await req.json();
+    const body = await req.json().catch(() => ({}));
+    const { message, messages, customerPhone, brandName } = body || {};
 
     const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+    const model = (process.env.GEMINI_MODEL || 'gemini-1.5-flash').trim();
     const supabaseUrl = process.env.SUPABASE_URL || 'https://qlgbjvzabnfqmfnjdkmo.supabase.co';
     const supabaseKey = process.env.SUPABASE_ANON_KEY || 'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs';
 
+    // Riwayat penuh dipakai supaya AI mengingat konteks; fallback ke `message`
+    // tunggal agar pemanggil lama tetap berfungsi.
+    const history = normalizeHistory(messages);
+    if (history.length === 0) {
+      const single = String(message || '').trim();
+      if (!single) {
+        return Response.json(
+          { error: 'Pesan kosong.', reply: 'Silakan tulis pertanyaan Kakak terlebih dahulu ya.' },
+          { status: 400 }
+        );
+      }
+      history.push({ role: 'user', parts: [{ text: single }] });
+    }
+
     if (!apiKey) {
-      return Response.json({ reply: 'Halo Kak! Saya AI Assistant. Ada yang bisa saya bantu mengenai layanan laundry kami?' }, { status: 200 });
+      return Response.json(
+        {
+          error: 'GEMINI_API_KEY belum diset di environment server.',
+          reply:
+            '⚠️ AI Assistant belum aktif karena kunci API belum dipasang di server. Silakan hubungi CS Admin lewat tab Live CS ya Kak.'
+        },
+        { status: 503 }
+      );
     }
 
     const supabase = createClient(supabaseUrl, supabaseKey);
@@ -31,6 +78,25 @@ export async function POST(req: Request) {
       myPickup = pickupRes.data || [];
     }
 
+    // Hanya kolom yang relevan dikirim ke LLM: menekan token dan tidak
+    // membocorkan seluruh baris transaksi ke pihak ketiga.
+    const txSummary = myTx.map((t) => ({
+      resi: t.receipt_number,
+      layanan: t.service_type,
+      status: t.status,
+      kg: t.weight_kg,
+      pcs: t.pcs_count,
+      total: t.amount,
+      outlet: t.outlets?.name
+    }));
+    const pickupSummary = myPickup.map((p) => ({
+      no: p.order_number,
+      layanan: p.service_type,
+      status: p.status,
+      jadwal: p.pickup_date,
+      outlet: p.outlets?.name
+    }));
+
     let targetOutletWa = '6281120081011';
     const rawWa = myTx?.[0]?.outlets?.whatsapp_number || myPickup?.[0]?.outlets?.whatsapp_number;
     if (rawWa) {
@@ -40,8 +106,9 @@ export async function POST(req: Request) {
     }
 
     // 2. KNOWLEDGE BASE UTUH 100% DARI DOKUMEN PDF CEKAT AI
-    const systemPrompt = `Kamu adalah Customer Service AI resmi untuk "${activeBrand}".
+    const systemPrompt = `Kamu adalah Smart Assistant for Laundry Management — asisten cerdas sekaligus Customer Service AI resmi untuk "${activeBrand}".
 Tugas utama: Membantu meningkatkan closing order laundry. Jawab singkat, jelas, ramah, profesional, dan to the point.
+Gunakan seluruh riwayat percakapan sebagai konteks; jangan mengulang pertanyaan yang sudah dijawab pelanggan.
 
 ==================================================
 1. AGENT BEHAVIOUR & BATASAN KERJA (STRICT SOP)
@@ -143,30 +210,62 @@ Jika ada komplain, berikan respon awal:
 Lalu akhiri dengan tag: [WA_HANDOFF|${targetOutletWa}]
 
 DATA TRANSAKSI AKTIF CUSTOMER:
-- POS: ${JSON.stringify(myTx)}
-- Jemputan: ${JSON.stringify(myPickup)}
-
-Pertanyaan Customer: "${message}"`;
+- POS: ${JSON.stringify(txSummary)}
+- Jemputan: ${JSON.stringify(pickupSummary)}`;
 
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: [{ text: systemPrompt }] }] })
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          contents: history,
+          generationConfig: { temperature: 0.7, maxOutputTokens: 1024 }
+        })
       }
     );
 
-    const data = await res.json();
-    let aiText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      // Error asli Gemini (kunci invalid, model tidak tersedia, kuota habis)
+      // diteruskan apa adanya supaya penyebabnya bisa dilacak, bukan disamarkan
+      // sebagai jawaban AI palsu.
+      const detail = data?.error?.message || `Gemini merespons status ${res.status}.`;
+      console.error('Gemini API error:', detail);
+      return Response.json(
+        {
+          error: detail,
+          reply: '⚠️ AI Assistant sedang tidak dapat menjawab. Silakan hubungi CS Admin lewat tab Live CS ya Kak.'
+        },
+        { status: 502 }
+      );
+    }
+
+    const aiText = String(data?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
 
     if (!aiText) {
-      aiText = `Halo Kak! Ada yang bisa AI ${activeBrand} bantu seputar penjemputan atau paket laundry?`;
+      const blockReason = data?.promptFeedback?.blockReason;
+      console.error('Gemini tidak mengembalikan teks. blockReason:', blockReason);
+      return Response.json(
+        {
+          error: blockReason ? `Jawaban diblokir: ${blockReason}` : 'Gemini tidak mengembalikan teks.',
+          reply: 'Maaf Kak, jawaban tidak dapat dibuat. Boleh diulang dengan kalimat lain?'
+        },
+        { status: 502 }
+      );
     }
 
     return Response.json({ reply: aiText });
-
   } catch (error: any) {
-    return Response.json({ reply: "Halo Kak! Ada yang bisa kami bantu mengenai penjemputan laundry hari ini?" }, { status: 200 });
+    console.error('Chat route error:', error);
+    return Response.json(
+      {
+        error: error?.message || 'Kesalahan tidak diketahui pada server chat.',
+        reply: '⚠️ Terjadi kendala teknis pada AI Assistant. Silakan coba lagi atau hubungi CS Admin.'
+      },
+      { status: 500 }
+    );
   }
 }
