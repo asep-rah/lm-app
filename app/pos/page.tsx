@@ -14,6 +14,8 @@ import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
 import { updatePickupOrder, markPickupConvertedToPos } from '@/lib/pickupUpdates';
 import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
 import { uploadProofFile } from '@/lib/uploadProof';
+import { cartLineAmount } from '@/lib/kiloanPrice';
+import FileProofInput from '@/components/FileProofInput';
 import { createPaymentVerifyTask, isCsVerifiedPaid, isNonCashVerifyMethod, isPaymentLocked, PENDING_PAY_STATUS } from '@/lib/paymentVerify';
 import {
   classifyQueueOrder,
@@ -761,9 +763,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
 
     if (cartItems.length > 0) {
       cartItems.forEach(item => {
-        const itemBasePrice = item.basePrice || item.price;
-        const currentUnitPrice = Math.round(itemBasePrice * durationMultiplier);
-        totalSubtotal += currentUnitPrice * item.qty;
+        totalSubtotal += cartLineAmount(item, durationMultiplier);
       });
     } else {
       const targetSvcName = selectedServiceInput || serviceType;
@@ -785,7 +785,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
 
       const qtyPcs = Number(pcsCount) || Number(inputQtyPcs) || 0;
       const qtyKg = Number(weightKg) || Number(inputQtyKg) || 0;
-      let qty = (activeSvc && activeSvc.type === 'pcs') ? qtyPcs : (qtyPcs > 0 && qtyKg === 0 ? qtyPcs : qtyKg);
+      const qty = activeSvc && activeSvc.type === 'pcs' ? qtyPcs : qtyKg;
 
       totalSubtotal = Math.round(baseUnitPrice * qty * durationMultiplier);
     }
@@ -2144,7 +2144,7 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
                       <span className="text-[8px]">{item.type === 'kg' ? `${item.qty} Kg` : `${item.qty} Pcs`} x Rp {Number(item.price).toLocaleString('id-ID')}</span>
                       {item.note && <span className="block text-[8px] italic">({item.note})</span>}
                     </div>
-                    <span className="font-bold">Rp {(item.price * item.qty).toLocaleString('id-ID')}</span>
+                    <span className="font-bold">Rp {cartLineAmount(item).toLocaleString('id-ID')}</span>
                   </div>
                 ))}
               </div>
@@ -2259,13 +2259,7 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">Foto Bukti Rak <span className="text-rose-500">*</span></label>
-                <input
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  onChange={(e) => setRackPhotoFile(e.target.files?.[0] || null)}
-                  className="w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-emerald-50 file:text-emerald-700 file:font-bold"
-                />
+                <FileProofInput file={rackPhotoFile} onFile={setRackPhotoFile} capture="environment" />
               </div>
             </div>
             <div className="flex gap-2">
@@ -2288,13 +2282,7 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
             <div className="space-y-3 mb-6">
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">Foto tahap <span className="text-rose-500">*</span></label>
-                <input
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  onChange={(e) => setStageProofFile(e.target.files?.[0] || null)}
-                  className="w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-emerald-50 file:text-emerald-700 file:font-bold"
-                />
+                <FileProofInput file={stageProofFile} onFile={setStageProofFile} capture="environment" />
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">Catatan staf <span className="text-slate-400 font-semibold">(opsional)</span></label>
@@ -2884,13 +2872,14 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
           {cartItems.length > 0 ? (
             <div className="space-y-1.5">
               {cartItems.map((item, idx) => {
-                let durationMultiplier = 1.0;
-                if (duration.includes('Oneday') || duration.includes('1 Hari')) durationMultiplier = 1.5;
-                if (duration.includes('Express') || duration.includes('6 Jam')) durationMultiplier = 2.0;
-                if (duration.includes('Quick') || duration.includes('3 Jam')) durationMultiplier = 3.0;
-
+                const durationMultiplier = (() => {
+                  if (duration.includes('Oneday') || duration.includes('1 Hari')) return 1.5;
+                  if (duration.includes('Express') || duration.includes('6 Jam')) return 2.0;
+                  if (duration.includes('Quick') || duration.includes('3 Jam')) return 3.0;
+                  return 1.0;
+                })();
                 const activeUnitPrice = Math.round((item.basePrice || item.price) * durationMultiplier);
-                const itemSubtotal = activeUnitPrice * item.qty;
+                const itemSubtotal = cartLineAmount(item, durationMultiplier);
 
                 return (
                   <div key={idx} className="bg-slate-50 p-2.5 rounded-xl border border-slate-200/80 flex justify-between items-center text-xs">

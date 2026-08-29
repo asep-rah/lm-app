@@ -4,6 +4,7 @@ export type StaffRoleValue =
   | 'kasir'
   | 'driver'
   | 'cs'
+  | 'cs_care'
   | 'admin_ops'
   | 'digital_marketing'
   | 'finance'
@@ -17,6 +18,7 @@ export const STAFF_ROLES: { value: StaffRoleValue; label: string }[] = [
   { value: 'kasir', label: 'Kasir (POS - 1 Outlet)' },
   { value: 'driver', label: 'Driver / Kurir (Aplikasi Kurir)' },
   { value: 'cs', label: 'Customer Service (CS Pusat)' },
+  { value: 'cs_care', label: 'CS Care (Resolusi Komplain)' },
   { value: 'admin_ops', label: 'Admin Operasional / CMS' },
   { value: 'digital_marketing', label: 'Digital Marketing' },
   { value: 'finance', label: 'Finance (Multi-Outlet)' },
@@ -44,6 +46,7 @@ export const isMultiOutletRole = (role: string) =>
     'head_management',
     'head',
     'cs',
+    'cs_care',
     'head_cs'
   ].includes(String(role || '').toLowerCase());
 

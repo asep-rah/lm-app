@@ -21,6 +21,7 @@ import {
   prTitle
 } from '@/lib/cmsRequisition';
 import { toast } from '@/lib/toast';
+import FileProofInput from '@/components/FileProofInput';
 
 const formatRp = (n: any) => `Rp ${Number(n || 0).toLocaleString('id-ID')}`;
 
@@ -384,12 +385,7 @@ export default function RequisitionForm({
             <label className="block text-[10px] font-bold text-slate-500 mb-1">
               Foto / nota (receipt_url)
             </label>
-            <input
-              type="file"
-              accept="image/*,.pdf"
-              onChange={(e) => setQuoteFile(e.target.files?.[0] || null)}
-              className="w-full text-xs file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700"
-            />
+            <FileProofInput file={quoteFile} onFile={setQuoteFile} accept="image/*,.pdf" icon="upload" />
           </div>
 
           <button
@@ -505,11 +501,11 @@ export default function RequisitionForm({
                             onChange={(e) => setActualCost({ ...actualCost, [req.id]: e.target.value })}
                             className="w-full border border-slate-200 rounded-lg p-1.5 text-[10px] font-bold"
                           />
-                          <input
-                            type="file"
+                          <FileProofInput
+                            file={payProof[req.id] || null}
+                            onFile={(f) => setPayProof({ ...payProof, [req.id]: f })}
                             accept="image/*,.pdf"
-                            onChange={(e) => setPayProof({ ...payProof, [req.id]: e.target.files?.[0] || null })}
-                            className="w-full text-[9px]"
+                            icon="upload"
                           />
                           <button
                             disabled={busyId === req.id}

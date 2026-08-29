@@ -31,7 +31,9 @@ export const createIssueTasksForRoles = async (
 
   for (const role of roles) {
     const title =
-      role === 'cs'
+      role === 'cs_care'
+        ? `CS Care — Komplain: ${issue.category || 'Pelanggan'}`
+        : role === 'cs'
         ? `Komplain pelanggan — CS: ${issue.category || 'Kendala'}`
         : `Kendala Outlet: ${issue.category || 'Lainnya'}`;
     try {

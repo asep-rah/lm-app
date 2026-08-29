@@ -77,6 +77,7 @@ export const canCreateRequisition = (role: string) =>
 export const homePathForRole = (role: string) => {
   const r = String(role || '').toLowerCase().trim();
   if (isOwnerRole(r)) return '/owner';
+  if (r === 'cs_care') return '/cs/care';
   if (isWorkspaceRole(r)) return '/workspace';
   if (['driver', 'courier', 'kurir'].includes(r)) return '/driver/dashboard';
   if (r === 'investor') return '/investor';
@@ -93,7 +94,7 @@ export const kpiKeysVisibleForRole = (role: string): string[] | null => {
   if (isOwnerRole(r) || isHeadManagementRole(r)) return null;
   if (r === 'supervisor') return ['kasir', 'supervisor'];
   if (r === 'kasir' || r === 'pos') return ['kasir'];
-  if (['cs', 'head_cs', 'driver', 'courier', 'kurir'].includes(r)) return ['kurir_cs'];
+  if (['cs', 'head_cs', 'cs_care', 'driver', 'courier', 'kurir'].includes(r)) return ['kurir_cs'];
   if (['finance', 'head_finance'].includes(r)) return ['finance'];
   if (['admin_ops', 'admin'].includes(r)) return ['admin_ops'];
   if (r === 'digital_marketing') return ['digital_marketing'];

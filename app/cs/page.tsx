@@ -13,7 +13,8 @@ import {
   phoneVariants,
   resolveThread,
   threadKeyOf,
-  upsertChatSession
+  upsertChatSession,
+  canonicalPhone
 } from '@/lib/csChat';
 import { CS_MACROS } from '@/lib/csMacros';
 import { createSupervisorIssueTask } from '@/lib/createOutletIssueTask';
@@ -29,6 +30,7 @@ import { sendInvoiceToLiveChat } from '@/lib/chatInvoice';
 import ChatInvoiceCard from '@/components/ChatInvoiceCard';
 import { isTaskCompleted } from '@/lib/taskRoles';
 import { toast } from '@/lib/toast';
+import FileProofInput from '@/components/FileProofInput';
 
 type Thread = {
   key: string;
@@ -188,6 +190,27 @@ export default function CsCommandCenter() {
       })
       .sort((a, b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime());
 
+    const carePhone = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('phone') : '';
+    if (carePhone) {
+      const careKey = threadKeyOf({ customer_phone: carePhone });
+      if (!next.some((t) => t.key === careKey)) {
+        next.unshift({
+          key: careKey,
+          phone: canonicalPhone(carePhone) || carePhone,
+          preview: 'Thread komplain CS Care',
+          lastAt: new Date().toISOString(),
+          lastSender: '',
+          waitingFrom: Date.now(),
+          assignedId: '',
+          assignedName: '',
+          claimed: false,
+          resolved: false
+        });
+      }
+      setSelectedKey(careKey);
+      setFilter('all');
+    }
+
     setThreads(next);
 
     const start = new Date();
@@ -270,7 +293,7 @@ export default function CsCommandCenter() {
   selectedKeyRef.current = selectedKey;
 
   useEffect(() => {
-    if (!agent.role || !['cs', 'supervisor', 'owner', 'head_cs'].includes(agent.role)) {
+    if (!agent.role || !['cs', 'supervisor', 'owner', 'head_cs', 'cs_care'].includes(agent.role)) {
       if (typeof window !== 'undefined' && !localStorage.getItem('laundry_user') && !localStorage.getItem('laundry_owner_user')) {
         window.location.href = '/login';
       }
@@ -279,7 +302,7 @@ export default function CsCommandCenter() {
     loadPayTasks();
     supabase.from('employees').select('id, name, role').then(({ data }) => {
       const rows = (data || []).filter((e: any) =>
-        ['cs', 'supervisor', 'owner', 'head_cs'].includes(String(e.role || '').toLowerCase())
+        ['cs', 'supervisor', 'owner', 'head_cs', 'cs_care'].includes(String(e.role || '').toLowerCase())
       );
       setColleagues((prev) => {
         const map: Record<string, any> = {};
@@ -729,6 +752,9 @@ export default function CsCommandCenter() {
         <Link href="/workspace" className="text-[11px] font-bold text-slate-500 border border-slate-200 rounded-xl px-3 py-2">
           Workspace
         </Link>
+        <Link href="/cs/care" className="text-[11px] font-bold text-rose-700 border border-rose-200 rounded-xl px-3 py-2">
+          CS Care
+        </Link>
         <Link href="/cs/dashboard" className="text-[11px] font-bold text-slate-500 border border-slate-200 rounded-xl px-3 py-2">
           Ops Dashboard
         </Link>
@@ -1111,13 +1137,7 @@ export default function CsCommandCenter() {
             <p className="text-xs text-slate-500">
               {payModal.receipt_number || payModal.service_type} · Rp {Number(payModal.amount || 0).toLocaleString('id-ID')}
             </p>
-            <input
-              type="file"
-              accept="image/*"
-              capture="environment"
-              onChange={(e) => setPayFile(e.target.files?.[0] || null)}
-              className="w-full text-xs"
-            />
+            <FileProofInput file={payFile} onFile={setPayFile} capture="environment" />
             <div className="flex gap-2">
               <button
                 type="button"

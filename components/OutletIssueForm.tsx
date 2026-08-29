@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { createSupervisorIssueTask } from '@/lib/createOutletIssueTask';
 import { insertWithFallback } from '@/lib/safeWrite';
+import FileProofInput from '@/components/FileProofInput';
 
 export default function OutletIssueForm({ selectedOutlet, employeeName }: { selectedOutlet: string; employeeName: string }) {
   const [issueCategory, setIssueCategory] = useState('Kerusakan Alat');
@@ -209,14 +210,9 @@ export default function OutletIssueForm({ selectedOutlet, employeeName }: { sele
       />
       <div>
         <label className="block text-[10px] font-bold text-slate-500 mb-1">
-          📸 Lampirkan Foto / Video Bukti Kendala (Opsional)
+          Lampirkan Foto / Video Bukti Kendala (Opsional)
         </label>
-        <input
-          type="file"
-          accept="image/*,video/*"
-          onChange={(e) => setMediaFile(e.target.files?.[0] || null)}
-          className="w-full text-xs text-slate-500 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-rose-50 file:text-rose-700 hover:file:bg-rose-100 cursor-pointer"
-        />
+        <FileProofInput file={mediaFile} onFile={setMediaFile} accept="image/*,video/*" icon="upload" />
       </div>
       <button
         type="submit"

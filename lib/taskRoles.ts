@@ -2,7 +2,7 @@
 
 export const KPI_ROLE_ALIASES: Record<string, string[]> = {
   kasir: ['kasir', 'pos'],
-  kurir_cs: ['cs', 'head_cs', 'driver', 'courier', 'kurir'],
+  kurir_cs: ['cs', 'head_cs', 'cs_care', 'driver', 'courier', 'kurir'],
   supervisor: ['supervisor'],
   admin_ops: ['admin_ops', 'admin'],
   digital_marketing: ['digital_marketing'],
@@ -16,6 +16,7 @@ export const inboxRolesFor = (loginRole: string): string[] => {
   if (['kasir', 'pos'].includes(r)) return ['kasir', 'pos'];
   if (r === 'driver' || r === 'courier' || r === 'kurir') return ['driver', 'courier', 'kurir'];
   if (['cs', 'head_cs'].includes(r)) return ['cs', 'head_cs'];
+  if (r === 'cs_care') return ['cs_care'];
   if (r === 'supervisor') return ['supervisor'];
   if (['finance', 'head_finance'].includes(r)) return ['finance', 'head_finance'];
   if (['admin_ops', 'admin'].includes(r)) return ['admin_ops', 'admin'];

@@ -12,7 +12,9 @@ import PhotoLightbox from '@/components/PhotoLightbox';
 import DraggableChatFab from '@/components/DraggableChatFab';
 import ChatAttachment, { visibleChatText } from '@/components/ChatAttachment';
 import ChatInvoiceCard from '@/components/ChatInvoiceCard';
+import FileProofInput from '@/components/FileProofInput';
 import { fileToCompressedDataUrl, uploadChatAttachment, uploadProofFile } from '@/lib/uploadProof';
+import { kiloanLineTotal } from '@/lib/kiloanPrice';
 import { nearestOpenOutlet } from '@/lib/outletCapacity';
 import { toast } from '@/lib/toast';
 import {
@@ -45,7 +47,6 @@ import {
   Receipt,
   Save,
   Search,
-  Shirt,
   Sparkles,
   Store,
   Truck,
@@ -587,7 +588,8 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
         description: complaintText.trim(),
         photoUrl,
         customerName: customerName || customerData?.name,
-        customerPhone
+        customerPhone,
+        outletName: outletsList.find((o) => String(o.id) === String(detailOrder.outlet_id))?.name || currentOutletObj?.name
       });
       if (error) {
         toast('Gagal kirim komplain: ' + error.message, 'err');
@@ -597,7 +599,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       setComplaintOpen(false);
       setComplaintText('');
       setComplaintFile(null);
-      toast('Komplain terkirim. Supervisor & CS akan menindaklanjuti.', 'ok');
+      toast('Komplain terkirim ke CS Care. Tim akan menindaklanjuti.', 'ok');
     } finally {
       setComplaintBusy(false);
     }
@@ -990,7 +992,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
     : isKiloanChecked
     ? [{ name: selectedKiloanSvc, kg: Math.max(3, Number(kiloanEstKg) || 3), qty: Math.max(1, Number(kiloanQty) || 1), duration: kiloanDuration, price: kiloanActiveUnitPrice }]
     : [];
-  const kiloanSubtotal = kiloanLines.reduce((sum, line) => sum + Math.round(line.price * line.kg), 0);
+  const kiloanSubtotal = kiloanLines.reduce((sum, line) => sum + kiloanLineTotal(line.price, line.kg), 0);
 
   let satuanSubtotal = 0;
   if (isSatuanChecked) {
@@ -1377,12 +1379,12 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                   return (
                     <div key={idx} className="flex flex-col items-center">
                       <div
-                        className={`w-7 h-7 rounded-full flex items-center justify-center transition-all ${
+                        className={`w-7 h-7 rounded-full flex items-center justify-center transition-all duration-300 ${
                           isActiveNow
-                            ? 'bg-indigo-600 text-white ring-2 ring-indigo-200 scale-110 animate-pulse'
+                            ? 'bg-white/70 backdrop-blur-md text-indigo-600 ring-2 ring-indigo-200 shadow-md scale-110 animate-pulse'
                             : isPassedOrActive
-                            ? 'bg-emerald-500 text-white shadow-sm'
-                            : 'bg-slate-100 text-slate-400'
+                            ? 'bg-emerald-500/90 text-white shadow-sm backdrop-blur-sm'
+                            : 'bg-white/50 backdrop-blur-sm text-slate-400 border border-white/60'
                         }`}
                       >
                         <StageIcon className="w-3.5 h-3.5" strokeWidth={2.3} />
@@ -1540,7 +1542,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                       className="w-4 h-4 accent-blue-600 rounded"
                     />
                     <span className="text-xs font-extrabold text-blue-900 inline-flex items-center gap-1.5">
-                      <Package className="w-4 h-4" /> Paket Laundry Kiloan
+                      <img src="/assets/icons/washing-machine.svg" alt="" className="w-7 h-7" /> Paket Laundry Kiloan
                     </span>
                   </label>
 
@@ -1612,7 +1614,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                         Info: Minimal 3kg per order (1 Mesin Cuci = 1 Customer, pakaian tidak dicampur)
                       </p>
                       <p className="text-[10px] text-blue-600 font-bold text-right">
-                        Harga: Rp {kiloanActiveUnitPrice.toLocaleString('id-ID')}/Kg · Total Rp {(kiloanActiveUnitPrice * Math.max(3, Number(kiloanEstKg) || 3)).toLocaleString('id-ID')}
+                        Harga: Rp {kiloanActiveUnitPrice.toLocaleString('id-ID')}/Kg · Total Rp {kiloanLineTotal(kiloanActiveUnitPrice, Math.max(3, Number(kiloanEstKg) || 3)).toLocaleString('id-ID')}
                       </p>
                       <button type="button" onClick={handleAddKiloanToCart} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-sm inline-flex items-center justify-center gap-1.5">
                         Tambah Paket Kiloan Ini
@@ -1627,7 +1629,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                                 <span className="text-[9px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-bold ml-1">{item.duration}</span>
                               </div>
                               <div className="flex items-center gap-2">
-                                <span className="font-extrabold text-blue-600">Rp {(item.price * item.kg).toLocaleString('id-ID')}</span>
+                                <span className="font-extrabold text-blue-600">Rp {kiloanLineTotal(item.price, item.kg).toLocaleString('id-ID')}</span>
                                 <button type="button" onClick={() => handleRemoveKiloan(idx)} className="text-rose-500 p-1 rounded-full hover:bg-rose-50" aria-label="Hapus">
                                   <X className="w-4 h-4" />
                                 </button>
@@ -1649,7 +1651,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                       className="w-4 h-4 accent-indigo-600 rounded"
                     />
                     <span className="text-xs font-extrabold text-slate-800 inline-flex items-center gap-1.5">
-                      <Shirt className="w-4 h-4" /> Items Satuan (Bedcover/Sepatu/dll)
+                      <img src="/assets/icons/laundry-basket.svg" alt="" className="w-7 h-7" /> Items Satuan (Bedcover/Sepatu/dll)
                     </span>
                   </label>
 
@@ -2534,12 +2536,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
               placeholder="Jelaskan kendala (sobek, kurang, salah item, dll.)"
               className="w-full border border-slate-200 rounded-xl p-2.5 text-xs"
             />
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(e) => setComplaintFile(e.target.files?.[0] || null)}
-              className="block w-full text-[11px]"
-            />
+            <FileProofInput file={complaintFile} onFile={setComplaintFile} />
             <div className="flex gap-2">
               <button type="button" onClick={() => setComplaintOpen(false)} className="flex-1 border border-slate-200 font-bold text-xs py-2.5 rounded-xl">
                 Batal

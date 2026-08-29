@@ -52,6 +52,9 @@ export const showComplaintActions = (order: any) => {
   if (st.includes('pending')) {
     return { showConfirm: false, showComplain: false, autoConfirmed: false, pending: true, locked: true };
   }
+  if (st.includes('resolved')) {
+    return { showConfirm: false, showComplain: false, autoConfirmed: false, pending: false, locked: true };
+  }
   if (['confirmed', 'locked', 'sudah sesuai'].includes(st) || order?.confirmed_at) {
     return { showConfirm: false, showComplain: false, autoConfirmed: false, pending: false, locked: true };
   }
@@ -118,6 +121,7 @@ export const submitOrderComplaint = async (opts: {
   photoUrl?: string;
   customerName?: string;
   customerPhone?: string;
+  outletName?: string;
 }) => {
   const order = opts.order || {};
   const desc = String(opts.description || '').trim();
@@ -126,10 +130,13 @@ export const submitOrderComplaint = async (opts: {
   const txId = isPosOrder(order) ? order.id : order.transaction_id || null;
   const pickupId = order.pickup_id || (!isPosOrder(order) ? order.id : null);
   const reporter = opts.customerName || order.customer_name || 'Pelanggan';
+  const phone = opts.customerPhone || order.customer_phone || order.phone_number || '';
+  const resi = order.receipt_number || order.order_number || '';
+  const outletName = opts.outletName || order.outlet_name || '';
   const body = [
     `Komplain pelanggan (SLA 24 jam)`,
-    opts.customerPhone ? `HP: ${opts.customerPhone}` : '',
-    order.receipt_number ? `Resi: ${order.receipt_number}` : '',
+    phone ? `HP: ${phone}` : '',
+    resi ? `Resi: ${resi}` : '',
     desc,
     opts.photoUrl ? `Bukti: ${opts.photoUrl}` : ''
   ]
@@ -146,13 +153,17 @@ export const submitOrderComplaint = async (opts: {
         description: body,
         reporter_name: reporter,
         created_by_name: reporter,
+        customer_name: reporter,
+        customer_phone: phone || null,
+        receipt_number: resi || null,
+        outlet_name: outletName || null,
         urgency: 'Mendesak',
         priority: 'high',
         status: 'pending_resolution',
         media_url: opts.photoUrl || null,
         transaction_id: txId,
         pickup_id: pickupId,
-        assigned_to_role: 'supervisor'
+        assigned_to_role: 'cs_care'
       },
       {
         outlet_id: order.outlet_id || null,
@@ -161,7 +172,8 @@ export const submitOrderComplaint = async (opts: {
         reporter_name: reporter,
         urgency: 'Mendesak',
         status: 'pending_resolution',
-        media_url: opts.photoUrl || null
+        media_url: opts.photoUrl || null,
+        assigned_to_role: 'cs_care'
       },
       {
         outlet_id: order.outlet_id || null,
@@ -190,7 +202,7 @@ export const submitOrderComplaint = async (opts: {
         reporter_name: reporter,
         urgency: 'mendesak'
       },
-      ['supervisor', 'cs']
+      ['cs_care']
     );
   }
 

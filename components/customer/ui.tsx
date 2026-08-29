@@ -76,19 +76,19 @@ export function StatusPill({ status }: { status?: string }) {
   }
   return (
     <span
-      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold backdrop-blur-sm border ${
+      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold backdrop-blur-md border shadow-sm ${
         tone === 'emerald'
-          ? 'bg-emerald-50/90 text-emerald-700 border-emerald-100'
+          ? 'bg-emerald-50/80 text-emerald-700 border-emerald-100/80'
           : tone === 'blue'
-          ? 'bg-blue-50/90 text-blue-700 border-blue-100'
+          ? 'bg-blue-50/80 text-blue-700 border-blue-100/80'
           : tone === 'indigo'
-          ? 'bg-indigo-50/90 text-indigo-700 border-indigo-100'
+          ? 'bg-indigo-50/80 text-indigo-700 border-indigo-100/80'
           : tone === 'cyan'
-          ? 'bg-cyan-50/90 text-cyan-700 border-cyan-100'
-          : 'bg-amber-50/90 text-amber-700 border-amber-100'
+          ? 'bg-cyan-50/80 text-cyan-700 border-cyan-100/80'
+          : 'bg-amber-50/80 text-amber-700 border-amber-100/80'
       }`}
     >
-      <Glyph className="w-3 h-3" strokeWidth={2.4} />
+      <Glyph className={`w-3 h-3 ${tone === 'amber' || tone === 'blue' ? 'animate-[pulse_2s_ease-in-out_infinite]' : ''}`} strokeWidth={2.4} />
       {/pack/i.test(s) ? 'Dikemas' : (status || 'Menunggu')}
     </span>
   );

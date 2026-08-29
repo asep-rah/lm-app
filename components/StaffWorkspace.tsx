@@ -83,7 +83,7 @@ export default function StaffWorkspace() {
       const { data: outs } = await supabase.from('outlets').select('id, name, is_overcapacity').order('name');
       setOutletCaps(outs || []);
     }
-    if (role === 'cs' || role === 'head_cs') {
+    if (role === 'cs' || role === 'head_cs' || role === 'cs_care') {
       const { count } = await supabase
         .from('support_chat_sessions')
         .select('*', { count: 'exact', head: true })
@@ -208,10 +208,15 @@ export default function StaffWorkspace() {
                 </Link>
               </>
             )}
-            {(role === 'cs' || role === 'head_cs') && (
-              <Link href="/cs" className="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-sky-600 text-white">
-                Command Center
-              </Link>
+            {(role === 'cs' || role === 'head_cs' || role === 'cs_care') && (
+              <>
+                <Link href="/cs" className="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-sky-600 text-white">
+                  Command Center
+                </Link>
+                <Link href="/cs/care" className="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-rose-600 text-white">
+                  CS Care
+                </Link>
+              </>
             )}
             <button type="button" onClick={handleLogout} className="text-[11px] font-semibold px-3 py-1.5 rounded-lg text-rose-600 border border-rose-100 hover:bg-rose-50">
               Keluar
@@ -375,13 +380,16 @@ export default function StaffWorkspace() {
 
             {isHeadManagementRole(role) && <HeadTaskDelegator />}
 
-            {(role === 'cs' || role === 'head_cs') && (
+            {(role === 'cs' || role === 'head_cs' || role === 'cs_care') && (
               <div className="space-y-2">
                 <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Antrian chat</p>
                 <p className="text-2xl font-semibold tabular-nums">{unassignedChats}</p>
                 <p className="text-xs text-slate-500">thread belum di-claim</p>
                 <Link href="/cs" className="block text-center text-xs font-semibold py-2 rounded-lg bg-sky-600 text-white">
                   Buka Command Center
+                </Link>
+                <Link href="/cs/care" className="block text-center text-xs font-semibold py-2 rounded-lg bg-rose-600 text-white">
+                  Inbox CS Care
                 </Link>
                 <Link href="/cs/dashboard" className="block text-center text-[11px] font-semibold py-2 rounded-lg border border-slate-200">
                   Ops dashboard
