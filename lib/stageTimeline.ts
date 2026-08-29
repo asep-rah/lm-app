@@ -6,6 +6,8 @@ export interface WorkLogRow {
   stage?: string | null;
   employee_name?: string | null;
   created_at?: string | null;
+  notes?: string | null;
+  photo_url?: string | null;
 }
 
 export interface StageTimelineEntry {
@@ -15,6 +17,8 @@ export interface StageTimelineEntry {
   crew: string | null;
   at: string | null;
   done: boolean;
+  notes: string | null;
+  photoUrl: string | null;
 }
 
 /**
@@ -35,6 +39,7 @@ export const stageKeyOf = (stageStr: any): string => {
   if (s.includes('pack') || s.includes('emas')) return 'packing';
   // Dicek sebelum 'diambil': 'Siap Diambil' mengandung kata 'diambil' padahal
   // cucian belum diserahkan ke pelanggan.
+  if (s.includes('rak') || s.includes('penyimpanan')) return 'siap';
   if (s.includes('siap')) return 'siap';
   if (s.includes('mengantar') || s.includes('diantar') || s.includes('delivery')) return 'siap';
   if (s.includes('selesai jemput')) return 'outlet';
@@ -144,13 +149,19 @@ export const buildStageTimeline = (
       at = transaction.pickup_created_at || (!transaction?.receipt_number ? transaction.created_at : null);
     }
 
+    const rackPhoto = stage.key === 'packing' || stage.key === 'siap'
+      ? transaction?.rack_photo_url || null
+      : null;
+
     return {
       key: stage.key,
       label: stage.label,
       icon: stage.icon,
       crew: last?.employee_name || fallbackCrew,
       at,
-      done
+      done,
+      notes: last?.notes || (stage.key === 'siap' ? transaction?.rack_notes || null : null),
+      photoUrl: last?.photo_url || rackPhoto
     };
   });
 };

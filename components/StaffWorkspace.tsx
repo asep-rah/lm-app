@@ -15,6 +15,7 @@ import RequisitionForm from '@/components/RequisitionForm';
 import HeadTaskDelegator from '@/components/HeadTaskDelegator';
 import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
 import { toast } from '@/lib/toast';
+import { updateWithFallback } from '@/lib/safeWrite';
 
 const todayStart = () => {
   const d = new Date();
@@ -40,6 +41,8 @@ export default function StaffWorkspace() {
   const [investorNotes, setInvestorNotes] = useState<any[]>([]);
   const [issues, setIssues] = useState<any[]>([]);
   const [unassignedChats, setUnassignedChats] = useState(0);
+  const [outletCaps, setOutletCaps] = useState<any[]>([]);
+  const [capBusy, setCapBusy] = useState<string | null>(null);
 
   const loadTasks = async () => {
     if (!aliases.length) {
@@ -77,6 +80,8 @@ export default function StaffWorkspace() {
     if (role === 'supervisor') {
       const { data } = await supabase.from('outlet_issues').select('*').order('created_at', { ascending: false }).limit(8);
       setIssues((data || []).filter((i: any) => String(i.status || '') !== 'Selesai'));
+      const { data: outs } = await supabase.from('outlets').select('id, name, is_overcapacity').order('name');
+      setOutletCaps(outs || []);
     }
     if (role === 'cs' || role === 'head_cs') {
       const { count } = await supabase
@@ -144,6 +149,23 @@ export default function StaffWorkspace() {
     }
     toast(res.isOverdue ? `Selesai, SLA terlewati (−${Math.abs(res.penalty || 0)})` : 'Tugas selesai.', res.isOverdue ? 'warn' : 'ok');
     loadTasks();
+  };
+
+  const toggleOutletCapacity = async (outlet: any) => {
+    setCapBusy(outlet.id);
+    const next = !outlet.is_overcapacity;
+    const { error } = await updateWithFallback(
+      'outlets',
+      [{ is_overcapacity: next }],
+      { column: 'id', value: outlet.id }
+    );
+    setCapBusy(null);
+    if (error) {
+      toast('Gagal mengubah kapasitas: ' + error.message, 'err');
+      return;
+    }
+    setOutletCaps((prev) => prev.map((o) => (o.id === outlet.id ? { ...o, is_overcapacity: next } : o)));
+    toast(next ? `${outlet.name} disembunyikan dari pelanggan.` : `${outlet.name} kembali dibuka.`, 'ok');
   };
 
   const handleLogout = () => {
@@ -319,7 +341,25 @@ export default function StaffWorkspace() {
 
             {role === 'supervisor' && (
               <div className="space-y-2">
-                <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Kendala outlet</p>
+                <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Kapasitas outlet</p>
+                <p className="text-[11px] text-slate-500">Outlet penuh disembunyikan dari pilihan pelanggan.</p>
+                {outletCaps.length === 0 && <p className="text-xs text-slate-400">Outlet belum dimuat.</p>}
+                {outletCaps.map((o) => (
+                  <div key={o.id} className="flex items-center justify-between gap-2 text-xs border border-slate-100 rounded-lg px-2.5 py-2">
+                    <span className="font-semibold truncate">{o.name}</span>
+                    <button
+                      type="button"
+                      disabled={capBusy === o.id}
+                      onClick={() => toggleOutletCapacity(o)}
+                      className={`shrink-0 text-[10px] font-bold px-2 py-1 rounded-md ${
+                        o.is_overcapacity ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'
+                      }`}
+                    >
+                      {o.is_overcapacity ? 'Penuh — buka lagi' : 'Tandai penuh'}
+                    </button>
+                  </div>
+                ))}
+                <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400 pt-2">Kendala outlet</p>
                 {issues.length === 0 && <p className="text-xs text-slate-400">Tidak ada issue terbuka.</p>}
                 {issues.map((i) => (
                   <div key={i.id} className="text-xs border border-slate-100 rounded-lg px-2.5 py-2">

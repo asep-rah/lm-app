@@ -53,29 +53,44 @@ export const insertChatMessage = async (input: {
   assigned_to_agent_id?: string | null;
   assigned_to_agent_name?: string | null;
   is_claimed?: boolean;
+  attachment_url?: string | null;
+  attachment_type?: string | null;
 }) => {
   const thread_key = threadKeyOf(input);
+  const withFile = input.attachment_url
+    ? `${input.message || ''}${input.message ? '\n' : ''}${input.attachment_url}`.trim()
+    : input.message;
   const full: Record<string, any> = {
     customer_phone: input.customer_phone || null,
     order_id: input.order_id || null,
     sender_type: input.sender_type,
-    message: input.message,
+    message: withFile,
     sender_name: input.sender_name || null,
     is_internal: !!input.is_internal,
     thread_key,
     assigned_to_agent_id: input.assigned_to_agent_id || null,
     assigned_to_agent_name: input.assigned_to_agent_name || null,
-    is_claimed: !!input.is_claimed
+    is_claimed: !!input.is_claimed,
+    attachment_url: input.attachment_url || null,
+    attachment_type: input.attachment_type || null
   };
 
   const attempts = [
     full,
     { ...full, assigned_to_agent_id: undefined, assigned_to_agent_name: undefined, is_claimed: undefined },
     {
+      ...full,
+      attachment_url: undefined,
+      attachment_type: undefined,
+      assigned_to_agent_id: undefined,
+      assigned_to_agent_name: undefined,
+      is_claimed: undefined
+    },
+    {
       customer_phone: full.customer_phone,
       order_id: full.order_id,
       sender_type: input.is_internal ? 'internal' : input.sender_type,
-      message: input.message
+      message: withFile
     }
   ];
 

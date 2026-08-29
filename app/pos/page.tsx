@@ -13,6 +13,8 @@ import RoleTaskInbox from '@/components/RoleTaskInbox';
 import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
 import { updatePickupOrder } from '@/lib/pickupUpdates';
 import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
+import { uploadProofFile } from '@/lib/uploadProof';
+import { createPaymentVerifyTask, isCsVerifiedPaid, isNonCashVerifyMethod, isPaymentLocked, PENDING_PAY_STATUS } from '@/lib/paymentVerify';
 import {
   classifyQueueOrder,
   isExpressDuration,
@@ -548,6 +550,10 @@ const handleApplyLoan = async (e: React.FormEvent) => {
   const [rackInput, setRackInput] = useState('');
   const [bagInput, setBagInput] = useState('');
   const [rackNotes, setRackNotes] = useState('');
+  const [rackPhotoFile, setRackPhotoFile] = useState<File | null>(null);
+  const [stageProof, setStageProof] = useState<{ order: any; targetStatus: string } | null>(null);
+  const [stageProofFile, setStageProofFile] = useState<File | null>(null);
+  const [stageProofNotes, setStageProofNotes] = useState('');
   const [queueSearch, setQueueSearch] = useState('');
   const [completedPickups, setCompletedPickups] = useState<any[]>([]);
   const [printMode, setPrintMode] = useState<'receipt'|'payslip'>('receipt');
@@ -821,17 +827,35 @@ const handleApplyLoan = async (e: React.FormEvent) => {
           setTenureMonths(Math.max(1, monthsDiff || 1));
         }
 
-        if (!user.outlet_id || user.outlet_id === 'ALL') {
-          setIsMultiOutletUser(true);
-          if (dbOutlets && dbOutlets.length > 0) { 
-            setSelectedOutlet(dbOutlets[0].id); 
-            setOutletName(dbOutlets[0].name); 
+        const assignedOutlet = String(
+          user.outlet_id || user.user_metadata?.outlet_id || user.raw_user_meta_data?.outlet_id || ''
+        );
+        const roleKey = String(user.role || 'kasir').toLowerCase().trim();
+        const lockedToOutlet = ['kasir', 'pos'].includes(roleKey) && assignedOutlet && assignedOutlet !== 'ALL';
+
+        try {
+          localStorage.setItem('user_outlet_id', assignedOutlet);
+          localStorage.setItem('userRole', roleKey);
+          localStorage.setItem('outlet_id', assignedOutlet);
+        } catch { /* ignore */ }
+
+        if (lockedToOutlet || (assignedOutlet && assignedOutlet !== 'ALL')) {
+          setIsMultiOutletUser(false);
+          setSelectedOutlet(assignedOutlet);
+          const found = (dbOutlets || []).find((o: any) => o.id === assignedOutlet);
+          setOutletName(found?.name || user.outlets?.name || 'Cabang Outlet');
+          setOutletPhone(found?.whatsapp_number || user.outlets?.whatsapp_number || '');
+        } else if (!assignedOutlet || assignedOutlet === 'ALL') {
+          if (['kasir', 'pos'].includes(roleKey)) {
+            setIsMultiOutletUser(false);
+          } else {
+            setIsMultiOutletUser(true);
+          }
+          if (dbOutlets && dbOutlets.length > 0) {
+            setSelectedOutlet(dbOutlets[0].id);
+            setOutletName(dbOutlets[0].name);
             setOutletPhone(dbOutlets[0].whatsapp_number || '');
           }
-        } else {
-          setSelectedOutlet(user.outlet_id); 
-          setOutletName(user.outlets?.name || 'Cabang Outlet');
-          setOutletPhone(user.outlets?.whatsapp_number || '');
         }
       } else { window.location.href = '/login'; return; }
 
@@ -857,11 +881,13 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     const subscription = supabase
       .channel('pos_realtime_sync')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'pickup_orders' }, (payload) => {
+        const row: any = payload.new;
+        if (row?.outlet_id && selectedOutlet && row.outlet_id !== selectedOutlet) return;
         try {
           const audio = new Audio('/notification.mp3');
           audio.play().catch(() => {});
         } catch (e) {}
-        alert(`🔔 ORDERAN ONLINE BARU MASUK!\nService: ${(payload.new as any)?.service_type || 'Penjemputan Customer'}`);
+        alert(`🔔 ORDERAN ONLINE BARU MASUK!\nService: ${row?.service_type || 'Penjemputan Customer'}`);
         refreshData();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
@@ -973,6 +999,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     const { data: incomingPkps } = await supabase
     .from('pickup_orders')
     .select('*')
+    .eq('outlet_id', selectedOutlet)
     .neq('status', 'Selesai')
     .neq('status', 'Batal');
 
@@ -1225,12 +1252,41 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       amount: totalPay,
       items: cartItems.length > 0 ? cartItems : [{ name: primaryServiceLabel, qty: totalPcsSum || 1, weight: totalKgSum || 0 }],
       payment_method: finalPaymentMethodLabel,
-      status: 'Diterima',
+      status: isNonCashVerifyMethod(finalPaymentMethodLabel) ? PENDING_PAY_STATUS : 'Diterima',
       by_sortir: employeeName
     };
+    const needsPayVerify = isNonCashVerifyMethod(finalPaymentMethodLabel);
 
-    const { data: newTx, error } = await supabase.from('transactions').insert([orderData]).select('*, outlets(name, whatsapp_number)').single();
+    let { data: newTx, error } = await supabase.from('transactions').insert([orderData]).select('*, outlets(name, whatsapp_number)').single();
+    if (error && needsPayVerify) {
+      const retry = await supabase
+        .from('transactions')
+        .insert([{ ...orderData, status: 'Diterima' }])
+        .select('*, outlets(name, whatsapp_number)')
+        .single();
+      newTx = retry.data;
+      error = retry.error;
+    }
     if (!error && newTx) {
+      if (needsPayVerify) {
+        await updateWithFallback(
+          'transactions',
+          [
+            { payment_status: 'pending', status: PENDING_PAY_STATUS },
+            { status: PENDING_PAY_STATUS }
+          ],
+          { column: 'id', value: newTx.id }
+        );
+        await createPaymentVerifyTask({
+          id: newTx.id,
+          receipt_number: generatedResi,
+          customer_name: orderData.customer_name,
+          customer_phone: normalizedPhone || customerPhone || undefined,
+          amount: totalPay,
+          payment_method: finalPaymentMethodLabel,
+          outlet_id: selectedOutlet
+        });
+      }
       const curOutletPhone = newTx.outlets?.whatsapp_number || outletPhone || '';
       setLastOrderInfo({ 
         ...orderData, 
@@ -1385,14 +1441,32 @@ const statusKeyOf = (order: any) =>
 // tidak dibanjiri popup, tapi tetap tahu kalau upah tahap tidak ikut tercatat.
 let workLogWarningShown = false;
 
-const handleStatusChange = async (order: any, targetStatus: string) => {
+const handleStatusChange = async (order: any, targetStatus: string, proof?: { photoUrl?: string; notes?: string }) => {
   if (!order?.id) {
     alert('Gagal mengubah status: data pesanan tidak valid.');
     return;
   }
 
+  if (selectedOutlet && order.outlet_id && String(order.outlet_id) !== String(selectedOutlet)) {
+    alert('Pesanan ini milik outlet lain. Kasir hanya dapat memproses pesanan cabang sendiri.');
+    return;
+  }
+
+  if (isPaymentLocked(order)) {
+    alert('⏳ Pembayaran belum dikonfirmasi CS. Produksi terkunci sampai pembayaran lunas.');
+    return;
+  }
+
+  const targetKey = stageKeyOf(targetStatus);
+  if ((targetKey === 'sortir' || targetKey === 'packing') && !proof?.photoUrl) {
+    setStageProof({ order, targetStatus });
+    setStageProofFile(null);
+    setStageProofNotes('');
+    return;
+  }
+
   // Packing -> Siap Diambil wajib lewat modal rak (nomor rak + jumlah pack).
-  if (stageKeyOf(targetStatus) === 'siap') {
+  if (targetKey === 'siap') {
     const item = typeof order.item_index === 'number'
       ? parseOrderItems(order.items)[order.item_index]
       : null;
@@ -1400,6 +1474,7 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
     setRackInput(String(item?.rack_location || order.rack_location || order.rack_number || ''));
     setBagInput(String(item?.package_count || order.package_count || ''));
     setRackNotes(String(item?.rack_notes || order.rack_notes || ''));
+    setRackPhotoFile(null);
     setShowRackModal(true);
     return;
   }
@@ -1464,7 +1539,7 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
     // Transisi 'Diterima' -> 'Sortir' tidak dicatat karena belum ada tahap selesai.
     const completedStage = String(order.status || '').trim();
     if (PAID_STAGE_KEYS.includes(getStageKey(completedStage))) {
-      const { error: logErr } = await supabase.from('work_logs').insert([
+      const { error: logErr } = await insertWithFallback('work_logs', [
         {
           transaction_id: order.id,
           employee_name: employeeName || 'Kasir',
@@ -1473,6 +1548,14 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
           weight_kg: Number(subItem?.weight ?? order.weight_kg) || 0,
           pcs_count: Number(subItem?.qty ?? order.pcs_count) || 0,
           created_at: new Date().toISOString()
+        },
+        {
+          transaction_id: order.id,
+          employee_name: employeeName || 'Kasir',
+          stage: completedStage,
+          service_type: subItem?.name || order.service_type || '',
+          weight_kg: Number(subItem?.weight ?? order.weight_kg) || 0,
+          pcs_count: Number(subItem?.qty ?? order.pcs_count) || 0
         }
       ]);
 
@@ -1487,6 +1570,30 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
           );
         }
       }
+    }
+
+    if ((targetKey === 'sortir' || targetKey === 'packing') && proof?.photoUrl) {
+      await insertWithFallback('work_logs', [
+        {
+          transaction_id: order.id,
+          employee_name: employeeName || 'Kasir',
+          stage: targetStatus,
+          service_type: subItem?.name || order.service_type || '',
+          weight_kg: Number(subItem?.weight ?? order.weight_kg) || 0,
+          pcs_count: Number(subItem?.qty ?? order.pcs_count) || 0,
+          notes: proof.notes || undefined,
+          photo_url: proof.photoUrl,
+          created_at: new Date().toISOString()
+        },
+        {
+          transaction_id: order.id,
+          employee_name: employeeName || 'Kasir',
+          stage: targetStatus,
+          service_type: subItem?.name || order.service_type || '',
+          weight_kg: Number(subItem?.weight ?? order.weight_kg) || 0,
+          pcs_count: Number(subItem?.qty ?? order.pcs_count) || 0
+        }
+      ]);
     }
 
     // 5. Potong stok bahan kimia (best-effort, tidak boleh membatalkan perubahan status)
@@ -1532,12 +1639,21 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
   const handleSubmitRack = async () => {
     const order = selectedOrderForRack;
     if (!order?.id) return;
+    if (selectedOutlet && order.outlet_id && String(order.outlet_id) !== String(selectedOutlet)) {
+      alert('Pesanan ini milik outlet lain. Kasir hanya dapat memproses pesanan cabang sendiri.');
+      return;
+    }
 
     const rack = rackInput.trim();
     const pkg = bagInput.trim();
     const notes = rackNotes.trim();
     if (!rack || !pkg) {
       alert('⚠️ Nomor/kode rak dan jumlah kantong/pack wajib diisi.');
+      return;
+    }
+    const photoFile = rackPhotoFile;
+    if (!photoFile) {
+      alert('⚠️ Foto bukti penyimpanan rak wajib diunggah.');
       return;
     }
 
@@ -1579,13 +1695,15 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
       const parentStatus = allReady ? 'Siap Diambil' : (order.status || 'Packing');
       const bagCount = parseBagCount(pkg);
       const subItem = isSubItem ? currentItems[order.item_index] : null;
+      const rackPhotoUrl = await uploadProofFile(photoFile, `rack_${order.id}`);
 
       const txFull: Record<string, unknown> = {
         status: parentStatus,
         rack_location: combinedLoc,
         package_count: combinedPkg,
         rack_number: combinedLoc,
-        bag_count: bagCount
+        bag_count: bagCount,
+        rack_photo_url: rackPhotoUrl
       };
       if (notes || combinedNotes) txFull.rack_notes = combinedNotes || notes;
       if (isSubItem) txFull.items = nextItems;
@@ -1657,6 +1775,7 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
           stage: 'Penyimpanan Rak',
           service_type: subItem?.name || order.service_type || '',
           notes: rackAudit,
+          photo_url: rackPhotoUrl,
           weight_kg: 0,
           pcs_count: bagCount,
           created_at: new Date().toISOString()
@@ -1676,6 +1795,7 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
       setRackInput('');
       setBagInput('');
       setRackNotes('');
+      setRackPhotoFile(null);
       setSuccessMsg(allReady
         ? '✅ Racking selesai. Pesanan pindah ke tab Ambil.'
         : '✅ Item disimpan di rak. Selesaikan packing item lain untuk pindah ke Ambil.');
@@ -1689,7 +1809,36 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
     }
   };
 
+  const handleSubmitStageProof = async () => {
+    if (!stageProof) return;
+    if (!stageProofFile) {
+      alert('⚠️ Foto tahap Sortir/Packing wajib diunggah.');
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      const key = stageKeyOf(stageProof.targetStatus);
+      const url = await uploadProofFile(stageProofFile, `stage_${key}_${stageProof.order?.id || 'tx'}`);
+      const { order, targetStatus } = stageProof;
+      setStageProof(null);
+      setStageProofFile(null);
+      await handleStatusChange(order, targetStatus, {
+        photoUrl: url,
+        notes: stageProofNotes.trim() || undefined
+      });
+      setStageProofNotes('');
+    } catch (err: any) {
+      alert('❌ Gagal unggah foto tahap: ' + (err?.message || 'Terjadi kesalahan'));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const handlePickupFinish = async (order: any) => {
+    if (selectedOutlet && order.outlet_id && String(order.outlet_id) !== String(selectedOutlet)) {
+      alert('Pesanan ini milik outlet lain. Kasir hanya dapat memproses pesanan cabang sendiri.');
+      return;
+    }
     if (!confirm(`Serahkan cucian ${order.customer_name}?`)) return;
     setIsSubmitting(true);
 
@@ -1786,6 +1935,32 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
           {isBusy ? '⏳ Menyimpan...' : label}
         </button>
       );
+
+    if (isPaymentLocked(order)) {
+      return wrap(
+        <div className="w-full bg-amber-50 border border-amber-200 text-amber-800 text-[11px] font-bold py-2.5 px-3 rounded-xl text-center animate-pulse">
+          ⏳ Menunggu Konfirmasi Pembayaran CS
+        </div>
+      );
+    }
+
+    if (isCsVerifiedPaid(order) && (
+      s.includes('diterima') ||
+      s.includes('baru') ||
+      s.includes('tiba') ||
+      s.includes('disetujui') ||
+      s.includes('dikonfirmasi') ||
+      !s
+    )) {
+      return (
+        <div className="space-y-2">
+          <div className="w-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-bold py-2 px-3 rounded-xl text-center">
+            ✅ Pembayaran Lunas (Verified CS)
+          </div>
+          {stepButton('🔍 Mulai Proses / Sortir', 'Sortir', 'bg-slate-700 hover:bg-slate-800')}
+        </div>
+      );
+    }
 
     // 1. Jika sedang menunggu persetujuan CS -> Tampilkan Badge Peringatan
     if (s.includes('menunggu konfirmasi')) {
@@ -2047,10 +2222,72 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
                   className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-sm text-slate-800 focus:outline-none"
                 />
               </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Foto Bukti Rak <span className="text-rose-500">*</span></label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={(e) => setRackPhotoFile(e.target.files?.[0] || null)}
+                  className="w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-emerald-50 file:text-emerald-700 file:font-bold"
+                />
+              </div>
             </div>
             <div className="flex gap-2">
-              <button type="button" onClick={() => { setShowRackModal(false); setSelectedOrderForRack(null); }} className="flex-1 bg-slate-100 font-bold py-3 rounded-xl text-slate-600 text-sm">Batal</button>
-              <button type="button" onClick={handleSubmitRack} disabled={isSubmitting || !rackInput.trim() || !bagInput.trim()} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl text-sm disabled:opacity-50">Simpan ke Rak</button>
+              <button type="button" onClick={() => { setShowRackModal(false); setSelectedOrderForRack(null); setRackPhotoFile(null); }} className="flex-1 bg-slate-100 font-bold py-3 rounded-xl text-slate-600 text-sm">Kembali</button>
+              <button type="button" onClick={handleSubmitRack} disabled={isSubmitting || !rackInput.trim() || !bagInput.trim() || !rackPhotoFile} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl text-sm disabled:opacity-50">Simpan ke Rak</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {stageProof && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+            <h3 className="text-lg font-black mb-1 text-slate-800">
+              📸 Foto {stageKeyOf(stageProof.targetStatus) === 'sortir' ? 'Sortir' : 'Packing'}
+            </h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Milik: <span className="font-bold text-emerald-600">{stageProof.order?.customer_name}</span>
+            </p>
+            <div className="space-y-3 mb-6">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Foto tahap <span className="text-rose-500">*</span></label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={(e) => setStageProofFile(e.target.files?.[0] || null)}
+                  className="w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-emerald-50 file:text-emerald-700 file:font-bold"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Catatan staf <span className="text-slate-400 font-semibold">(opsional)</span></label>
+                <input
+                  type="text"
+                  value={stageProofNotes}
+                  onChange={(e) => setStageProofNotes(e.target.value)}
+                  placeholder="Contoh: Noda kerah, 2 hanger terpisah"
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-sm text-slate-800 focus:outline-none"
+                />
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => { setStageProof(null); setStageProofFile(null); setStageProofNotes(''); }}
+                className="flex-1 bg-slate-100 font-bold py-3 rounded-xl text-slate-600 text-sm"
+              >
+                Kembali
+              </button>
+              <button
+                type="button"
+                onClick={handleSubmitStageProof}
+                disabled={isSubmitting || !stageProofFile}
+                className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl text-sm disabled:opacity-50"
+              >
+                {isSubmitting ? 'Mengunggah…' : 'Lanjut'}
+              </button>
             </div>
           </div>
         </div>
@@ -2773,6 +3010,8 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
                           {(order.customer_name && order.customer_name !== 'Pelanggan') ? order.customer_name : (order.customer_phone || order.phone_number || 'Pelanggan Online')}
                         </h4>
                         <span className="text-[10px] font-mono font-bold bg-slate-100 border border-slate-200 text-slate-700 px-2 py-0.5 rounded-md">{order.receipt_number || 'TRX-POS'}</span>
+                        {isPaymentLocked(order) && <span className="text-[9px] font-black uppercase bg-amber-100 text-amber-800 border border-amber-200 px-2 py-0.5 rounded-md animate-pulse">⏳ Bayar CS</span>}
+                        {isCsVerifiedPaid(order) && <span className="text-[9px] font-black uppercase bg-emerald-100 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-md">✅ Lunas CS</span>}
                         {express && <span className="text-[9px] font-black uppercase bg-violet-100 text-violet-800 border border-violet-200 px-2 py-0.5 rounded-md">Express</span>}
                         <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-md border ${sla.overdue ? 'bg-rose-100 text-rose-800 border-rose-300 animate-pulse' : 'bg-sky-50 text-sky-800 border-sky-200'}`}>{sla.label}</span>
                       </div>

@@ -21,6 +21,11 @@ import { insertWithFallback } from '@/lib/safeWrite';
 import StageTimeline from '@/components/StageTimeline';
 import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
 import StatusBadge from '@/components/ui/StatusBadge';
+import ChatAttachment, { visibleChatText } from '@/components/ChatAttachment';
+import PhotoLightbox from '@/components/PhotoLightbox';
+import { uploadProofFile } from '@/lib/uploadProof';
+import { confirmTransactionPayment, isPaymentLocked } from '@/lib/paymentVerify';
+import { isTaskCompleted } from '@/lib/taskRoles';
 import { toast } from '@/lib/toast';
 
 type Thread = {
@@ -99,13 +104,36 @@ export default function CsCommandCenter() {
   const selectedKeyRef = useRef('');
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const attachRef = useRef<HTMLInputElement>(null);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const presenceRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const [payTasks, setPayTasks] = useState<any[]>([]);
+  const [payModal, setPayModal] = useState<any | null>(null);
+  const [payFile, setPayFile] = useState<File | null>(null);
+  const [payBusy, setPayBusy] = useState(false);
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
   const selected = threads.find((t) => t.key === selectedKey) || null;
   const isMine = selected?.assignedId === agent.id || selected?.assignedName === agent.name;
   const canSend = !!selected && selected.claimed && isMine && !selected.resolved;
   const phone = selected ? selected.phone : '';
+  const pendingPayOrders = orders.filter((o) => isPaymentLocked(o));
+
+  const loadPayTasks = useCallback(async () => {
+    const { data } = await supabase
+      .from('system_tasks')
+      .select('*')
+      .in('assigned_to_role', ['cs', 'head_cs'])
+      .order('created_at', { ascending: false })
+      .limit(60);
+    setPayTasks(
+      (data || []).filter(
+        (t: any) =>
+          !isTaskCompleted(t.status) &&
+          (t.source_type === 'PAYMENT_VERIFY' || String(t.title || '').includes('Konfirmasi Pembayaran'))
+      )
+    );
+  }, []);
 
   const loadThreads = useCallback(async () => {
     const [{ data: msgs }, { data: sessions }] = await Promise.all([
@@ -246,6 +274,7 @@ export default function CsCommandCenter() {
       }
     }
     loadThreads();
+    loadPayTasks();
     supabase.from('employees').select('id, name, role').then(({ data }) => {
       const rows = (data || []).filter((e: any) =>
         ['cs', 'supervisor', 'owner', 'head_cs'].includes(String(e.role || '').toLowerCase())
@@ -311,6 +340,22 @@ export default function CsCommandCenter() {
         const nowOpen = !sessionLooksClosed(payload.new);
         if (wasClosed && nowOpen) chimeOnce();
         loadThreadsRef.current();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'system_tasks' }, (payload) => {
+        const row: any = payload.new;
+        const isPay =
+          row &&
+          (row.source_type === 'PAYMENT_VERIFY' || String(row.title || '').includes('Konfirmasi Pembayaran'));
+        if (isPay && payload.eventType === 'INSERT') {
+          chimeOnce();
+          toast('Pembayaran baru menunggu konfirmasi.', 'warn');
+        }
+        loadPayTasks();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
+        const openKey = selectedKeyRef.current;
+        if (openKey) loadContext(phoneFromThread(openKey));
+        loadPayTasks();
       })
       .subscribe();
 
@@ -393,9 +438,13 @@ export default function CsCommandCenter() {
     return !t.resolved;
   });
 
-  const send = async (text: string, internal = false) => {
-    const body = text.trim();
-    if (!body || !selected) return;
+  const send = async (
+    text: string,
+    internal = false,
+    file?: { url: string; type: string }
+  ) => {
+    const body = text.trim() || (file ? (file.type.includes('pdf') ? '📄 Invoice / file terlampir' : '📷 Foto terlampir') : '');
+    if ((!body && !file) || !selected) return;
     if (!internal && !canSend) return toast('Klaim chat dulu sebelum membalas.', 'warn');
     if (internal && !isMine && selected.claimed) return toast('Hanya agen pemegang yang bisa menulis catatan.', 'warn');
 
@@ -409,7 +458,9 @@ export default function CsCommandCenter() {
       is_internal: internal,
       assigned_to_agent_id: agent.id,
       assigned_to_agent_name: agent.name,
-      is_claimed: true
+      is_claimed: true,
+      attachment_url: file?.url || null,
+      attachment_type: file?.type || null
     });
     if (error) {
       toast('Gagal kirim: ' + error.message, 'err');
@@ -431,6 +482,49 @@ export default function CsCommandCenter() {
     });
     loadMessages(selected.key);
     loadThreads();
+  };
+
+  const handleAttachFile = async (file: File | undefined) => {
+    if (!file || !selected) return;
+    if (!canSend && !noteMode) return toast('Klaim chat dulu sebelum mengirim lampiran.', 'warn');
+    try {
+      const url = await uploadProofFile(file, `chat_cs_${selected.phone || 'thread'}`);
+      const type = file.type.includes('pdf') ? 'pdf' : file.type.includes('image') ? 'image' : 'file';
+      await send(input, noteMode, { url, type });
+    } catch (err: any) {
+      toast('Gagal unggah lampiran: ' + (err?.message || 'Coba lagi'), 'err');
+    }
+  };
+
+  const handleConfirmPayment = async () => {
+    if (!payModal?.id || !payFile) {
+      toast('Unggah foto bukti transfer pelanggan.', 'warn');
+      return;
+    }
+    setPayBusy(true);
+    try {
+      const url = await uploadProofFile(payFile, `pay_${payModal.id}`);
+      const { error } = await confirmTransactionPayment({
+        transactionId: payModal.id,
+        proofUrl: url,
+        receipt: payModal.receipt_number,
+        agentName: agent.name,
+        customerPhone: phone || payModal.customer_phone
+      });
+      if (error) {
+        toast('Gagal konfirmasi: ' + error.message, 'err');
+        return;
+      }
+      toast('Pembayaran dikonfirmasi. POS terbuka untuk produksi.', 'ok');
+      setPayModal(null);
+      setPayFile(null);
+      if (selectedKey) loadContext(phoneFromThread(selectedKey));
+      loadPayTasks();
+    } catch (err: any) {
+      toast('Gagal unggah bukti: ' + (err?.message || 'Coba lagi'), 'err');
+    } finally {
+      setPayBusy(false);
+    }
   };
 
   const broadcastTyping = () => {
@@ -584,6 +678,7 @@ export default function CsCommandCenter() {
           <p className="text-sm font-black text-slate-900 flex items-center gap-2">
             {agent.name}
             {unassignedCount > 0 && <StatusBadge tone="rose">{unassignedCount} antri</StatusBadge>}
+            {payTasks.length > 0 && <StatusBadge tone="amber">{payTasks.length} bayar</StatusBadge>}
           </p>
         </div>
         <div className="flex-1 grid grid-cols-4 gap-2">
@@ -628,6 +723,11 @@ export default function CsCommandCenter() {
         </Link>
       </header>
 
+      {payTasks.length > 0 && (
+        <div className="bg-amber-50 border-b border-amber-200 px-4 py-2 text-[11px] font-bold text-amber-900 shrink-0">
+          ⏳ {payTasks.length} pembayaran menunggu konfirmasi. Buka chat pelanggan lalu unggah bukti transfer.
+        </div>
+      )}
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 min-h-0">
         <aside className="lg:col-span-3 border-r border-slate-200/80 bg-white flex flex-col min-h-0">
           <div className="p-2 flex gap-1 border-b border-slate-100">
@@ -736,7 +836,8 @@ export default function CsCommandCenter() {
                         }`}
                       >
                         {internal && <p className="text-[9px] font-black uppercase mb-0.5">Catatan internal</p>}
-                        <p>{m.message}</p>
+                        {visibleChatText(m) && <p className="whitespace-pre-wrap">{visibleChatText(m)}</p>}
+                        <ChatAttachment message={m} onOpen={setLightboxSrc} />
                         <p className="text-[9px] text-slate-400 mt-1 text-right">
                           {m.sender_name ? `${m.sender_name} · ` : ''}
                           {new Date(m.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
@@ -791,6 +892,17 @@ export default function CsCommandCenter() {
                   </div>
                 )}
                 <div className="flex items-end gap-2">
+                  <input
+                    ref={attachRef}
+                    type="file"
+                    accept="image/*,application/pdf"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      e.target.value = '';
+                      handleAttachFile(f);
+                    }}
+                  />
                   <button
                     type="button"
                     onClick={() => setNoteMode(!noteMode)}
@@ -799,6 +911,15 @@ export default function CsCommandCenter() {
                     }`}
                   >
                     Note
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!canSend && !noteMode}
+                    onClick={() => attachRef.current?.click()}
+                    title="Kirim foto / QRIS / invoice PDF"
+                    className="text-sm px-2 py-2 rounded-lg border border-slate-200 text-slate-600 disabled:opacity-40"
+                  >
+                    📎
                   </button>
                   <textarea
                     ref={inputRef}
@@ -833,7 +954,7 @@ export default function CsCommandCenter() {
                   />
                   <button
                     onClick={() => send(input, noteMode)}
-                    disabled={!input.trim() || (!canSend && !noteMode)}
+                    disabled={(!input.trim()) || (!canSend && !noteMode)}
                     className="bg-sky-500 disabled:opacity-40 text-white font-bold text-xs px-4 py-2.5 rounded-xl"
                   >
                     Kirim
@@ -870,6 +991,26 @@ export default function CsCommandCenter() {
                 Pickup
               </Link>
             </div>
+            {pendingPayOrders.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-[10px] font-black text-amber-600 uppercase">Pembayaran pending</p>
+                {pendingPayOrders.map((o) => (
+                  <div key={o.id} className="border border-amber-200 bg-amber-50 rounded-xl p-2.5 space-y-2">
+                    <p className="text-[11px] font-bold text-amber-900">{o.receipt_number || o.service_type}</p>
+                    <p className="text-[10px] text-amber-800">
+                      {o.payment_method || 'QRIS/Transfer'} · Rp {Number(o.amount || 0).toLocaleString('id-ID')}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => { setPayModal(o); setPayFile(null); }}
+                      className="w-full text-[11px] font-black bg-emerald-600 text-white py-2.5 rounded-xl"
+                    >
+                      ✅ Konfirmasi Pembayaran & Upload Bukti
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             <div>
               <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Order aktif</p>
               {orders.slice(0, 4).map((o) => (
@@ -918,6 +1059,41 @@ export default function CsCommandCenter() {
         </aside>
       </div>
 
+      {payModal && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-5 w-full max-w-sm space-y-3 shadow-lg">
+            <h3 className="text-sm font-black text-slate-900">Konfirmasi Pembayaran</h3>
+            <p className="text-xs text-slate-500">
+              {payModal.receipt_number || payModal.service_type} · Rp {Number(payModal.amount || 0).toLocaleString('id-ID')}
+            </p>
+            <input
+              type="file"
+              accept="image/*"
+              capture="environment"
+              onChange={(e) => setPayFile(e.target.files?.[0] || null)}
+              className="w-full text-xs"
+            />
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => { setPayModal(null); setPayFile(null); }}
+                className="flex-1 text-xs font-bold border rounded-xl py-2"
+              >
+                Kembali
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmPayment}
+                disabled={payBusy || !payFile}
+                className="flex-1 text-xs font-bold bg-emerald-600 text-white rounded-xl py-2 disabled:opacity-50"
+              >
+                {payBusy ? 'Menyimpan…' : 'Simpan & Buka POS'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      <PhotoLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
       {handoverOpen && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl p-5 w-full max-w-sm space-y-3 shadow-lg">

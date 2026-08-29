@@ -15,11 +15,14 @@ export const getStaffSession = (): StaffSession => {
       localStorage.getItem('laundry_owner_user') ||
       localStorage.getItem('laundry_user');
     const u = raw ? JSON.parse(raw) : {};
+    const metaOutlet = u.user_metadata?.outlet_id || u.raw_user_meta_data?.outlet_id;
+    const storedOutlet =
+      localStorage.getItem('user_outlet_id') || localStorage.getItem('outlet_id') || '';
     return {
       id: String(u.id || u.username || u.name || ''),
       name: String(u.name || u.username || 'Karyawan'),
       role: String(u.role || 'kasir').toLowerCase().trim(),
-      outletId: String(u.outlet_id || '')
+      outletId: String(u.outlet_id || metaOutlet || storedOutlet || '')
     };
   } catch {
     return { id: '', name: 'Karyawan', role: 'kasir', outletId: '' };
@@ -34,6 +37,10 @@ export const isHeadManagementRole = (role: string) =>
 
 export const isSupervisorRole = (role: string) =>
   ['supervisor', 'owner'].includes(String(role || '').toLowerCase());
+
+/** Kasir/POS hanya boleh melihat dan mengubah pesanan outlet sendiri. */
+export const isOutletLockedRole = (role: string) =>
+  ['kasir', 'pos'].includes(String(role || '').toLowerCase().trim());
 
 /** Settings / KPI Settings / Pengaturan: Owner & Supervisor saja. */
 export const canAccessSettings = (role: string) => {

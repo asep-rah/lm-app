@@ -1,6 +1,9 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
 import { laundryFallbackReply } from "@/lib/laundryFaq";
+import { insertChatMessage } from "@/lib/csChat";
+import { uploadProofFile } from "@/lib/uploadProof";
+import ChatAttachment from "@/components/ChatAttachment";
 
 interface AIChatWidgetProps {
   customerPhone?: string;
@@ -9,6 +12,8 @@ interface AIChatWidgetProps {
 interface Message {
   sender: "user" | "ai";
   text: string;
+  attachment_url?: string;
+  attachment_type?: string;
 }
 
 export default function AIChatWidget({ customerPhone = "" }: AIChatWidgetProps) {
@@ -177,7 +182,7 @@ export default function AIChatWidget({ customerPhone = "" }: AIChatWidgetProps) 
           onClick={() => setIsOpen(true)}
           className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2.5 rounded-full shadow-2xl flex items-center gap-2 transition-transform active:scale-95 border border-blue-400/30"
         >
-          🤖 Tanya AI
+          🎧 Tanya Customer Service
         </button>
       )}
 
@@ -212,7 +217,14 @@ export default function AIChatWidget({ customerPhone = "" }: AIChatWidgetProps) 
                       : "bg-slate-800 border border-slate-700 text-slate-100 rounded-bl-none"
                   }`}
                 >
-                  {msg.sender === "user" ? msg.text : renderMessageContent(msg.text)}
+                  {msg.sender === "user" ? (
+                    <div>
+                      <p className="whitespace-pre-line leading-relaxed">{msg.text}</p>
+                      <ChatAttachment message={msg} />
+                    </div>
+                  ) : (
+                    renderMessageContent(msg.text)
+                  )}
                 </div>
               </div>
             ))}
@@ -260,6 +272,51 @@ export default function AIChatWidget({ customerPhone = "" }: AIChatWidgetProps) 
             }}
             className="p-3 bg-slate-800 border-t border-slate-700 flex gap-2"
           >
+            <input
+              id="ai-widget-attach"
+              type="file"
+              accept="image/*,application/pdf"
+              className="hidden"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (!file) return;
+                try {
+                  const url = await uploadProofFile(file, `chat_widget_${customerPhone || "anon"}`);
+                  const type = file.type.includes("pdf") ? "pdf" : "image";
+                  const caption = file.type.includes("pdf") ? "📄 Invoice / file terlampir" : "📷 Bukti pembayaran terlampir";
+                  setChatHistory((prev) => [
+                    ...prev,
+                    { sender: "user", text: caption, attachment_url: url, attachment_type: type },
+                    {
+                      sender: "ai",
+                      text: "Bukti sudah kami terima. CS akan cek dan konfirmasi pembayaran Kak.",
+                    },
+                  ]);
+                  if (customerPhone) {
+                    await insertChatMessage({
+                      customer_phone: customerPhone,
+                      sender_type: "customer",
+                      message: caption,
+                      attachment_url: url,
+                      attachment_type: type,
+                    });
+                  }
+                } catch (err: any) {
+                  setChatHistory((prev) => [
+                    ...prev,
+                    { sender: "ai", text: "Gagal unggah lampiran: " + (err?.message || "Coba lagi") },
+                  ]);
+                }
+              }}
+            />
+            <label
+              htmlFor="ai-widget-attach"
+              title="Kirim foto / bukti bayar ke CS"
+              className="shrink-0 w-9 h-9 rounded-xl bg-slate-900 border border-slate-700 text-white flex items-center justify-center text-sm cursor-pointer"
+            >
+              📎
+            </label>
             <input
               type="text"
               value={message}

@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
+import { getStaffSession, isOutletLockedRole } from '@/lib/staffSession';
+import { updateWithFallback } from '@/lib/safeWrite';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -23,14 +25,18 @@ export default function AdminPickupsPage() {
     const { data: dbOutlets } = await supabase.from('outlets').select('*');
     if (dbOutlets) setOutlets(dbOutlets);
 
-    // 2. Tentukan outlet ID aktif (Ambil dari localStorage/Session jika ada)
-    const savedOutlet = localStorage.getItem('user_outlet_id') || localStorage.getItem('outlet_id');
-    const savedRole = localStorage.getItem('user_role') || 'kasir';
-    
+    const session = getStaffSession();
+    const savedOutlet = session.outletId || localStorage.getItem('user_outlet_id') || localStorage.getItem('outlet_id');
+    const savedRole = session.role || localStorage.getItem('user_role') || 'kasir';
+    const locked = isOutletLockedRole(savedRole);
+
     setCurrentUserRole(savedRole);
 
     let activeOutletId = selectedOutlet;
-    if (!activeOutletId && savedOutlet && savedRole === 'kasir') {
+    if (locked && savedOutlet && savedOutlet !== 'ALL') {
+      activeOutletId = savedOutlet;
+      if (selectedOutlet !== savedOutlet) setSelectedOutlet(savedOutlet);
+    } else if (!activeOutletId && savedOutlet && locked) {
       activeOutletId = savedOutlet;
       setSelectedOutlet(savedOutlet);
     }
@@ -41,14 +47,19 @@ export default function AdminPickupsPage() {
       .select('*')
       .order('created_at', { ascending: false });
 
-    // 4. FILTER STRICT: Ambil role & outlet kasir dari localStorage
-    const userRole = localStorage.getItem('userRole') || localStorage.getItem('role') || savedRole;
-    const currentOutlet = selectedOutlet || activeOutletId || localStorage.getItem('outlet_id');
+    const currentOutlet = locked
+      ? (savedOutlet && savedOutlet !== 'ALL' ? savedOutlet : '')
+      : (selectedOutlet || activeOutletId || savedOutlet || '');
 
-    if (userRole === 'kasir' && currentOutlet && currentOutlet !== 'ALL') {
+    if (locked) {
+      if (!currentOutlet) {
+        setPickups([]);
+        setLoading(false);
+        return;
+      }
       query = query.eq('outlet_id', currentOutlet);
-    } else if (selectedOutlet && selectedOutlet !== 'ALL') {
-      query = query.eq('outlet_id', selectedOutlet);
+    } else if (currentOutlet && currentOutlet !== 'ALL') {
+      query = query.eq('outlet_id', currentOutlet);
     }
 
     const { data, error } = await query;
@@ -73,13 +84,20 @@ export default function AdminPickupsPage() {
     };
   }, [selectedOutlet]);
   const handleUpdateStatus = async (id: string, newStatus: string) => {
-    const { error } = await supabase
-      .from('pickup_orders')
-      .update({ 
-        status: newStatus,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', id);
+    const session = getStaffSession();
+    if (isOutletLockedRole(session.role) && session.outletId && session.outletId !== 'ALL') {
+      const target = pickups.find((p) => p.id === id);
+      if (target?.outlet_id && String(target.outlet_id) !== String(session.outletId)) {
+        alert('Pesanan ini milik outlet lain. Kasir hanya dapat memproses pesanan cabang sendiri.');
+        return;
+      }
+    }
+
+    const { error } = await updateWithFallback(
+      'pickup_orders',
+      [{ status: newStatus }],
+      { column: 'id', value: id }
+    );
 
     if (!error) {
       fetchPickups();
@@ -128,13 +146,16 @@ export default function AdminPickupsPage() {
         <select
             value={selectedOutlet}
             onChange={(e) => setSelectedOutlet(e.target.value)}
-            disabled={currentUserRole === 'kasir'}
+            disabled={isOutletLockedRole(currentUserRole)}
             className={`bg-slate-800 border border-slate-700 rounded-2xl px-4 py-2.5 text-xs font-bold text-slate-200 focus:outline-none ${
-              currentUserRole === 'kasir' ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'
+              isOutletLockedRole(currentUserRole) ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'
             }`}
           >
-            {currentUserRole !== 'kasir' && <option value="ALL">📍 Semua Outlet</option>}
-            {outlets.map((o: any) => (
+            {!isOutletLockedRole(currentUserRole) && <option value="ALL">📍 Semua Outlet</option>}
+            {(isOutletLockedRole(currentUserRole)
+              ? outlets.filter((o: any) => o.id === selectedOutlet)
+              : outlets
+            ).map((o: any) => (
               <option key={o.id} value={o.id}>
                 📍 {o.name}
               </option>

@@ -12,6 +12,7 @@ interface StageTimelineProps {
   title?: string;
   /** Pelanggan melihat jemput → outlet → laundry. Ops/POS tetap mulai dari kasir. */
   variant?: 'ops' | 'customer';
+  onOpenPhoto?: (url: string) => void;
 }
 
 const pendingLabel = (key: string, inProgress: boolean) => {
@@ -31,7 +32,8 @@ export default function StageTimeline({
   transaction,
   showCrew = true,
   title = 'Riwayat Waktu Pengerjaan',
-  variant = 'ops'
+  variant = 'ops',
+  onOpenPhoto
 }: StageTimelineProps) {
   const timeline = buildStageTimeline(logs, transaction, { variant });
   const isReadyForPickup = stageKeyOf(transaction?.status) === 'siap';
@@ -78,6 +80,20 @@ export default function StageTimeline({
                   </p>
                   {showCrew && stage.crew && (
                     <p className="text-[9px] text-slate-400 italic">Petugas: {stage.crew}</p>
+                  )}
+                  {stage.notes && (
+                    <p className="text-[10px] text-slate-600 mt-0.5 bg-slate-50 border border-slate-100 rounded-lg px-2 py-1">
+                      📝 {stage.notes}
+                    </p>
+                  )}
+                  {stage.photoUrl && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenPhoto ? onOpenPhoto(stage.photoUrl!) : window.open(stage.photoUrl!, '_blank')}
+                      className="mt-1 block"
+                    >
+                      <img src={stage.photoUrl} alt={stage.label} className="w-full h-16 object-cover rounded-lg border border-slate-200 hover:opacity-90" />
+                    </button>
                   )}
                 </>
               ) : (

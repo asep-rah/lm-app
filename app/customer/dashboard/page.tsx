@@ -3,12 +3,16 @@
 import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import StageTimeline from '@/components/StageTimeline';
-import { insertChatMessage, isStaffOnlyMessage } from '@/lib/csChat';
+import { insertChatMessage, isStaffOnlyMessage, phoneVariants, threadKeyOf } from '@/lib/csChat';
 import { mapDbPromo, mapSettingsPromo, promoDiscountRp, promoIsClaimable, type CatalogPromo } from '@/lib/promoCatalog';
 import { createPickupRoleTasks, insertPickupOrder, createDeliveryRequestTasks } from '@/lib/pickupDispatch';
 import { updatePickupOrder } from '@/lib/pickupUpdates';
 import { laundryFallbackReply } from '@/lib/laundryFaq';
 import AIChatWidget from '@/components/AIChatWidget';
+import PhotoLightbox from '@/components/PhotoLightbox';
+import ChatAttachment, { visibleChatText } from '@/components/ChatAttachment';
+import { uploadProofFile } from '@/lib/uploadProof';
+import { nearestOpenOutlet } from '@/lib/outletCapacity';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -130,7 +134,10 @@ export default function CustomerDashboardPage() {
   const [isKiloanChecked, setIsKiloanChecked] = useState(false);
   const [selectedKiloanSvc, setSelectedKiloanSvc] = useState('');
   const [kiloanEstKg, setKiloanEstKg] = useState('3');
+  const [kiloanQty, setKiloanQty] = useState('1');
   const [kiloanDuration, setKiloanDuration] = useState('Reguler (3 Hari)');
+  const [cartKiloan, setCartKiloan] = useState<Array<{ name: string; kg: number; qty: number; duration: string; price: number }>>([]);
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
   const [isSatuanChecked, setIsSatuanChecked] = useState(false);
   const [cartSatuan, setCartSatuan] = useState<Array<{ name: string; basePrice: number; price: number; qty: number; duration: string }>>([]);
@@ -211,19 +218,32 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
     { id: '1', sender_type: 'ai', message: 'Halo! Saya AI Assistant Laundrivery. Ada yang bisa saya bantu mengenai layanan laundry?' }
   ]);
 
-  const handleSendChat = async () => {
-    if (!inputChat.trim()) return;
-    const messageText = inputChat.trim();
+  const handleSendChat = async (file?: File) => {
+    const messageText = inputChat.trim() || (file ? (file.type.includes('pdf') ? '📄 Invoice / file terlampir' : '📷 Bukti pembayaran terlampir') : '');
+    if (!messageText && !file) return;
     setInputChat('');
 
     if (activeSupportTab === 'cs') {
       const validOrderId = (activeChatOrderId && activeChatOrderId !== 'GENERAL_CS') ? activeChatOrderId : null;
+      let attachmentUrl = '';
+      let attachmentType = '';
+      if (file) {
+        try {
+          attachmentUrl = await uploadProofFile(file, `chat_cust_${customerPhone || 'anon'}`);
+          attachmentType = file.type.includes('pdf') ? 'pdf' : 'image';
+        } catch (err: any) {
+          alert('Gagal unggah lampiran: ' + (err?.message || 'Coba lagi'));
+          return;
+        }
+      }
       const newMsg = {
         id: Date.now().toString(),
         order_id: validOrderId,
         customer_phone: customerPhone || null,
         sender_type: 'customer',
-        message: messageText,
+        message: attachmentUrl ? `${messageText}\n${attachmentUrl}` : messageText,
+        attachment_url: attachmentUrl || null,
+        attachment_type: attachmentType || null,
         created_at: new Date().toISOString()
       };
       setChatMessages((prev) => [...prev, newMsg]);
@@ -232,11 +252,15 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
         order_id: validOrderId,
         customer_phone: customerPhone || null,
         sender_type: 'customer',
-        message: messageText
+        message: messageText,
+        attachment_url: attachmentUrl || null,
+        attachment_type: attachmentType || null
       });
 
       if (error) {
         console.error('Error insert chat Supabase:', error.message);
+      } else if (customerPhone) {
+        loadCustomerChats(customerPhone);
       }
     } else {
       const userMsg = {
@@ -282,50 +306,71 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
     }
   };
 
-  const fetchChatMessages = async (targetId: string) => {
-    let query = supabase.from('support_chats').select('*');
-
-    if (targetId === 'GENERAL_CS') {
-      const norm = cleanPhone(customerPhone);
-      query = query.or(`customer_phone.eq.${norm},customer_phone.eq.${customerPhone}`);
-    } else {
-      query = query.eq('order_id', targetId);
+  const loadCustomerChats = async (phone: string) => {
+    const variants = phoneVariants(phone);
+    const key = threadKeyOf({ customer_phone: phone });
+    let q = supabase.from('support_chats').select('*').order('created_at', { ascending: true }).limit(400);
+    if (variants.length) {
+      const orExpr = [...variants.map((v) => `customer_phone.eq.${v}`), `thread_key.eq.${key}`].join(',');
+      q = q.or(orExpr);
     }
-
-    const { data } = await query.order('created_at', { ascending: true });
-    if (data) setChatMessages(data.filter((m: any) => !isStaffOnlyMessage(m)));
+    const { data } = await q;
+    const rows = (data || []).filter((m: any) => !isStaffOnlyMessage(m));
+    setChatMessages(rows);
+    try {
+      sessionStorage.setItem('laundry_cs_chat_' + key, JSON.stringify(rows.slice(-80)));
+    } catch {
+      /* ignore */
+    }
   };
 
   useEffect(() => {
-    if (activeChatOrderId) {
-      fetchChatMessages(activeChatOrderId);
-      
-      const channel = supabase
-        .channel('support_chats_realtime')
-        .on(
-          'postgres_changes',
-          { event: 'INSERT', schema: 'public', table: 'support_chats' },
-          (payload) => {
-            const newMsg = payload.new;
-            // Baca pesan dari CS jika order_id cocok ATAU nomor WA cocok
-            const isMatchingOrder = activeChatOrderId !== 'GENERAL_CS' && newMsg.order_id === activeChatOrderId;
-            const isMatchingPhone = cleanPhone(newMsg.customer_phone) === cleanPhone(customerPhone);
-
-            if ((isMatchingOrder || isMatchingPhone) && !isStaffOnlyMessage(newMsg)) {
-              setChatMessages((prev) => {
-                if (prev.some((m) => m.id === newMsg.id)) return prev;
-                return [...prev, newMsg];
-              });
-            }
-          }
-        )
-        .subscribe();
-
-      return () => {
-        supabase.removeChannel(channel);
-      };
+    if (!customerPhone) return;
+    const key = threadKeyOf({ customer_phone: customerPhone });
+    try {
+      const cached = sessionStorage.getItem('laundry_cs_chat_' + key);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length) setChatMessages(parsed);
+      }
+    } catch {
+      /* ignore */
     }
-  }, [activeChatOrderId, customerPhone]);
+    loadCustomerChats(customerPhone);
+
+    const variants = new Set(phoneVariants(customerPhone).map((v) => cleanPhone(v)));
+    const channel = supabase
+      .channel('cust_cs_' + key)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'support_chats' }, (payload) => {
+        const newMsg: any = payload.new;
+        if (isStaffOnlyMessage(newMsg)) return;
+        const msgPhone = cleanPhone(newMsg.customer_phone);
+        const sameThread = newMsg.thread_key === key || variants.has(msgPhone);
+        if (!sameThread) return;
+        setChatMessages((prev) => {
+          if (prev.some((m) => m.id === newMsg.id)) return prev;
+          const withoutOptimistic = prev.filter((m) => !(String(m.id).length < 16 && m.message === newMsg.message));
+          const next = [...withoutOptimistic, newMsg];
+          try {
+            sessionStorage.setItem('laundry_cs_chat_' + key, JSON.stringify(next.slice(-80)));
+          } catch {
+            /* ignore */
+          }
+          return next;
+        });
+      })
+      .subscribe();
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') loadCustomerChats(customerPhone);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      supabase.removeChannel(channel);
+    };
+  }, [customerPhone]);
 
   // Sinkronisasi realtime: order baru & perubahan status driver langsung tampil
   // di Beranda tanpa perlu refresh manual.
@@ -451,7 +496,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
     let cancelled = false;
     supabase
       .from('work_logs')
-      .select('stage, employee_name, created_at')
+      .select('stage, employee_name, created_at, notes, photo_url')
       .eq('transaction_id', detailOrder.id)
       .order('created_at', { ascending: true })
       .then(({ data, error }) => {
@@ -465,26 +510,28 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
   }, [detailOrder?.id]);
 
   const loadChats = async (orderId: string | null) => {
-    setActiveChatOrderId(orderId);
-    let query = supabase.from('support_chats').select('*');
-    if (orderId && orderId !== 'GENERAL_CS') {
-      query = query.eq('order_id', orderId);
-    } else {
-      query = query.is('order_id', null);
-    }
-    const { data, error } = await query.order('created_at', { ascending: true });
-    if (!error && data) {
-      setChatMessages(data.filter((m: any) => !isStaffOnlyMessage(m)));
-    }
+    setActiveChatOrderId(orderId || 'GENERAL_CS');
+    if (customerPhone) await loadCustomerChats(customerPhone);
   };
 
   useEffect(() => {
     async function initPWA() {
       const { data: dbOutlets } = await supabase.from('outlets').select('*');
+      let pendingByOutlet: Record<string, number> = {};
       if (dbOutlets && dbOutlets.length > 0) {
+        const [{ data: pendingPickups }, { data: pendingTx }] = await Promise.all([
+          supabase.from('pickup_orders').select('outlet_id, status').neq('status', 'Selesai').neq('status', 'Batal'),
+          supabase.from('transactions').select('outlet_id, status').neq('status', 'Selesai')
+        ]);
+        [...(pendingPickups || []), ...(pendingTx || [])].forEach((row: any) => {
+          if (row.outlet_id) pendingByOutlet[row.outlet_id] = (pendingByOutlet[row.outlet_id] || 0) + 1;
+        });
+        const open = dbOutlets.filter((o: any) => !o.is_overcapacity && (pendingByOutlet[o.id] || 0) < 20);
+        const visible = open.length ? open : dbOutlets;
         setOutletsList(dbOutlets);
-        setFilteredOutlets(dbOutlets);
-        setSelectedOutlet(dbOutlets[0].id);
+        setFilteredOutlets(visible);
+        const pick = nearestOpenOutlet(visible, null, pendingByOutlet, calculateDistanceKm);
+        if (pick) setSelectedOutlet(pick.id);
       }
 
       const { data: dbSettings } = await supabase.from('app_settings').select('*').eq('id', 1).single();
@@ -521,16 +568,17 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
           setUserCoords({ lat, lon });
 
           if (dbOutlets && dbOutlets.length > 0) {
-            const nearby = dbOutlets.filter(o => {
+            const nearby = dbOutlets.filter((o: any) => {
+              if (o.is_overcapacity) return false;
               if (!o.latitude || !o.longitude) return true;
               const dist = calculateDistanceKm(lat, lon, Number(o.latitude), Number(o.longitude));
               return dist <= 30;
             });
-
-            if (nearby.length > 0) {
-              setFilteredOutlets(nearby);
-              setSelectedOutlet(nearby[0].id);
-            }
+            const pool = nearby.length ? nearby : dbOutlets.filter((o: any) => !o.is_overcapacity);
+            const visible = pool.length ? pool : dbOutlets;
+            setFilteredOutlets(visible);
+            const pick = nearestOpenOutlet(visible, { lat, lon }, {}, calculateDistanceKm);
+            if (pick) setSelectedOutlet(pick.id);
           }
         }, () => {});
       }
@@ -620,7 +668,8 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       pickup_created_at: relatedPickup?.created_at,
       photo_pickup_url: t.photo_pickup_url || relatedPickup?.photo_pickup_url || relatedPickup?.photo_url,
       photo_outlet_url: t.photo_outlet_url || relatedPickup?.photo_outlet_url,
-      photo_delivery_url: t.photo_delivery_url || relatedPickup?.photo_delivery_url
+      photo_delivery_url: t.photo_delivery_url || relatedPickup?.photo_delivery_url,
+      rack_photo_url: t.rack_photo_url || relatedPickup?.rack_photo_url
     };
   });
 
@@ -633,7 +682,8 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
         ...p,
         photo_pickup_url: p.photo_pickup_url || p.photo_url,
         photo_outlet_url: p.photo_outlet_url,
-        photo_delivery_url: p.photo_delivery_url
+        photo_delivery_url: p.photo_delivery_url,
+        rack_photo_url: p.rack_photo_url
       });
     }
   });
@@ -718,6 +768,22 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
     return 7000;
   };
 
+  const handleAddKiloanToCart = () => {
+    if (!selectedKiloanSvc) return;
+    const kg = Math.max(3, Number(kiloanEstKg) || 3);
+    const qty = Math.max(1, Number(kiloanQty) || 1);
+    setCartKiloan((prev) => [
+      ...prev,
+      { name: selectedKiloanSvc, kg, qty, duration: kiloanDuration, price: kiloanActiveUnitPrice }
+    ]);
+    setKiloanEstKg('3');
+    setKiloanQty('1');
+  };
+
+  const handleRemoveKiloan = (idx: number) => {
+    setCartKiloan((prev) => prev.filter((_, i) => i !== idx));
+  };
+
   const handleAddSatuanToCart = () => {
     if (!selectedSatuanSvc) return;
     const basePrice = getServiceUnitPrice(selectedSatuanSvc);
@@ -741,7 +807,12 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
   const kiloanBaseUnitPrice = getServiceUnitPrice(selectedKiloanSvc);
   const kiloanActiveUnitPrice = Math.round(kiloanBaseUnitPrice * getDurationMultiplier(kiloanDuration));
-  const kiloanSubtotal = isKiloanChecked ? Math.round((Number(kiloanEstKg) || 0) * kiloanActiveUnitPrice) : 0;
+  const kiloanLines = cartKiloan.length
+    ? cartKiloan
+    : isKiloanChecked
+    ? [{ name: selectedKiloanSvc, kg: Math.max(3, Number(kiloanEstKg) || 3), qty: Math.max(1, Number(kiloanQty) || 1), duration: kiloanDuration, price: kiloanActiveUnitPrice }]
+    : [];
+  const kiloanSubtotal = kiloanLines.reduce((sum, line) => sum + Math.round(line.price * line.kg * line.qty), 0);
 
   let satuanSubtotal = 0;
   if (isSatuanChecked) {
@@ -776,7 +847,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
     if (!customerAddress || customerAddress.trim().length < 5) {
       return alert('⚠️ Isi Alamat Penjemputan terlebih dahulu!');
     }
-    if (!isKiloanChecked && (!isSatuanChecked || cartSatuan.length === 0)) {
+    if (!isKiloanChecked && !kiloanLines.length && (!isSatuanChecked || cartSatuan.length === 0)) {
       return alert('⚠️ Pilih minimal 1 paket Kiloan atau Satuan!');
     }
     // PENGAMAN: Blokir total pembayaran COD
@@ -790,8 +861,10 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
     const normPhone = cleanPhone(customerPhone);
 
     const detailLines: string[] = [];
-    if (isKiloanChecked) {
-      detailLines.push(`Kiloan: ${selectedKiloanSvc} (${kiloanDuration}, ${kiloanEstKg}Kg)`);
+    if (kiloanLines.length) {
+      detailLines.push(
+        `Kiloan: ${kiloanLines.map((k) => `${k.name} ${k.kg}Kg x${k.qty} (${k.duration})`).join(', ')}`
+      );
     }
     if (isSatuanChecked && cartSatuan.length > 0) {
       const items = cartSatuan.map(i => `${i.name} x${i.qty}`).join(', ');
@@ -800,7 +873,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
     if (claimedPromo) detailLines.push(`Promo: ${claimedPromo.title}`);
     detailLines.push(`Est. Tagihan: Rp ${grandTotalEstimate.toLocaleString('id-ID')}`);
 
-    const mainServiceLabel = isKiloanChecked ? `${selectedKiloanSvc} (${kiloanDuration})` : `Satuan (${cartSatuan.length} Item)`;
+    const mainServiceLabel = kiloanLines.length
+      ? `${kiloanLines[0].name} (${kiloanLines[0].duration})`
+      : `Satuan (${cartSatuan.length} Item)`;
     const notesCombined = `Alamat: ${customerAddress} | Detail: ${detailLines.join(' | ')}${notes ? ` | Catatan: ${notes}` : ''}`;
     const autoOrderNo = `ORD-${Date.now().toString().slice(-8)}`;
 
@@ -812,7 +887,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
     // Rincian item satuan dikirim terstruktur agar POS bisa memuatnya langsung ke
     // keranjang nota. Kiloan tidak dimasukkan karena beratnya baru pasti setelah ditimbang kasir.
-    const itemsPayload = isSatuanChecked
+    const satuanItems = isSatuanChecked
       ? cartSatuan.map((i) => ({
           name: i.name,
           qty: Number(i.qty) || 1,
@@ -822,6 +897,15 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
           type: 'pcs' as const
         }))
       : [];
+    const kiloanItems = kiloanLines.map((k) => ({
+      name: k.name,
+      qty: Number(k.qty) || 1,
+      weight: Number(k.kg) || 3,
+      price: Number(k.price) || 0,
+      duration: k.duration || 'Reguler (3 Hari)',
+      type: 'kg' as const
+    }));
+    const itemsPayload = [...kiloanItems, ...satuanItems];
 
     const payload = {
       order_number: autoOrderNo,
@@ -830,7 +914,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       customer_phone: normPhone,
       phone_number: normPhone,
       service_type: mainServiceLabel,
-      estimated_weight: isKiloanChecked ? Number(kiloanEstKg) || 3 : 0,
+      estimated_weight: kiloanLines.reduce((s, k) => s + k.kg * k.qty, 0) || 0,
       address: customerAddress || '',
       duration: kiloanDuration || 'Reguler (3 Hari)',
       bag_count: Number(bagCount) || 1,
@@ -864,9 +948,11 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       
       // Reset form
       setCartSatuan([]);
+      setCartKiloan([]);
       setNotes('');
       setClaimedPromo(null);
       setKiloanEstKg('3');
+      setKiloanQty('1');
       setKiloanDuration('Reguler (3 Hari)');
       setIsKiloanChecked(false);
       setIsSatuanChecked(false);
@@ -1010,7 +1096,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
               {/* FLOATING BANNER BANTUAN LIVE CS & AI */}
               <div className="bg-gradient-to-r from-indigo-600 to-purple-600 p-4 rounded-3xl text-white my-4 shadow-lg flex justify-between items-center">
                 <div>
-                  <h4 className="font-black text-xs">💬 Butuh Bantuan / Tanya AI?</h4>
+                  <h4 className="font-black text-xs">💬 Butuh Bantuan / Tanya Customer Service?</h4>
                   <p className="text-[10px] text-indigo-100">Hubungi CS Admin atau AI Assistant kami.</p>
                 </div>
                 <button
@@ -1194,15 +1280,17 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
   <p className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider">
     📸 Bukti Foto Kurir
   </p>
-  <div className="grid grid-cols-3 gap-2">
+  <div className="grid grid-cols-4 gap-2">
     <div className="flex flex-col gap-1">
       <span className="text-[9px] font-bold text-slate-400">Jemput</span>
       {order.photo_pickup_url || order.photo_url ? (
+        <button type="button" onClick={() => setLightboxSrc(order.photo_pickup_url || order.photo_url)} className="block w-full">
         <img 
           src={order.photo_pickup_url || order.photo_url} 
           alt="Foto Pickup" 
           className="w-full h-20 object-cover rounded-lg border border-slate-200"
         />
+        </button>
       ) : (
         <div className="w-full h-20 bg-slate-100 rounded-lg flex items-center justify-center text-[10px] text-slate-400">
           Belum Ada
@@ -1213,11 +1301,13 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
     <div className="flex flex-col gap-1">
       <span className="text-[9px] font-bold text-slate-400">Outlet</span>
       {order.photo_outlet_url ? (
+        <button type="button" onClick={() => setLightboxSrc(order.photo_outlet_url)} className="block w-full">
         <img 
           src={order.photo_outlet_url} 
           alt="Foto Outlet" 
           className="w-full h-20 object-cover rounded-lg border border-slate-200"
         />
+        </button>
       ) : (
         <div className="w-full h-20 bg-slate-100 rounded-lg flex items-center justify-center text-[10px] text-slate-400">
           Belum Ada
@@ -1228,11 +1318,30 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
     <div className="flex flex-col gap-1">
       <span className="text-[9px] font-bold text-slate-400">Antar</span>
       {order.photo_delivery_url ? (
+        <button type="button" onClick={() => setLightboxSrc(order.photo_delivery_url)} className="block w-full">
         <img 
           src={order.photo_delivery_url} 
           alt="Foto Serah Terima" 
           className="w-full h-20 object-cover rounded-lg border border-slate-200"
         />
+        </button>
+      ) : (
+        <div className="w-full h-20 bg-slate-100 rounded-lg flex items-center justify-center text-[10px] text-slate-400">
+          Belum Ada
+        </div>
+      )}
+    </div>
+
+    <div className="flex flex-col gap-1">
+      <span className="text-[9px] font-bold text-slate-400">Rak</span>
+      {order.rack_photo_url ? (
+        <button type="button" onClick={() => setLightboxSrc(order.rack_photo_url)} className="block w-full">
+        <img
+          src={order.rack_photo_url}
+          alt="Foto Rak"
+          className="w-full h-20 object-cover rounded-lg border border-slate-200"
+        />
+        </button>
       ) : (
         <div className="w-full h-20 bg-slate-100 rounded-lg flex items-center justify-center text-[10px] text-slate-400">
           Belum Ada
@@ -1368,18 +1477,58 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                         </div>
                         <div>
                           <label className="block text-[10px] text-slate-500 font-bold mb-1">Est. Berat (Kg)</label>
-                          <input
-                            type="number"
-                            min="3"
-                            value={kiloanEstKg}
-                            onChange={(e) => setKiloanEstKg(e.target.value)}
-                            className="w-full bg-white border border-blue-200 rounded-xl p-2 text-xs font-extrabold text-blue-700"
-                          />
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              disabled={Number(kiloanEstKg) <= 3}
+                              onClick={() => setKiloanEstKg(String(Math.max(3, (Number(kiloanEstKg) || 3) - 1)))}
+                              className="w-8 h-8 rounded-lg bg-slate-200 text-slate-800 font-black disabled:opacity-40"
+                            >−</button>
+                            <input
+                              type="number"
+                              min="3"
+                              value={kiloanEstKg}
+                              onChange={(e) => setKiloanEstKg(String(Math.max(3, Number(e.target.value) || 3)))}
+                              className="w-full bg-white border border-blue-200 rounded-xl p-2 text-xs font-extrabold text-blue-700 text-center"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setKiloanEstKg(String((Number(kiloanEstKg) || 3) + 1))}
+                              className="w-8 h-8 rounded-lg bg-blue-600 text-white font-black"
+                            >+</button>
+                          </div>
                         </div>
                       </div>
+                      <div>
+                        <label className="block text-[10px] text-slate-500 font-bold mb-1">Jumlah Paket / Pcs</label>
+                        <div className="flex items-center gap-1">
+                          <button type="button" disabled={Number(kiloanQty) <= 1} onClick={() => setKiloanQty(String(Math.max(1, (Number(kiloanQty) || 1) - 1)))} className="w-8 h-8 rounded-lg bg-slate-200 font-black disabled:opacity-40">−</button>
+                          <input type="number" min="1" value={kiloanQty} onChange={(e) => setKiloanQty(String(Math.max(1, Number(e.target.value) || 1)))} className="w-full bg-white border border-blue-200 rounded-xl p-2 text-xs font-extrabold text-center" />
+                          <button type="button" onClick={() => setKiloanQty(String((Number(kiloanQty) || 1) + 1))} className="w-8 h-8 rounded-lg bg-blue-600 text-white font-black">+</button>
+                        </div>
+                      </div>
+                      <p className="text-[10px] bg-blue-50 border border-blue-100 text-blue-800 rounded-xl px-2.5 py-1.5 font-semibold">
+                        Info: Minimal 3kg per order (1 Mesin Cuci = 1 Customer, pakaian tidak dicampur)
+                      </p>
                       <p className="text-[10px] text-blue-600 font-bold text-right">
                         Harga: Rp {kiloanActiveUnitPrice.toLocaleString('id-ID')}/Kg
                       </p>
+                      <button type="button" onClick={handleAddKiloanToCart} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-sm">
+                        + Tambah Paket Kiloan Ini
+                      </button>
+                      {cartKiloan.length > 0 && (
+                        <div className="space-y-1.5">
+                          {cartKiloan.map((item, idx) => (
+                            <div key={idx} className="bg-white p-2.5 rounded-xl flex justify-between items-center text-xs border border-blue-100">
+                              <div>
+                                <span className="font-bold text-slate-800 block">{item.name} · {item.kg} Kg × {item.qty}</span>
+                                <span className="text-[9px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-bold">{item.duration}</span>
+                              </div>
+                              <button type="button" onClick={() => handleRemoveKiloan(idx)} className="text-rose-500 font-bold px-1">✕</button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1429,13 +1578,18 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                         </div>
                         <div>
                           <label className="block text-[10px] text-slate-500 font-bold mb-1">Jumlah (Pcs)</label>
-                          <input
-                            type="number"
-                            placeholder="Qty"
-                            value={inputSatuanQty}
-                            onChange={(e) => setInputSatuanQty(e.target.value)}
-                            className="w-full bg-white border border-slate-300 rounded-xl p-2 text-xs font-bold text-slate-800"
-                          />
+                          <div className="flex items-center gap-1">
+                            <button type="button" disabled={Number(inputSatuanQty) <= 1} onClick={() => setInputSatuanQty(String(Math.max(1, (Number(inputSatuanQty) || 1) - 1)))} className="w-8 h-8 rounded-lg bg-slate-200 font-black disabled:opacity-40">−</button>
+                            <input
+                              type="number"
+                              min="1"
+                              placeholder="Qty"
+                              value={inputSatuanQty}
+                              onChange={(e) => setInputSatuanQty(e.target.value)}
+                              className="w-full bg-white border border-slate-300 rounded-xl p-2 text-xs font-bold text-slate-800 text-center"
+                            />
+                            <button type="button" onClick={() => setInputSatuanQty(String((Number(inputSatuanQty) || 1) + 1))} className="w-8 h-8 rounded-lg bg-indigo-600 text-white font-black">+</button>
+                          </div>
                         </div>
                       </div>
 
@@ -1444,7 +1598,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                         onClick={handleAddSatuanToCart}
                         className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-sm"
                       >
-                        ➕ Tambah Item Satuan Ini
+                        <span className="text-white">+ Tambah Item Satuan Ini</span>
                       </button>
 
                       {cartSatuan.length > 0 && (
@@ -1830,7 +1984,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
             </div>
 
             <button onClick={() => setShowPromoModal(false)} className="w-full bg-slate-900 text-white font-extrabold py-3 rounded-2xl text-xs">
-              Tutup Modal
+              Kembali
             </button>
           </div>
         </div>
@@ -1884,7 +2038,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                       activeSupportTab === 'ai' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
                     }`}
                   >
-                    🤖 Tanya AI
+                    🤖 Tanya CS
                   </button>
                 </div>
               </div>
@@ -1916,7 +2070,8 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                             : 'bg-slate-800 text-slate-100 rounded-bl-none border border-slate-700'
                         }`}
                       >
-                        <p>{msg.message}</p>
+                        {visibleChatText(msg) && <p className="whitespace-pre-wrap">{visibleChatText(msg)}</p>}
+                        <ChatAttachment message={msg} onOpen={setLightboxSrc} />
                         <span className={`text-[8px] block mt-1 ${isCustomer ? 'text-slate-900/70 text-right' : 'text-slate-400'}`}>
                           {new Date(msg.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </span>
@@ -1928,18 +2083,40 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
             </div>
 
             {/* Input Chat */}
-            <div className="p-3 border-t border-slate-800 flex gap-2">
+            <div className="p-3 border-t border-slate-800 flex gap-2 items-center">
+              {activeSupportTab === 'cs' && (
+                <>
+                  <input
+                    id="cust-chat-attach"
+                    type="file"
+                    accept="image/*,application/pdf"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      e.target.value = '';
+                      if (f) handleSendChat(f);
+                    }}
+                  />
+                  <label
+                    htmlFor="cust-chat-attach"
+                    title="Kirim bukti transfer / foto"
+                    className="shrink-0 w-9 h-9 rounded-xl bg-slate-800 border border-slate-700 text-white flex items-center justify-center text-sm cursor-pointer"
+                  >
+                    📎
+                  </label>
+                </>
+              )}
               <input
                 type="text"
                 value={inputChat}
                 onChange={(e) => setInputChat(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSendChat()}
-                placeholder={activeSupportTab === 'cs' ? "Ketik pesan ke CS..." : "Tanya AI seputar layanan laundry..."}
-                className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3 text-xs text-white focus:outline-none"
+                placeholder={activeSupportTab === 'cs' ? "Ketik pesan atau unggah bukti bayar..." : "Tanya AI seputar layanan laundry..."}
+                className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
               />
               <button
                 type="button"
-                onClick={handleSendChat}
+                onClick={() => handleSendChat()}
                 className={`font-bold px-4 py-2 rounded-xl text-xs text-white transition ${
                   activeSupportTab === 'cs' ? 'bg-cyan-500 hover:bg-cyan-600' : 'bg-purple-600 hover:bg-purple-700'
                 }`}
@@ -2069,17 +2246,20 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
             showCrew={false}
             variant="customer"
             title="Progres & Waktu Pengerjaan"
+            onOpenPhoto={setLightboxSrc}
           />
         </div>
 
         {/* Bukti Foto */}
         <div className="space-y-2">
           <h4 className="font-extrabold text-slate-800 uppercase text-[10px]">📸 Bukti Foto Cucian</h4>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-4 gap-2">
             <div>
               <span className="text-[10px] font-bold text-slate-400 block mb-1">Jemput</span>
               {detailOrder.photo_pickup_url || detailOrder.photo_url ? (
+                <button type="button" onClick={() => setLightboxSrc(detailOrder.photo_pickup_url || detailOrder.photo_url)} className="block w-full">
                 <img src={detailOrder.photo_pickup_url || detailOrder.photo_url} alt="Pickup" className="w-full h-24 object-cover rounded-xl border border-slate-200" />
+                </button>
               ) : (
                 <div className="w-full h-24 bg-slate-100 rounded-xl flex items-center justify-center text-[10px] text-slate-400">Belum Ada</div>
               )}
@@ -2087,7 +2267,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
             <div>
               <span className="text-[10px] font-bold text-slate-400 block mb-1">Outlet</span>
               {detailOrder.photo_outlet_url ? (
+                <button type="button" onClick={() => setLightboxSrc(detailOrder.photo_outlet_url)} className="block w-full">
                 <img src={detailOrder.photo_outlet_url} alt="Outlet" className="w-full h-24 object-cover rounded-xl border border-slate-200" />
+                </button>
               ) : (
                 <div className="w-full h-24 bg-slate-100 rounded-xl flex items-center justify-center text-[10px] text-slate-400">Belum Ada</div>
               )}
@@ -2095,7 +2277,19 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
             <div>
               <span className="text-[10px] font-bold text-slate-400 block mb-1">Antar</span>
               {detailOrder.photo_delivery_url ? (
+                <button type="button" onClick={() => setLightboxSrc(detailOrder.photo_delivery_url)} className="block w-full">
                 <img src={detailOrder.photo_delivery_url} alt="Delivery" className="w-full h-24 object-cover rounded-xl border border-slate-200" />
+                </button>
+              ) : (
+                <div className="w-full h-24 bg-slate-100 rounded-xl flex items-center justify-center text-[10px] text-slate-400">Belum Ada</div>
+              )}
+            </div>
+            <div>
+              <span className="text-[10px] font-bold text-slate-400 block mb-1">Rak</span>
+              {detailOrder.rack_photo_url ? (
+                <button type="button" onClick={() => setLightboxSrc(detailOrder.rack_photo_url)} className="block w-full">
+                <img src={detailOrder.rack_photo_url} alt="Rak" className="w-full h-24 object-cover rounded-xl border border-slate-200" />
+                </button>
               ) : (
                 <div className="w-full h-24 bg-slate-100 rounded-xl flex items-center justify-center text-[10px] text-slate-400">Belum Ada</div>
               )}
@@ -2111,7 +2305,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
           onClick={() => setDetailOrder(null)}
           className="w-full py-2 bg-slate-800 text-white font-bold rounded-xl text-xs cursor-pointer"
         >
-          Tutup
+          Kembali
         </button>
       </div>
 
@@ -2119,6 +2313,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
   </div>
 )}
       {customerData && <AIChatWidget customerPhone={customerPhone} />}
+      <PhotoLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
     </div>
   );
 }
