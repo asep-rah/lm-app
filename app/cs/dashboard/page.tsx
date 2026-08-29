@@ -6,7 +6,7 @@ import Link from 'next/link';
 import RoleTaskInbox from '@/components/RoleTaskInbox';
 import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
 import { getStaffSession } from '@/lib/staffSession';
-import { insertChatMessage, threadKeyOf } from '@/lib/csChat';
+import { insertChatMessage, sessionLooksClosed, threadKeyOf } from '@/lib/csChat';
 import { sendInvoiceToLiveChat } from '@/lib/chatInvoice';
 import { isPaymentLocked, markInvoicePaid } from '@/lib/paymentVerify';
 import { simulateMayarAutoPay } from '@/lib/mayar';
@@ -41,6 +41,8 @@ export default function CSDashboard() {
   const [inputCsChat, setInputCsChat] = useState<string>('');
   const [dispatchTarget, setDispatchTarget] = useState<any | null>(null);
   const [dispatchBusy, setDispatchBusy] = useState(false);
+  const [unreadChatsCount, setUnreadChatsCount] = useState(0);
+  const [pendingPickupsCount, setPendingPickupsCount] = useState(0);
 
   // Load Pesan Chat CS (Mendukung Order ID & Chat Berdasarkan No HP Customer)
   const loadCsChats = async (targetOrder: any) => {
@@ -193,7 +195,45 @@ export default function CSDashboard() {
     const { data: confData } = await confQuery;
     if (confData) setPendingConfirmations(confData);
 
+    await loadBadgeCounts();
     setIsLoading(false);
+  };
+
+  const isPendingPickup = (p: any) => {
+    const st = String(p?.status || '').toLowerCase();
+    if (st.includes('selesai') || st.includes('diantar') || st.includes('terkirim') || st.includes('delivered')) {
+      return false;
+    }
+    const normalized = st.replace(/\s+/g, '_');
+    const baruMasuk = normalized.includes('baru_masuk') || st.includes('baru');
+    const waitingDriver =
+      !String(p?.driver_name || '').trim() &&
+      (st.includes('menunggu') || st.includes('request') || st.includes('kurir') || st.includes('jemput') || !st);
+    return baruMasuk || waitingDriver;
+  };
+
+  const loadBadgeCounts = async () => {
+    const [{ data: sessions }, { data: pkps }, { data: unpaidTx }] = await Promise.all([
+      supabase
+        .from('support_chat_sessions')
+        .select('thread_key, customer_phone, is_claimed, is_resolved, status, last_sender_type'),
+      supabase.from('pickup_orders').select('id, status, driver_name'),
+      supabase.from('transactions').select('id, customer_phone, payment_status, status, payment_method').limit(250)
+    ]);
+
+    const keys = new Set<string>();
+    for (const s of sessions || []) {
+      if (sessionLooksClosed(s)) continue;
+      const unassigned = !s.is_claimed || String(s.status || '').toLowerCase() === 'unassigned';
+      const unread = String(s.last_sender_type || '').toLowerCase() === 'customer';
+      if (unassigned || unread) keys.add(threadKeyOf(s));
+    }
+    for (const t of unpaidTx || []) {
+      if (!isPaymentLocked(t)) continue;
+      keys.add(threadKeyOf({ customer_phone: t.customer_phone }) || `tx:${t.id}`);
+    }
+    setUnreadChatsCount([...keys].filter((k) => k && k !== 'unknown').length);
+    setPendingPickupsCount((pkps || []).filter(isPendingPickup).length);
   };
 
   useEffect(() => {
@@ -201,6 +241,15 @@ export default function CSDashboard() {
     const interval = setInterval(loadCSData, 10000);
     const ch = supabase
       .channel('cs_tp_delivery')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'support_chat_sessions' }, () => {
+        loadBadgeCounts();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'support_chats' }, () => {
+        loadBadgeCounts();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'pickup_orders' }, () => {
+        loadBadgeCounts();
+      })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'transactions' }, (payload) => {
         const row: any = payload.new;
         const prev: any = payload.old;
@@ -351,33 +400,24 @@ export default function CSDashboard() {
             <Link href="/workspace" className="bg-white/10 hover:bg-white/20 text-white font-bold py-2.5 px-4 rounded-xl text-xs transition">
               Workspace
             </Link>
-            <Link href="/cs" className="bg-sky-500 hover:bg-sky-600 text-white font-bold py-2.5 px-4 rounded-xl text-xs shadow-sm transition">
+            <Link href="/cs" className="relative bg-sky-500 hover:bg-sky-600 text-white font-bold py-2.5 px-4 rounded-xl text-xs shadow-sm transition">
               Command Center
+              {unreadChatsCount > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+                  {unreadChatsCount > 99 ? '99+' : unreadChatsCount}
+                </span>
+              )}
             </Link>
-            <Link href="/admin/pickups" className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs shadow-md transition">
-              🛵 Monitor Penjemputan
+            <Link href="/admin/pickups" className="relative bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs shadow-md transition">
+              Monitor Penjemputan
+              {pendingPickupsCount > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+                  {pendingPickupsCount > 99 ? '99+' : pendingPickupsCount}
+                </span>
+              )}
             </Link>
             <button onClick={loadCSData} className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2.5 px-4 rounded-xl transition text-xs shadow-md">
               🔄 REFRESH
-            </button>
-            <button
-              onClick={async () => {
-                const { data } = await supabase
-                  .from('support_chats')
-                  .select('customer_phone')
-                  .not('customer_phone', 'is', null)
-                  .order('created_at', { ascending: false })
-                  .limit(1);
-
-                if (data && data.length > 0) {
-                  window.location.href = '/cs';
-                } else {
-                  alert('Belum ada chat umum masuk.');
-                }
-              }}
-              className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs shadow-md transition"
-            >
-              💬 Chat CS Masuk
             </button>
           </div>
         </div>
