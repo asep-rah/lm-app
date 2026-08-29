@@ -46,6 +46,8 @@ export const isStaffOnlyMessage = (row: any) => {
 export const insertChatMessage = async (input: {
   customer_phone?: string | null;
   order_id?: string | null;
+  pickup_order_id?: string | null;
+  transaction_id?: string | null;
   sender_type: string;
   message: string;
   sender_name?: string;
@@ -64,9 +66,20 @@ export const insertChatMessage = async (input: {
     media && !isInline
       ? `${input.message || ''}${input.message ? '\n' : ''}${media}`.trim()
       : input.message;
-  const full: Record<string, any> = {
+
+  const UUID_RE =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const asUuid = (v?: string | null) => {
+    const s = String(v || '').trim();
+    if (!s || /^trx-/i.test(s) || !UUID_RE.test(s)) return null;
+    return s;
+  };
+  // order_id merujuk pickup_orders.id. Jangan pakai id transaksi / resi TRX-… (UUID transaksi tetap UUID).
+  const pickupId = asUuid(input.pickup_order_id);
+  const txId = asUuid(input.transaction_id);
+
+  const base: Record<string, any> = {
     customer_phone: input.customer_phone || null,
-    order_id: input.order_id || null,
     sender_type: input.sender_type,
     message: withFile,
     sender_name: input.sender_name || null,
@@ -81,33 +94,27 @@ export const insertChatMessage = async (input: {
   };
 
   const attempts = [
-    full,
-    { ...full, assigned_to_agent_id: undefined, assigned_to_agent_name: undefined, is_claimed: undefined },
+    { ...base, order_id: pickupId, transaction_id: txId },
+    { ...base, order_id: pickupId, transaction_id: txId, assigned_to_agent_id: undefined, assigned_to_agent_name: undefined, is_claimed: undefined },
+    { ...base, order_id: pickupId, assigned_to_agent_id: undefined, assigned_to_agent_name: undefined, is_claimed: undefined, attachment_url: undefined },
+    { ...base, transaction_id: txId, assigned_to_agent_id: undefined, assigned_to_agent_name: undefined, is_claimed: undefined, image_url: undefined },
     {
-      ...full,
-      assigned_to_agent_id: undefined,
-      assigned_to_agent_name: undefined,
-      is_claimed: undefined,
-      attachment_url: undefined
-    },
-    {
-      ...full,
-      assigned_to_agent_id: undefined,
-      assigned_to_agent_name: undefined,
-      is_claimed: undefined,
-      image_url: undefined
-    },
-    {
-      customer_phone: full.customer_phone,
-      order_id: full.order_id,
+      customer_phone: base.customer_phone,
       sender_type: input.is_internal ? 'internal' : input.sender_type,
       message: withFile,
+      order_id: pickupId,
+      transaction_id: txId,
       image_url: media,
       attachment_url: media
     },
     {
-      customer_phone: full.customer_phone,
-      order_id: full.order_id,
+      customer_phone: base.customer_phone,
+      sender_type: input.is_internal ? 'internal' : input.sender_type,
+      message: withFile,
+      transaction_id: txId
+    },
+    {
+      customer_phone: base.customer_phone,
       sender_type: input.is_internal ? 'internal' : input.sender_type,
       message: withFile
     }
@@ -126,11 +133,19 @@ export const insertChatMessage = async (input: {
   }
 
   let lastErr: any = null;
+  let dropOrderId = false;
+  let dropTxId = false;
   for (const row of attempts) {
-    const clean = Object.fromEntries(Object.entries(row).filter(([, v]) => v !== undefined));
+    const next = { ...row };
+    if (dropOrderId) delete next.order_id;
+    if (dropTxId) delete next.transaction_id;
+    const clean = Object.fromEntries(Object.entries(next).filter(([, v]) => v !== undefined && v !== null));
     const { error } = await supabase.from('support_chats').insert([clean]);
     if (!error) return { error: null, thread_key };
     lastErr = error;
+    const msg = String(error.message || '').toLowerCase();
+    if (msg.includes('foreign key') || msg.includes('order_id_fkey')) dropOrderId = true;
+    if (msg.includes('schema cache') && msg.includes('transaction_id')) dropTxId = true;
   }
   return { error: lastErr, thread_key };
 };

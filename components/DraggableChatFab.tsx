@@ -98,7 +98,7 @@ export default function DraggableChatFab({
         dragging.current = false;
       }}
       style={{ left: pos.x, top: pos.y }}
-      className="fixed z-50 w-12 h-12 rounded-full bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg shadow-indigo-600/35 border border-white/25 flex items-center justify-center touch-none select-none"
+      className="fixed z-[60] w-12 h-12 rounded-full bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg shadow-indigo-600/35 border border-white/25 flex items-center justify-center touch-none select-none"
     >
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <path

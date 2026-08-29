@@ -159,7 +159,8 @@ export const fetchRoleKpis = async (
     chats,
     chatSessions,
     expenses,
-    storedConfigs
+    storedConfigs,
+    reviews
   ] = await Promise.all([
     safeSelect('transactions', 'id, amount, created_at, customer_phone, discount_amount, payment_method, status', (q) =>
       q.gte('created_at', iso(thisStart)).lt('created_at', iso(nextStart))
@@ -197,7 +198,10 @@ export const fetchRoleKpis = async (
     safeSelect('expenses', 'id, amount, category, created_at', (q) =>
       q.gte('created_at', iso(thisStart)).lt('created_at', iso(nextStart))
     ),
-    fetchKpiConfigs(monthYear)
+    fetchKpiConfigs(monthYear),
+    safeSelect('order_reviews', 'rating, outlet_id, created_at', (q) =>
+      q.gte('created_at', iso(thisStart)).lt('created_at', iso(nextStart))
+    )
   ]);
 
   const txsThis = (txsThisAll || []).filter((t: { status?: unknown }) => !isVoidTransaction(t));
@@ -236,10 +240,10 @@ export const fetchRoleKpis = async (
     return inMonth && isTaskCompleted(t.status) && ['driver', 'courier', 'kurir', 'cs', 'head_cs'].includes(role);
   }).length;
   const complaints = issues.filter((i: any) => {
-    const c = String(i.category || i.description || '').toLowerCase();
+    const c = String(i.category || i.description || i.status || '').toLowerCase();
     const created = new Date(i.created_at).getTime();
     const inMonth = created >= thisStart.getTime() && created < nextStart.getTime();
-    return inMonth && (c.includes('komplain') || c.includes('pelanggan'));
+    return inMonth && (c.includes('komplain') || c.includes('pelanggan') || c.includes('pending_resolution'));
   }).length;
 
   const approvedReqs = requisitions.filter((r: any) => prApprovedAt(r));
@@ -359,6 +363,12 @@ export const fetchRoleKpis = async (
   });
   const csReplyHours = avg(sessionReplyHours.length ? sessionReplyHours : threadFirstReply.length ? threadFirstReply : replyHours);
 
+  const csatAvg = avg(
+    (reviews || [])
+      .map((r: any) => Number(r.rating) || 0)
+      .filter((n: number) => n >= 1 && n <= 5)
+  );
+
   const actuals: Record<string, Record<string, number>> = {
     kasir: { tx_count: txsThis.length, process_hours: avgProcess },
     kurir_cs: {
@@ -380,7 +390,11 @@ export const fetchRoleKpis = async (
     admin_ops: { exec_hours: avg(execHours), fulfill_pct: invRate, pr_paid_count: paidReqs.length },
     digital_marketing: { redemptions, conversion_pct: conversion },
     finance: { recon_pct: recon, opex_recorded: expTotal },
-    owner_relation: { response_pct: customerMsgs.length ? responseRate : 100, reply_hours: avg(replyHours) }
+    owner_relation: {
+      response_pct: customerMsgs.length ? responseRate : 100,
+      reply_hours: avg(replyHours),
+      csat_avg: csatAvg
+    }
   };
 
   const headlines: Record<string, (score: number) => { val: string; desc: string }> = {
@@ -409,8 +423,8 @@ export const fetchRoleKpis = async (
       desc: `OPEX Rp ${Number(expTotal).toLocaleString('id-ID')}`
     }),
     owner_relation: (score) => ({
-      val: customerMsgs.length ? `${responseRate}% Response` : '0 Query',
-      desc: `${replied}/${customerMsgs.length} query CS+investor dibalas · avg ${fmtHours(avg(replyHours))}`
+      val: csatAvg ? `⭐ ${csatAvg.toFixed(1)} CSAT` : customerMsgs.length ? `${responseRate}% Response` : '0 Query',
+      desc: `${replied}/${customerMsgs.length} query dibalas · avg ${fmtHours(avg(replyHours))} · rating ${csatAvg ? csatAvg.toFixed(1) : '—'} · skor ${score}%`
     })
   };
 

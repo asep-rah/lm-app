@@ -18,6 +18,7 @@ import { SkeletonCard } from '@/components/ui/Skeleton';
 import { fetchRoleKpis } from '@/lib/kpiMetrics';
 import { canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
 import { isMultiOutletRole, staffRolesForForm } from '@/lib/staffRoles';
+import OutletCsatPanel from '@/components/OutletCsatPanel';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -986,6 +987,8 @@ export default function Dashboard() {
           />
         </div>
         )}
+
+        <OutletCsatPanel />
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <RevenueChart points={revenueSeries} />

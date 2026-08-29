@@ -96,8 +96,10 @@ export default function CSDashboard() {
       }
     ]);
 
+    const isTx = Boolean(typeof activeChatOrder === 'object' && activeChatOrder?.receipt_number);
     const { error } = await insertChatMessage({
-      order_id: orderId || null,
+      pickup_order_id: isTx ? activeChatOrder?.pickup_id : orderId,
+      transaction_id: isTx ? orderId : null,
       customer_phone: phone || null,
       sender_type: 'cs',
       message: msgText,

@@ -1,4 +1,31 @@
 import { insertChatMessage } from '@/lib/csChat';
+import { supabase } from '@/lib/supabaseClient';
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** Hanya UUID pickup_orders yang boleh masuk support_chats.order_id. */
+async function resolvePickupOrderId(tx: { id?: string; pickup_id?: string; receipt_number?: string }) {
+  if (tx.pickup_id && UUID_RE.test(String(tx.pickup_id))) return String(tx.pickup_id);
+  if (tx.id && UUID_RE.test(String(tx.id))) {
+    const { data, error } = await supabase
+      .from('pickup_orders')
+      .select('id')
+      .eq('transaction_id', tx.id)
+      .limit(1);
+    if (!error && data?.[0]?.id) return String(data[0].id);
+  }
+  const resi = String(tx.receipt_number || '').trim();
+  if (resi) {
+    const { data, error } = await supabase
+      .from('pickup_orders')
+      .select('id')
+      .eq('order_number', resi)
+      .limit(1);
+    if (!error && data?.[0]?.id) return String(data[0].id);
+  }
+  return null;
+}
 
 export const INVOICE_TAG_RE = /\[INVOICE\|([^\]|]*)\|([^\]|]*)\|([^\]|]*)\|([^\]]*)\]/;
 
@@ -54,6 +81,7 @@ export const buildInvoiceChatBody = (tx: {
 export async function sendInvoiceToLiveChat(
   tx: {
     id?: string;
+    pickup_id?: string;
     receipt_number?: string;
     customer_name?: string;
     customer_phone?: string;
@@ -67,9 +95,12 @@ export async function sendInvoiceToLiveChat(
 ) {
   const phone = String(tx.customer_phone || '').trim();
   if (!phone) return { error: { message: 'Nomor pelanggan tidak ditemukan' } };
+  const pickupOrderId = await resolvePickupOrderId(tx);
+  const txRef = tx.id && UUID_RE.test(String(tx.id)) ? String(tx.id) : null;
   return insertChatMessage({
     customer_phone: phone,
-    order_id: tx.id || null,
+    pickup_order_id: pickupOrderId,
+    transaction_id: txRef,
     sender_type: 'cs',
     sender_name: agentName || 'CS',
     message: buildInvoiceChatBody(tx)

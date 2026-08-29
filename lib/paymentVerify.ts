@@ -31,6 +31,7 @@ export const isCsVerifiedPaid = (order: any) => {
 
 export async function createPaymentVerifyTask(tx: {
   id?: string;
+  pickup_id?: string;
   receipt_number?: string;
   customer_name?: string;
   customer_phone?: string;
@@ -76,7 +77,8 @@ export async function createPaymentVerifyTask(tx: {
   if (tx.customer_phone) {
     await insertChatMessage({
       customer_phone: tx.customer_phone,
-      order_id: tx.id,
+      pickup_order_id: tx.pickup_id || null,
+      transaction_id: tx.id,
       sender_type: 'cs',
       sender_name: 'Kasir',
       message: `Halo Kak, transaksi ${resi} (Rp ${Number(tx.amount || 0).toLocaleString('id-ID')}) via ${tx.payment_method || 'QRIS/Transfer'} menunggu konfirmasi CS. Unggah bukti pembayaran di chat ini ya.`
@@ -155,7 +157,8 @@ export async function markInvoicePaid(opts: {
     const nominal = Number(opts.amount || 0).toLocaleString('id-ID');
     await insertChatMessage({
       customer_phone: opts.customerPhone,
-      order_id: opts.transactionId,
+      pickup_order_id: null,
+      transaction_id: opts.transactionId,
       sender_type: 'cs',
       sender_name: opts.agentName || 'CS',
       message: `Terima kasih! Pembayaran Anda sebesar Rp ${nominal} telah diverifikasi oleh CS.`,

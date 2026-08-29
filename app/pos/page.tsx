@@ -1588,9 +1588,18 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
           stage: targetStatus,
           service_type: subItem?.name || order.service_type || '',
           weight_kg: Number(subItem?.weight ?? order.weight_kg) || 0,
-          pcs_count: Number(subItem?.qty ?? order.pcs_count) || 0
+          pcs_count: Number(subItem?.qty ?? order.pcs_count) || 0,
+          notes: proof.notes || undefined,
+          photo_url: proof.photoUrl
         }
       ]);
+      if (targetKey === 'sortir') {
+        await updateWithFallback(
+          'transactions',
+          [{ sortir_photo_url: proof.photoUrl }],
+          { column: 'id', value: order.id }
+        );
+      }
     }
 
     // 5. Potong stok bahan kimia (best-effort, tidak boleh membatalkan perubahan status)

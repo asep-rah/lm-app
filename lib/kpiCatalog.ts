@@ -56,8 +56,9 @@ export const KPI_CATALOG: Record<string, CatalogMetric[]> = {
     { key: 'opex_recorded', label: 'OPEX tercatat (Rp)', direction: 'higher', defaultTarget: 1, defaultWeight: 30, unit: 'Rp' }
   ],
   owner_relation: [
-    { key: 'response_pct', label: 'Response rate query %', direction: 'higher', defaultTarget: 90, defaultWeight: 60, unit: '%' },
-    { key: 'reply_hours', label: 'Avg. waktu balas (jam)', direction: 'lower', defaultTarget: 2, defaultWeight: 40, unit: 'jam' }
+    { key: 'response_pct', label: 'Response rate query %', direction: 'higher', defaultTarget: 90, defaultWeight: 50, unit: '%' },
+    { key: 'reply_hours', label: 'Avg. waktu balas (jam)', direction: 'lower', defaultTarget: 2, defaultWeight: 30, unit: 'jam' },
+    { key: 'csat_avg', label: 'CSAT rating pelanggan', direction: 'higher', defaultTarget: 4.5, defaultWeight: 20, unit: '★' }
   ]
 };
 

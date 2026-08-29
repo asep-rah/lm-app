@@ -10,6 +10,7 @@ import StageTimeline from '@/components/StageTimeline';
 import { isVoidTransaction } from '@/lib/voidTx';
 import { canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
 import { staffRolesForForm } from '@/lib/staffRoles';
+import OutletCsatPanel from '@/components/OutletCsatPanel';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -798,6 +799,8 @@ setDeleteRequests(delData);
                 <h2 className={`text-xl md:text-2xl font-black mt-1 ${stats.profit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>Rp {stats.profit.toLocaleString('id-ID')}</h2>
               </div>
             </div>
+
+            <OutletCsatPanel />
 
             {/* TABEL RANKING OUTLET & SUPERVISOR */}
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 md:gap-6 pt-2">

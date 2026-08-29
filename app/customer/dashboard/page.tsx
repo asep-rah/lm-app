@@ -5,15 +5,24 @@ import { createClient } from '@supabase/supabase-js';
 import StageTimeline from '@/components/StageTimeline';
 import { insertChatMessage, isStaffOnlyMessage, phoneVariants, threadKeyOf } from '@/lib/csChat';
 import { mapDbPromo, mapSettingsPromo, promoDiscountRp, promoIsClaimable, type CatalogPromo } from '@/lib/promoCatalog';
-import { createPickupRoleTasks, insertPickupOrder, createDeliveryRequestTasks } from '@/lib/pickupDispatch';
-import { updatePickupOrder } from '@/lib/pickupUpdates';
+import { createPickupRoleTasks, insertPickupOrder, requestDriverDelivery } from '@/lib/pickupDispatch';
+import { stageKeyOf } from '@/lib/stageTimeline';
 import { laundryFallbackReply } from '@/lib/laundryFaq';
 import PhotoLightbox from '@/components/PhotoLightbox';
 import DraggableChatFab from '@/components/DraggableChatFab';
 import ChatAttachment, { visibleChatText } from '@/components/ChatAttachment';
 import ChatInvoiceCard from '@/components/ChatInvoiceCard';
-import { fileToCompressedDataUrl, uploadChatAttachment } from '@/lib/uploadProof';
+import { fileToCompressedDataUrl, uploadChatAttachment, uploadProofFile } from '@/lib/uploadProof';
 import { nearestOpenOutlet } from '@/lib/outletCapacity';
+import { toast } from '@/lib/toast';
+import {
+  showComplaintActions,
+  markOrderConfirmed,
+  submitOrderComplaint,
+  submitOrderReview,
+  maybeAutoConfirmOrder,
+  readLocalFlag
+} from '@/lib/orderFeedback';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -76,6 +85,50 @@ const isReadyForPickupAlert = (order: any) => {
 };
 
 const isSiapDiambil = (order: any) => isReadyForPickupAlert(order);
+
+const sortirPhotoOf = (order: any, logs?: any[]) =>
+  order?.sortir_photo_url ||
+  (logs || []).filter((l) => stageKeyOf(l?.stage) === 'sortir').slice(-1)[0]?.photo_url ||
+  null;
+
+function ProofPhotoGrid({
+  order,
+  logs,
+  onOpen,
+  compact
+}: {
+  order: any;
+  logs?: any[];
+  onOpen: (src: string) => void;
+  compact?: boolean;
+}) {
+  const h = compact ? 'h-16' : 'h-24';
+  const slots = [
+    { label: 'Jemput', src: order?.photo_pickup_url || order?.photo_url },
+    { label: 'Outlet', src: order?.photo_outlet_url },
+    { label: 'Sortir', src: sortirPhotoOf(order, logs) },
+    { label: 'Rak', src: order?.rack_photo_url },
+    { label: 'Antar', src: order?.photo_delivery_url }
+  ];
+  return (
+    <div className="grid grid-cols-5 gap-1.5">
+      {slots.map((s) => (
+        <div key={s.label} className="flex flex-col gap-1 min-w-0">
+          <span className="text-[8px] font-bold text-slate-400 truncate">{s.label}</span>
+          {s.src ? (
+            <button type="button" onClick={() => onOpen(s.src)} className="block w-full">
+              <img src={s.src} alt={s.label} className={`w-full ${h} object-cover rounded-lg border border-slate-200`} />
+            </button>
+          ) : (
+            <div className={`w-full ${h} bg-slate-100 rounded-lg flex items-center justify-center text-[8px] text-slate-400`}>
+              Belum
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 const cleanPhone = (phoneStr: string) => {
   if (!phoneStr) return '';
@@ -212,6 +265,14 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
   const [depositLogs, setDepositLogs] = useState<any[]>([]);
   const [readyPopup, setReadyPopup] = useState<any>(null);
   const [requestingDeliveryId, setRequestingDeliveryId] = useState<string | null>(null);
+  const [complaintOpen, setComplaintOpen] = useState(false);
+  const [complaintText, setComplaintText] = useState('');
+  const [complaintFile, setComplaintFile] = useState<File | null>(null);
+  const [complaintBusy, setComplaintBusy] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewStars, setReviewStars] = useState(0);
+  const [reviewText, setReviewText] = useState('');
+  const [reviewBusy, setReviewBusy] = useState(false);
 
   const estimatedPickupMinutes = (queueCount * 30) + 15;
 
@@ -226,6 +287,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
     if (activeSupportTab === 'cs') {
       const validOrderId = (activeChatOrderId && activeChatOrderId !== 'GENERAL_CS') ? activeChatOrderId : null;
+      const chatOrder = validOrderId ? activeOrders.find((o) => o.id === validOrderId) : null;
+      const pickupChatId = chatOrder?.pickup_id || (chatOrder && !chatOrder.receipt_number ? validOrderId : null);
+      const txChatId = chatOrder?.receipt_number ? validOrderId : chatOrder?.transaction_id || null;
       let attachmentUrl = '';
       let attachmentType = '';
       if (file) {
@@ -253,7 +317,8 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       setChatMessages((prev) => [...prev, newMsg]);
 
       const { error } = await insertChatMessage({
-        order_id: validOrderId,
+        pickup_order_id: pickupChatId || null,
+        transaction_id: txChatId || null,
         customer_phone: customerPhone || null,
         sender_type: 'customer',
         message: messageText,
@@ -424,68 +489,109 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
     e.stopPropagation();
     if (!customerPhone) return alert('Login terlebih dahulu.');
     if (isDeliveryInProgress(order)) {
-      alert('Permintaan pengantaran sudah dikirim. Admin Ops / CS akan menugaskan driver.');
+      alert('Permintaan pengantaran sudah dikirim. Driver outlet akan mengantar.');
       return;
     }
     setRequestingDeliveryId(order.id);
     try {
-      const notes = `Request Pengantaran Customer · ${order.receipt_number || order.order_number || order.id}`;
-      const isPosOrder = Boolean(order.receipt_number);
-      let pickupId = isPosOrder ? order.pickup_id || null : order.id;
-
-      if (isPosOrder) {
-        if (!pickupId) {
-          const { data: existing } = await supabase
-            .from('pickup_orders')
-            .select('id')
-            .eq('transaction_id', order.id)
-            .limit(1);
-          pickupId = existing?.[0]?.id || null;
-        }
-        if (pickupId) {
-          const { error } = await updatePickupOrder(pickupId, {
-            status: 'Siap Diantar',
-            notes: `${order.notes || ''} | ${notes}`.trim()
-          });
-          if (error) throw error;
-        } else {
-          const { data, error } = await insertPickupOrder({
-            outlet_id: order.outlet_id || selectedOutlet || null,
-            customer_name: customerName || order.customer_name || 'Pelanggan',
-            customer_phone: customerPhone,
-            phone_number: customerPhone,
-            service_type: order.service_type || 'Antar cucian',
-            address: customerAddress,
-            notes,
-            status: 'Siap Diantar',
-            transaction_id: order.id
-          });
-          if (error) throw error;
-          pickupId = data?.[0]?.id || pickupId;
-        }
-        await supabase.from('transactions').update({ status: 'Siap Diantar' }).eq('id', order.id);
-      } else {
-        const { error } = await updatePickupOrder(order.id, {
-          status: 'Siap Diantar',
-          notes: `${order.notes || ''} | ${notes}`.trim()
-        });
-        if (error) throw error;
-        pickupId = order.id;
-      }
-
-      await createDeliveryRequestTasks({
-        id: pickupId || order.id,
-        customer_name: customerName || order.customer_name,
-        customer_phone: customerPhone,
-        notes
+      const { error } = await requestDriverDelivery({
+        order,
+        customerName: customerName || order.customer_name,
+        customerPhone,
+        customerAddress,
+        selectedOutlet
       });
-
-      alert('✅ Permintaan pengantaran terkirim ke Admin Ops & CS. Driver akan di-assign.');
+      if (error) throw error;
+      alert('✅ Permintaan pengantaran terkirim ke Portal Driver. Kurir outlet akan mengantar cucian ke alamat Anda.');
       fetchCustomerProfile(customerPhone);
     } catch (err: any) {
       alert('❌ Gagal minta pengantaran: ' + (err.message || 'Coba lagi'));
     } finally {
       setRequestingDeliveryId(null);
+    }
+  };
+
+  useEffect(() => {
+    if (!detailOrder?.id || !isOrderFinished(detailOrder)) return;
+    let cancelled = false;
+    maybeAutoConfirmOrder(detailOrder).then((next) => {
+      if (cancelled || !next) return;
+      if (next.complaint_status && next.complaint_status !== detailOrder.complaint_status) {
+        setDetailOrder(next);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detailOrder?.id]);
+
+  const handleSudahSesuai = async () => {
+    if (!detailOrder) return;
+    const { error, order } = await markOrderConfirmed(detailOrder);
+    if (error) {
+      toast('Gagal mengunci konfirmasi: ' + error.message, 'warn');
+    }
+    setDetailOrder(order);
+    if (!readLocalFlag('review', order.id)) {
+      setReviewStars(0);
+      setReviewText('');
+      setReviewOpen(true);
+    }
+  };
+
+  const handleSubmitComplaint = async () => {
+    if (!detailOrder) return;
+    if (!complaintText.trim()) return toast('Isi deskripsi kendala.', 'warn');
+    setComplaintBusy(true);
+    try {
+      let photoUrl = '';
+      if (complaintFile) {
+        photoUrl =
+          (await uploadProofFile(complaintFile, `complaint_${detailOrder.id}`).catch(() => '')) ||
+          (await fileToCompressedDataUrl(complaintFile));
+      }
+      const { error, order } = await submitOrderComplaint({
+        order: detailOrder,
+        description: complaintText.trim(),
+        photoUrl,
+        customerName: customerName || customerData?.name,
+        customerPhone
+      });
+      if (error) {
+        toast('Gagal kirim komplain: ' + error.message, 'err');
+        return;
+      }
+      setDetailOrder(order);
+      setComplaintOpen(false);
+      setComplaintText('');
+      setComplaintFile(null);
+      toast('Komplain terkirim. Supervisor & CS akan menindaklanjuti.', 'ok');
+    } finally {
+      setComplaintBusy(false);
+    }
+  };
+
+  const handleSubmitReview = async () => {
+    if (!detailOrder) return;
+    if (reviewStars < 1) return toast('Pilih rating 1–5 bintang.', 'warn');
+    setReviewBusy(true);
+    try {
+      const { error } = await submitOrderReview({
+        order: detailOrder,
+        rating: reviewStars,
+        comment: reviewText,
+        customerId: customerData?.id || null,
+        customerPhone
+      });
+      if (error) {
+        toast('Gagal simpan ulasan: ' + error.message, 'err');
+        return;
+      }
+      setReviewOpen(false);
+      toast('Terima kasih atas ulasan Anda!', 'ok');
+    } finally {
+      setReviewBusy(false);
     }
   };
 
@@ -674,7 +780,8 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       photo_pickup_url: t.photo_pickup_url || relatedPickup?.photo_pickup_url || relatedPickup?.photo_url,
       photo_outlet_url: t.photo_outlet_url || relatedPickup?.photo_outlet_url,
       photo_delivery_url: t.photo_delivery_url || relatedPickup?.photo_delivery_url,
-      rack_photo_url: t.rack_photo_url || relatedPickup?.rack_photo_url
+      rack_photo_url: t.rack_photo_url || relatedPickup?.rack_photo_url,
+      sortir_photo_url: t.sortir_photo_url || relatedPickup?.sortir_photo_url
     };
   });
 
@@ -688,21 +795,56 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
         photo_pickup_url: p.photo_pickup_url || p.photo_url,
         photo_outlet_url: p.photo_outlet_url,
         photo_delivery_url: p.photo_delivery_url,
-        rack_photo_url: p.rack_photo_url
+        rack_photo_url: p.rack_photo_url,
+        sortir_photo_url: p.sortir_photo_url
       });
     }
   });
 
   setActiveOrders(mergedActive);
 
-  let historyArr: any[] = [];
-  activePickups.filter((o: any) => isOrderFinished(o)).forEach((o: any) => {
-    historyArr.push({ id: o.id, type: 'Online Order', title: o.service_type, detail: o.notes || '', price: o.delivery_fee || 0, date: o.created_at, status: o.status });
+  const withProofPhotos = (row: any, pickup?: any) => ({
+    ...row,
+    photo_pickup_url: row.photo_pickup_url || pickup?.photo_pickup_url || pickup?.photo_url || row.photo_url,
+    photo_outlet_url: row.photo_outlet_url || pickup?.photo_outlet_url,
+    photo_delivery_url: row.photo_delivery_url || pickup?.photo_delivery_url,
+    rack_photo_url: row.rack_photo_url || pickup?.rack_photo_url,
+    sortir_photo_url: row.sortir_photo_url || pickup?.sortir_photo_url,
+    items: safeParse(row.items, row.items),
+    rack_location: row.rack_location || row.rack_number || pickup?.rack_location,
+    package_count: row.package_count || row.bag_count || pickup?.package_count,
+    rack_notes: row.rack_notes || pickup?.rack_notes
   });
 
-      posTransactions?.filter((t: any) => isOrderFinished(t)).forEach((t: any) => {
-        historyArr.push({ id: t.id, type: 'Outlet POS', title: `${t.service_type} (${t.receipt_number})`, detail: t.notes, price: t.amount, date: t.created_at, status: t.status });
-      });
+  let historyArr: any[] = [];
+  activePickups.filter((o: any) => isOrderFinished(o)).forEach((o: any) => {
+    const alreadyInTrx = activeTxs.some(
+      (t: any) => isOrderFinished(t) && (t.pickup_id === o.id || o.transaction_id === t.id)
+    );
+    if (alreadyInTrx) return;
+    historyArr.push({
+      ...withProofPhotos(o),
+      type: 'Online Order',
+      title: o.service_type,
+      detail: o.notes || '',
+      price: o.amount || o.delivery_fee || 0,
+      date: o.delivered_at || o.completed_at || o.created_at
+    });
+  });
+
+  posTransactions?.filter((t: any) => isOrderFinished(t)).forEach((t: any) => {
+    const relatedPickup = (t.pickup_id ? pickupMap.get(t.pickup_id) : null) || pickupByTx.get(t.id) || null;
+    historyArr.push({
+      ...withProofPhotos(t, relatedPickup),
+      pickup_id: t.pickup_id || relatedPickup?.id,
+      pickup_created_at: relatedPickup?.created_at,
+      type: 'Outlet POS',
+      title: `${t.service_type} (${t.receipt_number})`,
+      detail: t.notes,
+      price: t.amount,
+      date: t.delivered_at || t.completed_at || t.created_at
+    });
+  });
 
       historyArr.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       setCompletedOrders(historyArr);
@@ -980,18 +1122,19 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 p-4 md:p-6 pb-28 max-w-md mx-auto relative font-sans">
       {readyPopup && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-end md:items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-5 w-full max-w-sm shadow-xl space-y-3">
+        <div className="fixed inset-x-0 bottom-20 z-40 pointer-events-none flex justify-center px-4">
+          <div className="pointer-events-auto bg-white rounded-2xl p-4 w-full max-w-sm shadow-xl border border-slate-200 space-y-2">
             <p className="text-sm font-black text-slate-900">Cucian siap diambil</p>
             <p className="text-xs text-slate-600 leading-relaxed">
               Cucian Anda sudah selesai dan siap diambil! Silakan ambil ke outlet atau pesan Kurir Internal.
             </p>
             <p className="text-[11px] text-slate-400">{readyPopup.service_type} · {readyPopup.status}</p>
             <div className="flex gap-2">
-              <button onClick={dismissReadyPopup} className="flex-1 border border-slate-200 font-bold text-xs py-2.5 rounded-xl">
+              <button type="button" onClick={dismissReadyPopup} className="flex-1 border border-slate-200 font-bold text-xs py-2.5 rounded-xl">
                 Nanti
               </button>
               <button
+                type="button"
                 onClick={(e) => {
                   handleRequestDelivery(readyPopup, e);
                   dismissReadyPopup();
@@ -1265,81 +1408,13 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                 </div>
               )}
 
-              {/* BUKTI FOTO (PICKUP, OUTLET, SERAH TERIMA) */}
-<div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 space-y-2 mt-2">
-  <p className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider">
-    📸 Bukti Foto Kurir
-  </p>
-  <div className="grid grid-cols-4 gap-2">
-    <div className="flex flex-col gap-1">
-      <span className="text-[9px] font-bold text-slate-400">Jemput</span>
-      {order.photo_pickup_url || order.photo_url ? (
-        <button type="button" onClick={() => setLightboxSrc(order.photo_pickup_url || order.photo_url)} className="block w-full">
-        <img 
-          src={order.photo_pickup_url || order.photo_url} 
-          alt="Foto Pickup" 
-          className="w-full h-20 object-cover rounded-lg border border-slate-200"
-        />
-        </button>
-      ) : (
-        <div className="w-full h-20 bg-slate-100 rounded-lg flex items-center justify-center text-[10px] text-slate-400">
-          Belum Ada
-        </div>
-      )}
-    </div>
-
-    <div className="flex flex-col gap-1">
-      <span className="text-[9px] font-bold text-slate-400">Outlet</span>
-      {order.photo_outlet_url ? (
-        <button type="button" onClick={() => setLightboxSrc(order.photo_outlet_url)} className="block w-full">
-        <img 
-          src={order.photo_outlet_url} 
-          alt="Foto Outlet" 
-          className="w-full h-20 object-cover rounded-lg border border-slate-200"
-        />
-        </button>
-      ) : (
-        <div className="w-full h-20 bg-slate-100 rounded-lg flex items-center justify-center text-[10px] text-slate-400">
-          Belum Ada
-        </div>
-      )}
-    </div>
-
-    <div className="flex flex-col gap-1">
-      <span className="text-[9px] font-bold text-slate-400">Antar</span>
-      {order.photo_delivery_url ? (
-        <button type="button" onClick={() => setLightboxSrc(order.photo_delivery_url)} className="block w-full">
-        <img 
-          src={order.photo_delivery_url} 
-          alt="Foto Serah Terima" 
-          className="w-full h-20 object-cover rounded-lg border border-slate-200"
-        />
-        </button>
-      ) : (
-        <div className="w-full h-20 bg-slate-100 rounded-lg flex items-center justify-center text-[10px] text-slate-400">
-          Belum Ada
-        </div>
-      )}
-    </div>
-
-    <div className="flex flex-col gap-1">
-      <span className="text-[9px] font-bold text-slate-400">Rak</span>
-      {order.rack_photo_url ? (
-        <button type="button" onClick={() => setLightboxSrc(order.rack_photo_url)} className="block w-full">
-        <img
-          src={order.rack_photo_url}
-          alt="Foto Rak"
-          className="w-full h-20 object-cover rounded-lg border border-slate-200"
-        />
-        </button>
-      ) : (
-        <div className="w-full h-20 bg-slate-100 rounded-lg flex items-center justify-center text-[10px] text-slate-400">
-          Belum Ada
-        </div>
-      )}
-    </div>
-  </div>
-</div>
+              {/* BUKTI FOTO: jemput → outlet → sortir → rak → antar */}
+              <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 space-y-2 mt-2" onClick={(e) => e.stopPropagation()}>
+                <p className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider">
+                  📸 Bukti Foto
+                </p>
+                <ProofPhotoGrid order={order} onOpen={setLightboxSrc} compact />
+              </div>
             </div>
           );
         });
@@ -1845,11 +1920,21 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
             <div className="space-y-3">
               <h3 className="text-xs font-extrabold text-slate-700 uppercase tracking-wider">📜 Riwayat Pesanan Selesai</h3>
               {completedOrders.map((item: any) => (
-                <div key={item.id} className="bg-white border border-slate-200 rounded-2xl p-4 text-xs space-y-2 shadow-sm">
+                <button
+                  type="button"
+                  key={item.id}
+                  onClick={() =>
+                    setDetailOrder({
+                      ...item,
+                      items: Array.isArray(item.items) ? item.items : safeParse(item.items, [])
+                    })
+                  }
+                  className="w-full text-left bg-white border border-slate-200 rounded-2xl p-4 text-xs space-y-2 shadow-sm hover:shadow-md active:scale-[0.99] transition"
+                >
                   <div className="flex justify-between items-start">
                     <div>
                       <span className="font-extrabold text-slate-900 block">{item.title}</span>
-                      <span className="text-[10px] text-slate-500 font-medium">{item.detail}</span>
+                      <span className="text-[10px] text-slate-500 font-medium line-clamp-2">{item.detail}</span>
                     </div>
                     <span className="bg-blue-50 text-blue-700 border border-blue-200 text-[9px] font-extrabold px-2.5 py-0.5 rounded-full">
                       {item.status}
@@ -1857,9 +1942,12 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                   </div>
                   <div className="flex justify-between items-center pt-2 border-t border-slate-100 text-[10px]">
                     <span className="text-slate-400 font-medium">{new Date(item.date).toLocaleDateString('id-ID')}</span>
-                    <span className="font-black text-blue-600 text-xs">Ongkir: Rp {Number(item.price || 0).toLocaleString('id-ID')}</span>
+                    <span className="font-black text-blue-600 text-xs">
+                      {item.receipt_number ? 'Total' : 'Ongkir'}: Rp {Number(item.price || item.amount || 0).toLocaleString('id-ID')}
+                    </span>
                   </div>
-                </div>
+                  <p className="text-[10px] font-bold text-indigo-600">🔍 Lihat timeline, foto & rincian</p>
+                </button>
               ))}
 
               {completedOrders.length === 0 && (
@@ -1929,8 +2017,8 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
       {/* MODAL KLAIM VOUCHER PROMO AKTIF */}
       {showPromoModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-5 max-w-sm w-full space-y-4 shadow-2xl max-h-[85vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[90] flex items-center justify-center p-4" onClick={() => setShowPromoModal(false)}>
+          <div className="bg-white rounded-3xl p-5 max-w-sm w-full space-y-4 shadow-2xl max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex justify-between items-center border-b pb-2">
               <h3 className="text-sm font-extrabold text-slate-900">🎁 Klaim Voucher Promo Active</h3>
               <button onClick={() => setShowPromoModal(false)} className="text-slate-400 hover:text-slate-600 font-bold">✕</button>
@@ -1982,8 +2070,8 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
       {/* MODAL INFORMASI CREDENTIAL ESTIMASI TOTAL */}
       {showEstimateInfoModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl text-center">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[90] flex items-center justify-center p-4" onClick={() => setShowEstimateInfoModal(false)}>
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl text-center" onClick={(e) => e.stopPropagation()}>
             <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center text-2xl mx-auto font-black shadow-inner">
               ℹ️
             </div>
@@ -2005,8 +2093,8 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
       {/* MODAL CHAT CUSTOMER SERVICE */}
       {activeChatOrderId && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
-          <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-2xl flex flex-col h-[500px]">
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-[55]" onClick={() => setActiveChatOrderId(null)}>
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-2xl flex flex-col h-[500px]" onClick={(e) => e.stopPropagation()}>
             {/* Header Modal Chat & Switcher AI/CS */}
             <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900">
               <div className="flex items-center gap-2">
@@ -2120,8 +2208,8 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       )}
 {/* MODAL SUCCESS ORDER REDIRECT (SMOOTH UX FLOW) */}
 {showOrderSuccessModal && latestCreatedOrder && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl text-center">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[90] flex items-center justify-center p-4" onClick={() => setShowOrderSuccessModal(false)}>
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl text-center" onClick={(e) => e.stopPropagation()}>
             <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center text-3xl mx-auto font-black shadow-inner">
               ✓
             </div>
@@ -2167,8 +2255,8 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
 {/* ================= MODAL POPUP DETAIL ITEM & STATUS ================= */}
 {detailOrder && (
-  <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-    <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+  <div className="fixed inset-0 z-[55] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => { setDetailOrder(null); setComplaintOpen(false); setReviewOpen(false); }}>
+    <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
       
       {/* Header */}
       <div className="bg-indigo-600 p-4 text-white flex justify-between items-center">
@@ -2180,7 +2268,11 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
         </div>
         <button
           type="button"
-          onClick={() => setDetailOrder(null)}
+          onClick={() => {
+            setDetailOrder(null);
+            setComplaintOpen(false);
+            setReviewOpen(false);
+          }}
           className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 text-white font-bold flex items-center justify-center cursor-pointer"
         >
           ✕
@@ -2201,33 +2293,72 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
           </span>
         </div>
 
-        {/* Rincian Items */}
+        {/* Rincian Items + harga */}
         <div className="space-y-2">
-          <h4 className="font-extrabold text-slate-800 uppercase text-[10px]">📦 Rincian Item Cucian</h4>
-          {detailOrder.items && Array.isArray(detailOrder.items) && detailOrder.items.length > 0 ? (
-            <div className="space-y-1.5">
-              {detailOrder.items.map((it: any, idx: number) => (
-                <div key={idx} className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 flex justify-between items-center">
-                  <div>
-                    <span className="font-bold text-slate-800 block">{it.name || it.service_type || 'Item Cucian'}</span>
-                    <span className="text-[10px] text-slate-500">
-                      {it.weight ? `${it.weight} Kg` : ''} {it.qty ? `${it.qty} Pcs` : ''}
-                    </span>
-                  </div>
-                  <span className="px-2 py-0.5 bg-slate-200 text-slate-700 font-bold text-[10px] rounded-md">
-                    {it.status || detailOrder.status || 'Proses'}
-                  </span>
+          <h4 className="font-extrabold text-slate-800 uppercase text-[10px]">📦 Rincian Item & Harga</h4>
+          {(() => {
+            const items = Array.isArray(detailOrder.items)
+              ? detailOrder.items
+              : safeParse(detailOrder.items, []);
+            if (Array.isArray(items) && items.length > 0) {
+              return (
+                <div className="space-y-1.5">
+                  {items.map((it: any, idx: number) => (
+                    <div key={idx} className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 flex justify-between items-center gap-2">
+                      <div>
+                        <span className="font-bold text-slate-800 block">{it.name || it.service_type || 'Item Cucian'}</span>
+                        <span className="text-[10px] text-slate-500">
+                          {it.weight ? `${it.weight} Kg` : ''} {it.qty ? `${it.qty} Pcs` : ''}
+                          {it.duration ? ` · ${it.duration}` : ''}
+                        </span>
+                      </div>
+                      <div className="text-right">
+                        <span className="font-black text-slate-900 block">
+                          Rp {Number(it.price || it.amount || 0).toLocaleString('id-ID')}
+                        </span>
+                        <span className="px-2 py-0.5 bg-slate-200 text-slate-700 font-bold text-[10px] rounded-md">
+                          {it.status || detailOrder.status || 'Proses'}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              );
+            }
+            return (
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                <p className="text-slate-600 font-medium">
+                  {detailOrder.notes || 'Detail item telah dicatat oleh kasir/driver.'}
+                </p>
+              </div>
+            );
+          })()}
+          <div className="bg-white border border-slate-100 rounded-xl p-2.5 space-y-1">
+            {Number(detailOrder.delivery_fee) > 0 && (
+              <div className="flex justify-between text-[10px] text-slate-500">
+                <span>Ongkir</span>
+                <span>Rp {Number(detailOrder.delivery_fee).toLocaleString('id-ID')}</span>
+              </div>
+            )}
+            <div className="flex justify-between font-black text-slate-900">
+              <span>Total</span>
+              <span>
+                Rp {Number(detailOrder.amount || detailOrder.price || detailOrder.estimated_price || 0).toLocaleString('id-ID')}
+              </span>
             </div>
-          ) : (
-            <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-              <p className="text-slate-600 font-medium">
-                {detailOrder.notes || 'Detail item telah dicatat oleh kasir/driver.'}
-              </p>
-            </div>
-          )}
+          </div>
         </div>
+
+        {(detailOrder.rack_location || detailOrder.rack_number || detailOrder.package_count || detailOrder.bag_count || detailOrder.rack_notes) && (
+          <div className="bg-amber-50 border border-amber-100 rounded-xl p-3 space-y-1">
+            <h4 className="font-extrabold text-amber-800 uppercase text-[10px]">🗄️ Rak Penyimpanan</h4>
+            <p className="font-bold text-slate-800">
+              Rak {detailOrder.rack_location || detailOrder.rack_number || '-'}
+              {(detailOrder.package_count || detailOrder.bag_count) ? ` · ${detailOrder.package_count || detailOrder.bag_count} pack` : ''}
+            </p>
+            {detailOrder.rack_notes && <p className="text-[10px] text-slate-600">{detailOrder.rack_notes}</p>}
+          </div>
+        )}
 
         {/* Riwayat Waktu Pengerjaan */}
         <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
@@ -2241,59 +2372,70 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
           />
         </div>
 
-        {/* Bukti Foto */}
+        {/* Bukti Foto: jemput → outlet → sortir → rak → antar */}
         <div className="space-y-2">
           <h4 className="font-extrabold text-slate-800 uppercase text-[10px]">📸 Bukti Foto Cucian</h4>
-          <div className="grid grid-cols-4 gap-2">
-            <div>
-              <span className="text-[10px] font-bold text-slate-400 block mb-1">Jemput</span>
-              {detailOrder.photo_pickup_url || detailOrder.photo_url ? (
-                <button type="button" onClick={() => setLightboxSrc(detailOrder.photo_pickup_url || detailOrder.photo_url)} className="block w-full">
-                <img src={detailOrder.photo_pickup_url || detailOrder.photo_url} alt="Pickup" className="w-full h-24 object-cover rounded-xl border border-slate-200" />
-                </button>
-              ) : (
-                <div className="w-full h-24 bg-slate-100 rounded-xl flex items-center justify-center text-[10px] text-slate-400">Belum Ada</div>
-              )}
-            </div>
-            <div>
-              <span className="text-[10px] font-bold text-slate-400 block mb-1">Outlet</span>
-              {detailOrder.photo_outlet_url ? (
-                <button type="button" onClick={() => setLightboxSrc(detailOrder.photo_outlet_url)} className="block w-full">
-                <img src={detailOrder.photo_outlet_url} alt="Outlet" className="w-full h-24 object-cover rounded-xl border border-slate-200" />
-                </button>
-              ) : (
-                <div className="w-full h-24 bg-slate-100 rounded-xl flex items-center justify-center text-[10px] text-slate-400">Belum Ada</div>
-              )}
-            </div>
-            <div>
-              <span className="text-[10px] font-bold text-slate-400 block mb-1">Antar</span>
-              {detailOrder.photo_delivery_url ? (
-                <button type="button" onClick={() => setLightboxSrc(detailOrder.photo_delivery_url)} className="block w-full">
-                <img src={detailOrder.photo_delivery_url} alt="Delivery" className="w-full h-24 object-cover rounded-xl border border-slate-200" />
-                </button>
-              ) : (
-                <div className="w-full h-24 bg-slate-100 rounded-xl flex items-center justify-center text-[10px] text-slate-400">Belum Ada</div>
-              )}
-            </div>
-            <div>
-              <span className="text-[10px] font-bold text-slate-400 block mb-1">Rak</span>
-              {detailOrder.rack_photo_url ? (
-                <button type="button" onClick={() => setLightboxSrc(detailOrder.rack_photo_url)} className="block w-full">
-                <img src={detailOrder.rack_photo_url} alt="Rak" className="w-full h-24 object-cover rounded-xl border border-slate-200" />
-                </button>
-              ) : (
-                <div className="w-full h-24 bg-slate-100 rounded-xl flex items-center justify-center text-[10px] text-slate-400">Belum Ada</div>
-              )}
-            </div>
-          </div>
+          <ProofPhotoGrid order={detailOrder} logs={detailWorkLogs} onOpen={setLightboxSrc} />
         </div>
+
+        {isOrderFinished(detailOrder) && (() => {
+          const ui = showComplaintActions(detailOrder);
+          if (ui.pending) {
+            return (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-[11px] font-bold text-amber-800">
+                Komplain Anda sedang ditangani Supervisor & CS.
+              </div>
+            );
+          }
+          if (ui.autoConfirmed) {
+            return (
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-[11px] text-slate-500 font-medium">
+                Jendela komplain 24 jam telah berakhir. Pesanan dikunci otomatis sebagai sesuai.
+              </div>
+            );
+          }
+          if (ui.locked) {
+            return (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-[11px] font-bold text-emerald-700">
+                Pesanan dikonfirmasi sesuai. Terima kasih.
+              </div>
+            );
+          }
+          return (
+            <div className="space-y-2">
+              <p className="text-[10px] text-slate-400 font-medium">
+                Komplain hanya tersedia 24 jam setelah cucian diserahkan.
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={handleSudahSesuai}
+                  className="bg-emerald-600 text-white font-black text-[11px] py-2.5 rounded-xl"
+                >
+                  ✅ Sudah Sesuai
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setComplaintOpen(true)}
+                  className="bg-rose-50 text-rose-700 border border-rose-200 font-black text-[11px] py-2.5 rounded-xl"
+                >
+                  ⚠️ Komplain / Ada Kendala
+                </button>
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Footer */}
       <div className="p-3 bg-slate-50 border-t border-slate-100">
         <button
           type="button"
-          onClick={() => setDetailOrder(null)}
+          onClick={() => {
+            setDetailOrder(null);
+            setComplaintOpen(false);
+            setReviewOpen(false);
+          }}
           className="w-full py-2 bg-slate-800 text-white font-bold rounded-xl text-xs cursor-pointer"
         >
           Kembali
@@ -2303,6 +2445,77 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
     </div>
   </div>
 )}
+      {complaintOpen && detailOrder && (
+        <div className="fixed inset-0 z-[70] bg-black/60 flex items-center justify-center p-4" onClick={() => setComplaintOpen(false)}>
+          <div className="bg-white w-full max-w-sm rounded-2xl p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-black text-sm text-slate-900">⚠️ Komplain / Ada Kendala</h3>
+            <textarea
+              value={complaintText}
+              onChange={(e) => setComplaintText(e.target.value)}
+              rows={4}
+              placeholder="Jelaskan kendala (sobek, kurang, salah item, dll.)"
+              className="w-full border border-slate-200 rounded-xl p-2.5 text-xs"
+            />
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(e) => setComplaintFile(e.target.files?.[0] || null)}
+              className="block w-full text-[11px]"
+            />
+            <div className="flex gap-2">
+              <button type="button" onClick={() => setComplaintOpen(false)} className="flex-1 border border-slate-200 font-bold text-xs py-2.5 rounded-xl">
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={complaintBusy}
+                onClick={handleSubmitComplaint}
+                className="flex-1 bg-rose-600 text-white font-black text-xs py-2.5 rounded-xl"
+              >
+                {complaintBusy ? 'Mengirim…' : 'Kirim Komplain'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {reviewOpen && detailOrder && (
+        <div className="fixed inset-0 z-[70] bg-black/60 flex items-center justify-center p-4" onClick={() => setReviewOpen(false)}>
+          <div className="bg-white w-full max-w-sm rounded-2xl p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-black text-sm text-slate-900">⭐ Rating & Ulasan</h3>
+            <p className="text-[11px] text-slate-500">Opsional — bantu kami meningkatkan layanan outlet.</p>
+            <div className="flex justify-center gap-1">
+              {[1, 2, 3, 4, 5].map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => setReviewStars(n)}
+                  className={`text-2xl ${reviewStars >= n ? 'text-amber-400' : 'text-slate-300'}`}
+                >
+                  ★
+                </button>
+              ))}
+            </div>
+            <textarea
+              value={reviewText}
+              onChange={(e) => setReviewText(e.target.value)}
+              rows={3}
+              placeholder="Saran atau masukan (opsional)"
+              className="w-full border border-slate-200 rounded-xl p-2.5 text-xs"
+            />
+            <button
+              type="button"
+              disabled={reviewBusy}
+              onClick={handleSubmitReview}
+              className="w-full bg-indigo-600 text-white font-black text-xs py-2.5 rounded-xl"
+            >
+              {reviewBusy ? 'Menyimpan…' : 'Kirim Ulasan'}
+            </button>
+            <button type="button" onClick={() => setReviewOpen(false)} className="w-full text-[11px] font-bold text-slate-400">
+              Nanti saja
+            </button>
+          </div>
+        </div>
+      )}
       {customerData && (
         <DraggableChatFab
           hidden={!!activeChatOrderId}

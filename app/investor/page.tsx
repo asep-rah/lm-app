@@ -229,7 +229,7 @@ export default function InvestorDashboard() {
     if (!body) return;
     setSending(true);
     const { error } = await insertChatMessage({
-      order_id: orderId,
+      pickup_order_id: orderId,
       sender_type: 'investor',
       message: body,
       sender_name: investorName

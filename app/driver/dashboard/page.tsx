@@ -25,6 +25,7 @@ const ACTIVE_STATUSES = [
   'Barang Dibawa ke Outlet',
   'Ready for Delivery',
   'Siap Diantar',
+  'delivery_requested',
   'Driver Mengantar'
 ];
 

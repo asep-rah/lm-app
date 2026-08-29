@@ -161,7 +161,10 @@ export const buildStageTimeline = (
       at,
       done,
       notes: last?.notes || (stage.key === 'siap' ? transaction?.rack_notes || null : null),
-      photoUrl: last?.photo_url || rackPhoto
+      photoUrl:
+        last?.photo_url ||
+        (stage.key === 'sortir' ? transaction?.sortir_photo_url || null : null) ||
+        rackPhoto
     };
   });
 };
