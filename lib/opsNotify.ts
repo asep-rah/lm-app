@@ -53,13 +53,18 @@ export const playOpsSound = (kind: OpsNotifyKind = 'chat') => {
 
 const lastAt: Record<string, number> = {};
 
-export const notifyOps = (kind: OpsNotifyKind, text: string, persist = true) => {
+export const notifyOps = (
+  kind: OpsNotifyKind,
+  text: string,
+  persist = true,
+  extra?: { onClick?: () => void }
+) => {
   const now = Date.now();
   if (now - (lastAt[kind] || 0) < 800) return;
   lastAt[kind] = now;
   playOpsSound(kind);
   const toastTone: ToastTone = kind === 'complaint' ? 'err' : kind === 'payment' ? 'warn' : 'ok';
-  toast(text, toastTone, { persist, kind });
+  toast(text, toastTone, { persist, kind, onClick: extra?.onClick });
 };
 
 export const isOpsAudioUnlocked = () => unlocked;

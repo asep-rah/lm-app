@@ -5,6 +5,7 @@ export type ToastPayload = {
   tone: ToastTone;
   persist?: boolean;
   kind?: string;
+  onClick?: () => void;
 };
 
 type Listener = (msg: ToastPayload) => void;
@@ -14,9 +15,11 @@ const listeners = new Set<Listener>();
 export const toast = (
   text: string,
   tone: ToastTone = 'ok',
-  opts?: { persist?: boolean; kind?: string }
+  opts?: { persist?: boolean; kind?: string; onClick?: () => void }
 ) => {
-  listeners.forEach((fn) => fn({ text, tone, persist: opts?.persist, kind: opts?.kind }));
+  listeners.forEach((fn) =>
+    fn({ text, tone, persist: opts?.persist, kind: opts?.kind, onClick: opts?.onClick })
+  );
 };
 
 export const subscribeToast = (fn: Listener) => {

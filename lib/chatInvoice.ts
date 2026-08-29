@@ -1,4 +1,4 @@
-import { insertChatMessage } from '@/lib/csChat';
+import { canonicalPhone, insertChatMessage } from '@/lib/csChat';
 import { requestMayarInvoice } from '@/lib/mayar';
 import { supabase } from '@/lib/supabaseClient';
 
@@ -108,7 +108,7 @@ export async function sendInvoiceToLiveChat(
   },
   agentName?: string
 ) {
-  const phone = String(tx.customer_phone || '').trim();
+  const phone = canonicalPhone(String(tx.customer_phone || '')) || String(tx.customer_phone || '').trim();
   if (!phone) return { error: { message: 'Nomor pelanggan tidak ditemukan' } };
   let charge: { qrisUrl?: string; invoiceUrl?: string; mock?: boolean } | undefined;
   try {

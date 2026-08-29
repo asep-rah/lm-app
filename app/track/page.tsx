@@ -140,7 +140,7 @@ export default function TrackingPage() {
             <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
               <p className="text-[10px] font-bold text-slate-500 uppercase text-center mb-2">Status Terkini</p>
               <div className={`py-3 px-4 rounded-xl text-center font-black text-sm transition-all duration-300 ${getStatusColor(orderData.status)}`}>
-                {displayStatusLabel(orderData.status).toUpperCase()}
+                {displayStatusLabel(orderData.status, orderData).toUpperCase()}
               </div>
             </div>
 

@@ -20,6 +20,7 @@ interface StageTimelineProps {
 const pendingLabel = (key: string, inProgress: boolean) => {
   if (key === 'jemput') return inProgress ? 'Menunggu kurir / pickup request' : 'Belum dijemput';
   if (key === 'outlet') return inProgress ? 'Menuju outlet' : 'Belum sampai outlet';
+  if (key === 'pembayaran') return inProgress ? 'Menunggu Pembayaran' : 'Belum dibayar';
   if (key === 'siap') return inProgress ? 'Siap diambil / diantar' : 'Belum siap';
   if (key === 'selesai') return inProgress ? 'Siap diambil di outlet' : 'Belum diserahkan';
   return inProgress ? 'Sedang dikerjakan' : 'Belum dikerjakan';

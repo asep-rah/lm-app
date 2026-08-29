@@ -1,6 +1,6 @@
 import { supabase } from '@/lib/supabaseClient';
 import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
-import { insertChatMessage } from '@/lib/csChat';
+import { canonicalPhone, insertChatMessage } from '@/lib/csChat';
 
 export const PENDING_PAY_STATUS = 'menunggu_pembayaran';
 
@@ -76,7 +76,7 @@ export async function createPaymentVerifyTask(tx: {
 
   if (tx.customer_phone) {
     await insertChatMessage({
-      customer_phone: tx.customer_phone,
+      customer_phone: canonicalPhone(tx.customer_phone) || tx.customer_phone,
       pickup_order_id: tx.pickup_id || null,
       transaction_id: tx.id,
       sender_type: 'cs',

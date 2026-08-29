@@ -14,10 +14,12 @@ import {
   ShoppingBag,
   Store,
   Truck,
+  Wallet,
   Wind,
   Zap,
   Star
 } from 'lucide-react';
+import { displayStatusLabel } from '@/lib/stageTimeline';
 
 const TONE: Record<string, string> = {
   blue: 'bg-blue-50 text-blue-600',
@@ -59,9 +61,16 @@ export function IconBadge({
 
 export function StatusPill({ status }: { status?: string }) {
   const s = String(status || '').toLowerCase();
+  const label = displayStatusLabel(status) || 'Menunggu';
   let Glyph: LucideIcon = Clock;
   let tone = 'amber';
-  if (s.includes('selesai') || s.includes('delivered') || s.includes('terkirim')) {
+  if (s === 'paid' || s === 'lunas' || s.includes('sudah dibayar')) {
+    Glyph = Wallet;
+    tone = 'emerald';
+  } else if (s.includes('menunggu_pembayaran') || s.includes('menunggu pembayaran')) {
+    Glyph = Wallet;
+    tone = 'amber';
+  } else if (s.includes('selesai') || s.includes('delivered') || s.includes('terkirim')) {
     Glyph = CheckCircle2;
     tone = 'emerald';
   } else if (s.includes('antar') || s.includes('menuju') || s.includes('jemput') || s.includes('driver')) {
@@ -89,7 +98,7 @@ export function StatusPill({ status }: { status?: string }) {
       }`}
     >
       <Glyph className={`w-3 h-3 ${tone === 'amber' || tone === 'blue' ? 'animate-[pulse_2s_ease-in-out_infinite]' : ''}`} strokeWidth={2.4} />
-      {/pack/i.test(s) ? 'Dikemas' : (status || 'Menunggu')}
+      {label}
     </span>
   );
 }
@@ -150,8 +159,8 @@ export function StepperBtn({
 }
 
 export const TRACKER_STAGES: { label: string; icon: LucideIcon; match: string[] }[] = [
-  { label: 'Jemput', icon: Truck, match: ['baru', 'menunggu', 'request', 'jemput', 'menuju', 'dibawa'] },
-  { label: 'Diterima', icon: Store, match: ['diterima', 'tiba', 'kasir'] },
+  { label: 'Jemput', icon: Truck, match: ['baru', 'menunggu kurir', 'request', 'jemput', 'menuju', 'dibawa'] },
+  { label: 'Diterima', icon: Store, match: ['diterima', 'tiba', 'kasir', 'paid', 'lunas', 'pembayaran'] },
   { label: 'Proses', icon: Droplets, match: ['cuci', 'mencuci', 'sortir', 'ering'] },
   { label: 'Setrika', icon: Shirt, match: ['setrika', 'gosok', 'pack', 'emas'] },
   { label: 'Siap', icon: Box, match: ['siap'] },
@@ -161,6 +170,7 @@ export const TRACKER_STAGES: { label: string; icon: LucideIcon; match: string[] 
 export const TIMELINE_ICONS: Record<string, LucideIcon> = {
   jemput: Truck,
   outlet: Store,
+  pembayaran: Wallet,
   sortir: Search,
   cuci: Droplets,
   kering: Wind,

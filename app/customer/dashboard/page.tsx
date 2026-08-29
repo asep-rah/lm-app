@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import StageTimeline from '@/components/StageTimeline';
-import { insertChatMessage, isStaffOnlyMessage, phoneVariants, threadKeyOf } from '@/lib/csChat';
+import { fetchThreadMessages, insertChatMessage, isStaffOnlyMessage, phoneVariants, threadKeyOf } from '@/lib/csChat';
+import { parseChatInvoice } from '@/lib/chatInvoice';
 import { mapDbPromo, mapSettingsPromo, promoDiscountRp, promoIsClaimable, type CatalogPromo } from '@/lib/promoCatalog';
 import { createPickupRoleTasks, insertPickupOrder, requestDriverDelivery } from '@/lib/pickupDispatch';
-import { stageKeyOf } from '@/lib/stageTimeline';
+import { displayStatusLabel, stageKeyOf } from '@/lib/stageTimeline';
 import { laundryFallbackReply } from '@/lib/laundryFaq';
 import PhotoLightbox from '@/components/PhotoLightbox';
 import DraggableChatFab from '@/components/DraggableChatFab';
@@ -35,6 +36,7 @@ import {
 import { IconBadge, SlaBadge, StarRating, StatusPill, StepperBtn, TRACKER_STAGES } from '@/components/customer/ui';
 import {
   AlertTriangle,
+  ArrowLeft,
   Box,
   CheckCircle2,
   ChevronRight,
@@ -54,6 +56,7 @@ import {
   Receipt,
   Save,
   Search,
+  Send,
   Sparkles,
   Store,
   Truck,
@@ -287,6 +290,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [inputChat, setInputChat] = useState<string>('');
   const [activeChatOrderId, setActiveChatOrderId] = useState<string | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const fetchQueue = async () => {
@@ -321,6 +325,21 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
   const [aiMessages, setAiMessages] = useState<any[]>([
     { id: '1', sender_type: 'ai', message: 'Halo! Saya AI Assistant Laundrivery. Ada yang bisa saya bantu mengenai layanan laundry?' }
   ]);
+
+  useEffect(() => {
+    if (!activeChatOrderId) return;
+    const el = chatScrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [activeChatOrderId, activeSupportTab, chatMessages, aiMessages]);
+
+  useEffect(() => {
+    if (!activeChatOrderId) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [activeChatOrderId]);
 
   const handleSendChat = async (file?: File) => {
     const messageText = inputChat.trim() || (file ? (file.type.includes('pdf') ? 'Invoice / file terlampir' : 'Bukti pembayaran terlampir') : '');
@@ -419,14 +438,8 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
   };
 
   const loadCustomerChats = async (phone: string) => {
-    const variants = phoneVariants(phone);
     const key = threadKeyOf({ customer_phone: phone });
-    let q = supabase.from('support_chats').select('*').order('created_at', { ascending: true }).limit(400);
-    if (variants.length) {
-      const orExpr = [...variants.map((v) => `customer_phone.eq.${v}`), `thread_key.eq.${key}`].join(',');
-      q = q.or(orExpr);
-    }
-    const { data } = await q;
+    const data = await fetchThreadMessages(key, phone);
     const rows = (data || []).filter((m: any) => !isStaffOnlyMessage(m));
     setChatMessages(rows);
     try {
@@ -451,26 +464,45 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
     loadCustomerChats(customerPhone);
 
     const variants = new Set(phoneVariants(customerPhone).map((v) => cleanPhone(v)));
+    const ingestIncoming = (newMsg: any, notify = true) => {
+      if (isStaffOnlyMessage(newMsg)) return;
+      const msgPhone = cleanPhone(newMsg.customer_phone);
+      const sameThread = newMsg.thread_key === key || variants.has(msgPhone);
+      if (!sameThread) return;
+      const invoice = parseChatInvoice(newMsg);
+      if (notify && invoice && String(newMsg.sender_type || '').toLowerCase() !== 'customer') {
+        toast('Tagihan QRIS baru telah tersedia. Ketuk untuk melihat & membayar', 'warn', {
+          persist: true,
+          kind: 'qris',
+          onClick: () => {
+            setActiveSupportTab('cs');
+            setActiveChatOrderId('GENERAL_CS');
+          }
+        });
+        setActiveSupportTab('cs');
+        setActiveChatOrderId('GENERAL_CS');
+      }
+      setChatMessages((prev) => {
+        if (prev.some((m) => m.id === newMsg.id)) return prev;
+        const withoutOptimistic = prev.filter((m) => !(String(m.id).length < 16 && m.message === newMsg.message));
+        const next = [...withoutOptimistic, newMsg];
+        try {
+          sessionStorage.setItem('laundry_cs_chat_' + key, JSON.stringify(next.slice(-80)));
+        } catch {
+          /* ignore */
+        }
+        return next;
+      });
+    };
+
     const channel = supabase
       .channel('cust_cs_' + key)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'support_chats' }, (payload) => {
-        const newMsg: any = payload.new;
-        if (isStaffOnlyMessage(newMsg)) return;
-        const msgPhone = cleanPhone(newMsg.customer_phone);
-        const sameThread = newMsg.thread_key === key || variants.has(msgPhone);
-        if (!sameThread) return;
-        setChatMessages((prev) => {
-          if (prev.some((m) => m.id === newMsg.id)) return prev;
-          const withoutOptimistic = prev.filter((m) => !(String(m.id).length < 16 && m.message === newMsg.message));
-          const next = [...withoutOptimistic, newMsg];
-          try {
-            sessionStorage.setItem('laundry_cs_chat_' + key, JSON.stringify(next.slice(-80)));
-          } catch {
-            /* ignore */
-          }
-          return next;
-        });
-      })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'support_chats' }, (payload) =>
+        ingestIncoming(payload.new, true)
+      )
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'support_chat_messages' }, (payload) =>
+        ingestIncoming(payload.new, false)
+      )
       .subscribe();
 
     const onVisible = () => {
@@ -1377,7 +1409,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                     Estimasi Selesai: {formatEstSelesai(order)}
                   </p>
                   <p className="text-[10px] font-semibold text-slate-500">
-                    Status Cucian: {order.status || 'Menunggu'}
+                    Status Cucian: {displayStatusLabel(order.status, order) || 'Menunggu'}
                   </p>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
@@ -2198,122 +2230,145 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
         </div>
       )}
 
-      {/* MODAL CHAT CUSTOMER SERVICE */}
+      {/* LIVE CHAT — WhatsApp-style full screen */}
       {activeChatOrderId && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-[55]" onClick={() => setActiveChatOrderId(null)}>
-          <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-2xl flex flex-col h-[500px]" onClick={(e) => e.stopPropagation()}>
-            {/* Header Modal Chat & Switcher AI/CS */}
-            <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-white inline-flex items-center gap-1.5">
-                  <MessageSquare className="w-4 h-4" /> Bantuan Laundrivery
-                </span>
-                <div className="flex bg-slate-800 p-0.5 rounded-lg border border-slate-700">
-                  <button
-                    type="button"
-                    onClick={() => setActiveSupportTab('cs')}
-                    className={`px-2 py-0.5 text-[10px] font-bold rounded-md transition inline-flex items-center gap-1 ${
-                      activeSupportTab === 'cs' ? 'bg-cyan-600 text-white' : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    <Headphones className="w-3 h-3" /> Live CS
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveSupportTab('ai')}
-                    className={`px-2 py-0.5 text-[10px] font-bold rounded-md transition inline-flex items-center gap-1 ${
-                      activeSupportTab === 'ai' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    <Bot className="w-3 h-3" /> Tanya CS
-                  </button>
-                </div>
+        <div className="fixed inset-0 z-[60] h-full w-full flex flex-col bg-[#ece5dd]">
+          <div className="shrink-0 bg-[#075e54] text-white px-1.5 pt-[max(0.5rem,env(safe-area-inset-top))] pb-2.5 flex items-center gap-1 shadow-md">
+            <button
+              type="button"
+              onClick={() => setActiveChatOrderId(null)}
+              className="w-11 h-11 flex items-center justify-center rounded-full hover:bg-white/10"
+              aria-label="Kembali"
+            >
+              <ArrowLeft className="w-6 h-6" strokeWidth={2.2} />
+            </button>
+            <div className="relative shrink-0">
+              <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center">
+                <Headphones className="w-5 h-5" />
               </div>
-              <button onClick={() => setActiveChatOrderId(null)} className="text-slate-400 hover:text-white" aria-label="Tutup">
-                <X className="w-4 h-4" />
-              </button>
+              <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-400 border-2 border-[#075e54] rounded-full" />
             </div>
-
-            {/* Bubble Chat Area */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-900/90">
-              {(activeSupportTab === 'cs' ? chatMessages : aiMessages).length === 0 ? (
-                <div className="text-center text-xs text-slate-400 py-12">
-                  Belum ada percakapan. Halo CS kami sekarang!
-                </div>
-              ) : (
-                (activeSupportTab === 'cs' ? chatMessages : aiMessages).map((msg: any) => {
-                  const isCustomer = msg.sender_type === 'customer';
-                  const isAi = msg.sender_type === 'ai';
-
-                  return (
-                    <div
-                      key={msg.id || msg.created_at}
-                      className={`flex ${isCustomer ? 'justify-end' : 'justify-start'}`}
-                    >
-                      <div
-                        className={`max-w-[80%] rounded-2xl px-3.5 py-2 text-xs font-medium shadow ${
-                          isCustomer
-                            ? 'bg-cyan-500 text-slate-950 rounded-br-none'
-                            : isAi
-                            ? 'bg-purple-600 text-white rounded-bl-none shadow-md'
-                            : 'bg-slate-800 text-slate-100 rounded-bl-none border border-slate-700'
-                        }`}
-                      >
-                        {visibleChatText(msg) && <p className="whitespace-pre-wrap">{visibleChatText(msg)}</p>}
-                        <ChatInvoiceCard message={msg} />
-                        <ChatAttachment message={msg} onOpen={setLightboxSrc} />
-                        <span className={`text-[8px] block mt-1 ${isCustomer ? 'text-slate-900/70 text-right' : 'text-slate-400'}`}>
-                          {new Date(msg.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
+            <div className="flex-1 min-w-0 pl-2">
+              <p className="font-semibold text-sm leading-tight truncate">
+                {activeSupportTab === 'ai' ? 'Asisten AI Laundrivery' : 'Customer Service'}
+              </p>
+              <p className="text-[11px] text-emerald-200">Online</p>
             </div>
-
-            {/* Input Chat */}
-            <div className="p-3 border-t border-slate-800 flex gap-2 items-center">
-              {activeSupportTab === 'cs' && (
-                <>
-                  <input
-                    id="cust-chat-attach"
-                    type="file"
-                    accept="image/*,application/pdf"
-                    className="hidden"
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      e.target.value = '';
-                      if (f) handleSendChat(f);
-                    }}
-                  />
-                  <label
-                    htmlFor="cust-chat-attach"
-                    title="Kirim bukti transfer / foto"
-                    className="shrink-0 w-9 h-9 rounded-xl bg-slate-800 border border-slate-700 text-white flex items-center justify-center cursor-pointer"
-                  >
-                    <Paperclip className="w-4 h-4" />
-                  </label>
-                </>
-              )}
-              <input
-                type="text"
-                value={inputChat}
-                onChange={(e) => setInputChat(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSendChat()}
-                placeholder={activeSupportTab === 'cs' ? "Ketik pesan atau unggah bukti bayar..." : "Tanya AI seputar layanan laundry..."}
-                className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
-              />
+            <div className="flex bg-black/20 p-0.5 rounded-lg mr-0.5">
               <button
                 type="button"
-                onClick={() => handleSendChat()}
-                className={`font-bold px-4 py-2 rounded-xl text-xs text-white transition ${
-                  activeSupportTab === 'cs' ? 'bg-cyan-500 hover:bg-cyan-600' : 'bg-purple-600 hover:bg-purple-700'
+                onClick={() => setActiveSupportTab('cs')}
+                className={`px-2 py-1 text-[10px] font-bold rounded-md transition inline-flex items-center gap-1 ${
+                  activeSupportTab === 'cs' ? 'bg-white text-[#075e54]' : 'text-white/80 hover:text-white'
                 }`}
               >
-                Kirim
+                <Headphones className="w-3 h-3" /> Live CS
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveSupportTab('ai')}
+                className={`px-2 py-1 text-[10px] font-bold rounded-md transition inline-flex items-center gap-1 ${
+                  activeSupportTab === 'ai' ? 'bg-white text-[#075e54]' : 'text-white/80 hover:text-white'
+                }`}
+              >
+                <Bot className="w-3 h-3" /> Tanya AI
               </button>
             </div>
+            <button
+              type="button"
+              onClick={() => setActiveChatOrderId(null)}
+              className="w-11 h-11 flex items-center justify-center rounded-full hover:bg-white/10"
+              aria-label="Tutup"
+            >
+              <X className="w-5 h-5" strokeWidth={2.4} />
+            </button>
+          </div>
+
+          <div
+            ref={chatScrollRef}
+            className="flex-1 overflow-y-auto px-3 py-4 space-y-2"
+            style={{
+              backgroundImage:
+                'linear-gradient(rgba(236,229,221,0.92), rgba(236,229,221,0.92)), url("data:image/svg+xml,%3Csvg width=\'60\' height=\'60\' viewBox=\'0 0 60 60\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cg fill=\'none\' fill-rule=\'evenodd\'%3E%3Cg fill=\'%23d4cfc7\' fill-opacity=\'0.45\'%3E%3Cpath d=\'M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z\'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")'
+            }}
+          >
+            {(activeSupportTab === 'cs' ? chatMessages : aiMessages).length === 0 ? (
+              <div className="text-center text-xs text-slate-500 py-16">
+                Belum ada percakapan. Halo CS kami sekarang!
+              </div>
+            ) : (
+              (activeSupportTab === 'cs' ? chatMessages : aiMessages).map((msg: any) => {
+                const isCustomer = msg.sender_type === 'customer';
+                const isAi = msg.sender_type === 'ai';
+
+                return (
+                  <div
+                    key={msg.id || msg.created_at}
+                    className={`flex ${isCustomer ? 'justify-end' : 'justify-start'}`}
+                  >
+                    <div
+                      className={`max-w-[82%] rounded-lg px-3 py-1.5 text-[13px] font-medium leading-relaxed shadow-sm ${
+                        isCustomer
+                          ? 'bg-[#dcf8c6] text-slate-900 rounded-tr-none'
+                          : isAi
+                          ? 'bg-indigo-50 text-slate-900 rounded-tl-none border border-indigo-100'
+                          : 'bg-white text-slate-900 rounded-tl-none'
+                      }`}
+                    >
+                      {visibleChatText(msg) && <p className="whitespace-pre-wrap">{visibleChatText(msg)}</p>}
+                      <ChatInvoiceCard message={msg} />
+                      <ChatAttachment message={msg} onOpen={setLightboxSrc} />
+                      <span className={`text-[10px] block mt-1 ${isCustomer ? 'text-slate-500 text-right' : 'text-slate-400'}`}>
+                        {new Date(msg.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          <div className="shrink-0 bg-[#f0f2f5] px-2 pt-2 pb-[max(0.6rem,env(safe-area-inset-bottom))] flex items-end gap-2">
+            {activeSupportTab === 'cs' && (
+              <>
+                <input
+                  id="cust-chat-attach"
+                  type="file"
+                  accept="image/*,application/pdf"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = '';
+                    if (f) handleSendChat(f);
+                  }}
+                />
+                <label
+                  htmlFor="cust-chat-attach"
+                  title="Kirim bukti transfer / foto"
+                  className="shrink-0 w-11 h-11 rounded-full bg-white text-slate-500 flex items-center justify-center cursor-pointer shadow-sm border border-slate-200"
+                >
+                  <Paperclip className="w-5 h-5" />
+                </label>
+              </>
+            )}
+            <input
+              type="text"
+              value={inputChat}
+              onChange={(e) => setInputChat(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSendChat()}
+              placeholder={activeSupportTab === 'cs' ? 'Ketik pesan atau unggah bukti bayar...' : 'Tanya AI seputar layanan laundry...'}
+              className="flex-1 bg-white border border-slate-200 rounded-full px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#075e54]/20"
+            />
+            <button
+              type="button"
+              onClick={() => handleSendChat()}
+              className={`shrink-0 w-11 h-11 rounded-full text-white flex items-center justify-center shadow-md transition ${
+                activeSupportTab === 'cs' ? 'bg-[#075e54] hover:bg-[#064e46]' : 'bg-indigo-600 hover:bg-indigo-700'
+              }`}
+              aria-label="Kirim"
+            >
+              <Send className="w-5 h-5" />
+            </button>
           </div>
         </div>
       )}
@@ -2396,7 +2451,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
           <p className="font-black text-slate-900 text-sm">ID Transaksi: {formatTrxId(detailOrder)}</p>
           <p className="text-[11px] font-semibold text-indigo-800">Estimasi Selesai: {formatEstSelesai(detailOrder)}</p>
           <p className="text-[11px] font-semibold text-indigo-800">
-            Status Cucian: {detailOrder.status || 'Menunggu'}
+            Status Cucian: {displayStatusLabel(detailOrder.status, detailOrder) || 'Menunggu'}
           </p>
         </div>
 
@@ -2426,7 +2481,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                           Rp {displayItemAmount(it).toLocaleString('id-ID')}
                         </span>
                         <span className="px-2 py-0.5 bg-slate-200 text-slate-700 font-bold text-[10px] rounded-md">
-                          {it.status || detailOrder.status || 'Proses'}
+                          {displayStatusLabel(it.status || detailOrder.status, detailOrder) || 'Proses'}
                         </span>
                       </div>
                     </div>

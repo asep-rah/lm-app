@@ -26,7 +26,14 @@ export default function ToastHost() {
       {items.map((t) => (
         <div
           key={t.id}
+          role={t.onClick ? 'button' : undefined}
+          onClick={() => {
+            t.onClick?.();
+            if (t.onClick) setItems((prev) => prev.filter((x) => x.id !== t.id));
+          }}
           className={`pointer-events-auto min-w-[240px] max-w-sm rounded-xl border px-3.5 py-2.5 text-xs font-semibold shadow-md bg-white flex items-start gap-2 ${
+            t.onClick ? 'cursor-pointer hover:shadow-lg' : ''
+          } ${
             t.tone === 'err'
               ? 'border-rose-200 text-rose-700'
               : t.tone === 'warn'
@@ -38,7 +45,10 @@ export default function ToastHost() {
           {t.persist && (
             <button
               type="button"
-              onClick={() => setItems((prev) => prev.filter((x) => x.id !== t.id))}
+              onClick={(e) => {
+                e.stopPropagation();
+                setItems((prev) => prev.filter((x) => x.id !== t.id));
+              }}
               className="shrink-0 text-current opacity-60 hover:opacity-100"
               aria-label="Tutup"
             >

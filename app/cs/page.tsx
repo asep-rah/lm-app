@@ -14,7 +14,9 @@ import {
   resolveThread,
   threadKeyOf,
   upsertChatSession,
-  canonicalPhone
+  canonicalPhone,
+  fetchRecentChatRows,
+  fetchThreadMessages
 } from '@/lib/csChat';
 import { CS_MACROS } from '@/lib/csMacros';
 import { createSupervisorIssueTask } from '@/lib/createOutletIssueTask';
@@ -126,9 +128,15 @@ export default function CsCommandCenter() {
   }, []);
 
   const loadThreads = useCallback(async () => {
-    const [{ data: msgs }, { data: sessions }] = await Promise.all([
-      supabase.from('support_chats').select('*').order('created_at', { ascending: false }).limit(900),
-      supabase.from('support_chat_sessions').select('*')
+    const [msgs, { data: sessions }, { data: payRows }] = await Promise.all([
+      fetchRecentChatRows(900),
+      supabase.from('support_chat_sessions').select('*'),
+      supabase
+        .from('system_tasks')
+        .select('id, title, description, source_id, source_type, status, created_at')
+        .in('assigned_to_role', ['cs', 'head_cs'])
+        .order('created_at', { ascending: false })
+        .limit(40)
     ]);
     const sessMap: Record<string, any> = {};
     (sessions || []).forEach((s: any) => {
@@ -175,6 +183,49 @@ export default function CsCommandCenter() {
         };
       })
       .sort((a, b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime());
+
+    (sessions || []).forEach((s: any) => {
+      const key = String(s.thread_key || '');
+      if (!key || key === 'unknown' || next.some((t) => t.key === key)) return;
+      if (sessionLooksClosed(s)) return;
+      next.unshift({
+        key,
+        phone: canonicalPhone(s.customer_phone) || phoneFromThread(key) || String(s.customer_phone || ''),
+        preview: String(s.last_preview || 'Thread aktif').slice(0, 80),
+        lastAt: s.last_message_at || s.updated_at || s.created_at || new Date().toISOString(),
+        lastSender: String(s.last_sender_type || ''),
+        waitingFrom: s.waiting_since ? new Date(s.waiting_since).getTime() : Date.now(),
+        assignedId: String(s.assigned_to_agent_id || ''),
+        assignedName: String(s.assigned_to_agent_name || ''),
+        claimed: !!s.is_claimed,
+        resolved: false
+      });
+    });
+
+    (payRows || [])
+      .filter(
+        (t: any) =>
+          !isTaskCompleted(t.status) &&
+          (t.source_type === 'PAYMENT_VERIFY' || String(t.title || '').includes('Konfirmasi Pembayaran'))
+      )
+      .forEach((t: any) => {
+        const hp = String(t.description || '').match(/(\+?62|0)\d{8,13}/);
+        if (!hp) return;
+        const careKey = threadKeyOf({ customer_phone: hp[0] });
+        if (next.some((x) => x.key === careKey)) return;
+        next.unshift({
+          key: careKey,
+          phone: canonicalPhone(hp[0]) || hp[0],
+          preview: String(t.title || 'Menunggu konfirmasi tagihan'),
+          lastAt: t.created_at || new Date().toISOString(),
+          lastSender: 'kasir',
+          waitingFrom: Date.now(),
+          assignedId: '',
+          assignedName: '',
+          claimed: false,
+          resolved: false
+        });
+      });
 
     const carePhone = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('phone') : '';
     if (carePhone) {
@@ -225,17 +276,8 @@ export default function CsCommandCenter() {
   }, [agent.id, agent.name]);
 
   const loadMessages = useCallback(async (key: string) => {
-    const p = phoneFromThread(key);
-    const variants = phoneVariants(p);
-    let q = supabase.from('support_chats').select('*').order('created_at', { ascending: true });
-    if (variants.length) {
-      const orExpr = [...variants.map((v) => `customer_phone.eq.${v}`), `thread_key.eq.${key}`].join(',');
-      q = q.or(orExpr);
-    } else {
-      q = q.eq('thread_key', key);
-    }
-    const { data } = await q.limit(400);
-    setMessages(data || []);
+    const data = await fetchThreadMessages(key, phoneFromThread(key));
+    setMessages(data);
     requestAnimationFrame(() => {
       listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
     });
@@ -326,18 +368,39 @@ export default function CsCommandCenter() {
         }
       });
 
+    const openIncoming = (row: any, text: string, kind: 'chat' | 'payment' = 'chat') => {
+      const key = threadKeyOf(row);
+      notifyOps(kind, text, true, {
+        onClick: () => {
+          if (key && key !== 'unknown') {
+            setFilter((f) => (f === 'mine' ? 'unassigned' : f));
+            setSelectedKey(key);
+          }
+        }
+      });
+    };
+
+    const onChatRow = (payload: any) => {
+      const row: any = payload.new;
+      if (row?.id && !seenIds.current.has(row.id)) {
+        seenIds.current.add(row.id);
+        const sender = String(row.sender_type || '').toLowerCase();
+        const invoice = /\[INVOICE\|/i.test(String(row.message || ''));
+        if (sender === 'customer' && !isStaffOnlyMessage(row)) {
+          openIncoming(row, 'Pesan baru dari pelanggan. Ketuk untuk membuka chat.');
+        } else if (invoice || sender === 'kasir' || String(row.sender_name || '').toLowerCase() === 'kasir') {
+          openIncoming(row, 'Tagihan / chat masuk. Ketuk untuk cek antrean.', 'payment');
+        }
+      }
+      loadThreadsRef.current();
+      const openKey = selectedKeyRef.current;
+      if (openKey && row && threadKeyOf(row) === openKey) loadMessagesRef.current(openKey);
+    };
+
     const ch = supabase
       .channel('cs_command_chats')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'support_chats' }, (payload) => {
-        const row: any = payload.new;
-        if (row && String(row.sender_type).toLowerCase() === 'customer' && !isStaffOnlyMessage(row) && row.id && !seenIds.current.has(row.id)) {
-          seenIds.current.add(row.id);
-          notifyOps('chat', 'Pesan baru dari pelanggan.', true);
-        }
-        loadThreadsRef.current();
-        const openKey = selectedKeyRef.current;
-        if (openKey && row && threadKeyOf(row) === openKey) loadMessagesRef.current(openKey);
-      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'support_chats' }, onChatRow)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'support_chat_messages' }, onChatRow)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'support_chat_sessions' }, (payload) => {
         const wasClosed = sessionLooksClosed(payload.old);
         const nowOpen = !sessionLooksClosed(payload.new);
@@ -350,7 +413,14 @@ export default function CsCommandCenter() {
           row &&
           (row.source_type === 'PAYMENT_VERIFY' || String(row.title || '').includes('Konfirmasi Pembayaran'));
         if (isPay && payload.eventType === 'INSERT') {
-          notifyOps('payment', 'Kasir: Menunggu Konfirmasi Tagihan.', true);
+          const hp = String(row.description || '').match(/(\+?62|0)\d{8,13}/);
+          const key = hp ? threadKeyOf({ customer_phone: hp[0] }) : '';
+          notifyOps('payment', 'Kasir: Menunggu Konfirmasi Tagihan. Ketuk untuk cek chat.', true, {
+            onClick: () => {
+              setFilter('unassigned');
+              if (key) setSelectedKey(key);
+            }
+          });
         }
         loadPayTasks();
       })
@@ -806,7 +876,18 @@ export default function CsCommandCenter() {
               </button>
             ))}
             {visibleThreads.length === 0 && (
-              <p className="text-xs text-slate-400 p-6 text-center">Tidak ada percakapan di antrean ini.</p>
+              <div className="p-6 text-center space-y-2">
+                <p className="text-xs text-slate-400">Tidak ada percakapan di antrean ini.</p>
+                {payTasks.length > 0 && filter === 'unassigned' && (
+                  <button
+                    type="button"
+                    onClick={() => loadThreads()}
+                    className="text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg"
+                  >
+                    {payTasks.length} tagihan menunggu — sinkronkan antrean
+                  </button>
+                )}
+              </div>
             )}
           </div>
         </aside>
