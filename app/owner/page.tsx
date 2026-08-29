@@ -3,23 +3,13 @@
 import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
-// 1. IMPORT KOMPONEN AI ASSISTANT ADMIN
-import AdminAIAssistant from '@/components/AdminAIAssistant';
 import StageTimeline from '@/components/StageTimeline';
 import { isVoidTransaction } from '@/lib/voidTx';
-import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
-import RequisitionForm from '@/components/RequisitionForm';
-import HeadTaskDelegator from '@/components/HeadTaskDelegator';
-import RoleTaskInbox from '@/components/RoleTaskInbox';
 import MetricCard from '@/components/ui/MetricCard';
-import RevenueChart from '@/components/ui/RevenueChart';
-import PeakHeatmap from '@/components/ui/PeakHeatmap';
 import { SkeletonCard } from '@/components/ui/Skeleton';
-import { fetchRoleKpis } from '@/lib/kpiMetrics';
 import { canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
 import { isMultiOutletRole, staffRolesForForm } from '@/lib/staffRoles';
-import OutletCsatPanel from '@/components/OutletCsatPanel';
-import SupervisorComplaintPanel from '@/components/SupervisorComplaintPanel';
+import OwnerExecNav from '@/components/OwnerExecNav';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -44,10 +34,6 @@ export default function Dashboard() {
 
   const [stats, setStats] = useState({ income: 0, onlineIncome: 0, offlineIncome: 0, expense: 0, profit: 0 });
   const [prevStats, setPrevStats] = useState({ income: 0, profit: 0 });
-  const [kpiScore, setKpiScore] = useState<number | null>(null);
-  const [slaScore, setSlaScore] = useState<number | null>(null);
-  const [revenueSeries, setRevenueSeries] = useState<{ label: string; value: number }[]>([]);
-  const [heatmap, setHeatmap] = useState<number[][]>(() => Array.from({ length: 7 }, () => Array(12).fill(0)));
   const [tableData, setTableData] = useState<any[]>([]);
   const [rawExportData, setRawExportData] = useState({ txs: [] as any[], mems: [] as any[], exps: [] as any[] });
   
@@ -59,59 +45,6 @@ export default function Dashboard() {
   const [deleteRequests, setDeleteRequests] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  // STATE & FUNGSI MODUL PROMO OWNER
-  const [promos, setPromos] = useState<any[]>([]);
-  const [showPromoModal, setShowPromoModal] = useState(false);
-  const [promoForm, setPromoForm] = useState({
-    code: '',
-    discount_type: 'nominal',
-    discount_value: '',
-    max_quota: ''
-  });
-
-  const fetchPromos = async () => {
-    const { data } = await supabase.from('promos').select('*').order('created_at', { ascending: false });
-    if (data) setPromos(data);
-  };
-
-  useEffect(() => {
-    fetchPromos();
-  }, []);
-
-  const handleSavePromo = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const { error } = await supabase.from('promos').insert([
-      {
-        code: promoForm.code.toUpperCase(),
-        discount_type: promoForm.discount_type,
-        discount_value: Number(promoForm.discount_value) || 0,
-        max_quota: Number(promoForm.max_quota) || 100,
-        used_count: 0,
-        is_active: true
-      }
-    ]);
-
-    if (!error) {
-      alert('✅ Promo berhasil dibuat!');
-      setShowPromoModal(false);
-      setPromoForm({ code: '', discount_type: 'nominal', discount_value: '', max_quota: '' });
-      fetchPromos();
-    } else {
-      alert('Gagal membuat promo: ' + error.message);
-    }
-  };
-
-  const togglePromoStatus = async (id: string, currentStatus: boolean) => {
-    await supabase.from('promos').update({ is_active: !currentStatus }).eq('id', id);
-    fetchPromos();
-  };
-
-  const handleDeletePromo = async (id: string) => {
-    if (confirm('Yakin ingin menghapus promo ini?')) {
-      await supabase.from('promos').delete().eq('id', id);
-      fetchPromos();
-    }
-  };
 
   // States Settings & Dynamic Services
   const [basicSalary, setBasicSalary] = useState('1500000');
@@ -216,21 +149,6 @@ export default function Dashboard() {
     }
     setCurrentUserRole(role);
     setCurrentUserName(user.name);
-  }, []);
-
-  useEffect(() => {
-    fetchRoleKpis().then((res) => {
-      const avg = res.cards.length
-        ? Math.round(res.cards.reduce((s, c) => s + (c.score || 0), 0) / res.cards.length)
-        : 0;
-      setKpiScore(avg);
-      const kurir = res.cards.find((c) => c.roleKey === 'kurir_cs');
-      const sla = kurir?.metrics?.find((m) => m.key === 'pickup_sla_pct');
-      setSlaScore(sla ? Math.round(Number(sla.actual) || 0) : avg);
-    }).catch(() => {
-      setKpiScore(null);
-      setSlaScore(null);
-    });
   }, []);
 
   const handleLogout = () => {
@@ -450,30 +368,6 @@ export default function Dashboard() {
         prevMems.reduce((s: number, m: any) => s + (Number(m.price) || 0), 0);
       const prevExp = prevExps.reduce((s: number, e: any) => s + (Number(e.amount) || 0), 0);
       setPrevStats({ income: prevInc, profit: prevInc - prevExp });
-
-      const byDay: Record<string, number> = {};
-      const heat = Array.from({ length: 7 }, () => Array.from({ length: 12 }, () => 0));
-      const bump = (iso: any, amt: number) => {
-        const d = new Date(iso);
-        if (isNaN(d.getTime())) return;
-        const key = d.toLocaleDateString('en-CA');
-        byDay[key] = (byDay[key] || 0) + amt;
-        heat[d.getDay()][Math.floor(d.getHours() / 2)] += 1;
-      };
-      filteredTxs.forEach((t: any) => bump(t.created_at, Number(t.amount) || 0));
-      filteredMems.forEach((m: any) => bump(m.created_at, Number(m.price) || 0));
-      const series: { label: string; value: number }[] = [];
-      for (let i = 13; i >= 0; i--) {
-        const d = new Date();
-        d.setHours(12, 0, 0, 0);
-        d.setDate(d.getDate() - i);
-        series.push({
-          label: `${d.getDate()}/${d.getMonth() + 1}`,
-          value: byDay[d.toLocaleDateString('en-CA')] || 0
-        });
-      }
-      setRevenueSeries(series);
-      setHeatmap(heat);
 
       setIsLoading(false);
     }
@@ -930,6 +824,8 @@ export default function Dashboard() {
             </p>
           </div>
 
+          <div className="flex flex-col items-stretch md:items-end gap-2 w-full md:w-auto">
+          <OwnerExecNav active="main" />
           <div className="flex w-full md:w-auto overflow-x-auto pb-1 md:pb-0 gap-1.5 hide-scrollbar">
             <button onClick={() => setActiveTab('pnl')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'pnl' ? 'bg-sky-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>PnL</button>
             <button onClick={() => setActiveTab('history')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'history' ? 'bg-sky-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>History</button>
@@ -949,21 +845,6 @@ export default function Dashboard() {
             <Link href="/pos" className="whitespace-nowrap bg-emerald-50 border border-emerald-200 text-emerald-700 hover:bg-emerald-500 hover:text-white text-xs px-3.5 py-2 rounded-xl font-bold transition-all">POS</Link>
             <button onClick={handleLogout} className="whitespace-nowrap bg-rose-50 border border-rose-200 text-rose-600 hover:bg-rose-500 hover:text-white font-bold text-xs px-3 py-2 rounded-xl transition-all">Keluar</button>
           </div>
-        </div>
-
-        {/* 2. WIDGET AI EXECUTIVE COPILOT & CHURN DETECTOR */}
-        <AdminAIAssistant />
-
-        <KpiRoleMonitoring />
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <RequisitionForm employeeName={currentUserName} role={currentUserRole} selectedOutlet={selectedOutlet !== 'ALL' ? selectedOutlet : undefined} />
-          <div className="space-y-4">
-            <RoleTaskInbox role={currentUserRole || undefined} />
-            {['owner', 'supervisor'].includes(currentUserRole) && (
-              <SupervisorComplaintPanel agentName={currentUserName} />
-            )}
-            {['owner', 'supervisor'].includes(currentUserRole) && <HeadTaskDelegator />}
           </div>
         </div>
 
@@ -987,258 +868,31 @@ export default function Dashboard() {
               <button onClick={exportCSV} className="w-full md:w-auto mt-auto bg-blue-600 text-white font-bold text-xs px-6 py-3 rounded-xl shadow-md">📥 EXPORT CSV</button>
             </div>
 
-            {/* TOP FINANCIAL METRIC CARDS */}
-        {isLoading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 pt-2">
-            {Array.from({ length: 4 }).map((_, i) => <SkeletonCard key={i} />)}
+            {isLoading ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4 pt-2">
+            {Array.from({ length: 2 }).map((_, i) => <SkeletonCard key={i} />)}
           </div>
         ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 pt-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4 pt-2">
           <MetricCard
-            label="Omset"
+            label="Total Omset (Gross Revenue)"
             value={`Rp ${stats.income.toLocaleString('id-ID')}`}
             hint={`Off ${stats.offlineIncome.toLocaleString('id-ID')} · On ${stats.onlineIncome.toLocaleString('id-ID')}`}
             trend={trendPct(stats.income, prevStats.income)}
             accent="sky"
           />
           <MetricCard
-            label="Profit"
+            label="Total Net Profit"
             value={`Rp ${stats.profit.toLocaleString('id-ID')}`}
             hint={`OPEX Rp ${stats.expense.toLocaleString('id-ID')}`}
             trend={trendPct(stats.profit, prevStats.profit)}
             accent={stats.profit >= 0 ? 'emerald' : 'rose'}
           />
-          <MetricCard
-            label="SLA Performance"
-            value={slaScore === null ? '—' : `${slaScore}%`}
-            hint="Kurir & CS on-time"
-            trend={slaScore === null ? null : slaScore - 95}
-            accent="amber"
-          />
-          <MetricCard
-            label="KPI Score"
-            value={kpiScore === null ? '—' : `${kpiScore}%`}
-            hint="Rata-rata 7 role"
-            trend={kpiScore === null ? null : kpiScore - 90}
-            accent="emerald"
-          />
         </div>
         )}
 
-        <OutletCsatPanel />
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <RevenueChart points={revenueSeries} />
-          <PeakHeatmap grid={heatmap} />
-        </div>
-
-        {/* MODUL MANAJEMEN & ANALITIK PROMO OWNER */}
-        <div className="bg-white border border-slate-200/80 p-6 rounded-2xl space-y-6 shadow-sm my-2">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-800 pb-4">
-              <div>
-                <h3 className="text-lg font-black text-amber-700">Kelola Promo & Analisis Performa</h3>
-                <p className="text-xs text-slate-400 mt-0.5">Atur voucher promo aplikasi customer dan pantau performa konversi omzetnya.</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowPromoModal(true)}
-                className="bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-slate-950 font-black px-4 py-2.5 rounded-2xl text-xs shadow-lg shadow-amber-500/20 transition-all active:scale-95"
-              >
-                ➕ Buat Promo Baru
-              </button>
-            </div>
-
-            {/* KARTU RINGKASAN PERFORMA PROMO */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="bg-slate-800/60 border border-slate-700/80 p-4 rounded-2xl">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Promo Aktif Tampil</p>
-                <p className="text-2xl font-black text-emerald-400 mt-1">
-                  {promos.filter(p => p.is_active).length} Kode Promo
-                </p>
-              </div>
-              <div className="bg-slate-800/60 border border-slate-700/80 p-4 rounded-2xl">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Penggunaan Voucher</p>
-                <p className="text-2xl font-black text-amber-600 mt-1">
-                  {promos.reduce((acc, p) => acc + (p.used_count || 0), 0)} Transaksi
-                </p>
-              </div>
-              <div className="bg-slate-800/60 border border-slate-700/80 p-4 rounded-2xl">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Estimasi Subsidi Dikeluarkan</p>
-                <p className="text-2xl font-black text-rose-400 mt-1">
-                  Rp {promos.reduce((acc, p) => acc + ((p.used_count || 0) * (p.discount_value || 0)), 0).toLocaleString('id-ID')}
-                </p>
-              </div>
-            </div>
-
-            {/* TABEL ANALITIS PROMO */}
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-800/80 text-slate-400 font-bold uppercase text-[10px] border-b border-slate-800">
-                  <tr>
-                    <th className="p-3">Kode Promo</th>
-                    <th className="p-3">Nilai Diskon</th>
-                    <th className="p-3">Kuota Terpakai</th>
-                    <th className="p-3">Est. Subsidi</th>
-                    <th className="p-3">Status</th>
-                    <th className="p-3 text-right">Aksi</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800 text-slate-200">
-                  {promos.map((item) => (
-                    <tr key={item.id} className="hover:bg-slate-800/40 transition">
-                      <td className="p-3 font-extrabold text-amber-600">{item.code}</td>
-                      <td className="p-3 font-semibold">
-                        {item.discount_type === 'percent' ? `${item.discount_value}%` : `Rp ${Number(item.discount_value).toLocaleString('id-ID')}`}
-                      </td>
-                      <td className="p-3 font-bold">{item.used_count || 0} / {item.max_quota || '∞'} Digunakan</td>
-                      <td className="p-3 font-bold text-rose-400">
-                        Rp {((item.used_count || 0) * (item.discount_value || 0)).toLocaleString('id-ID')}
-                      </td>
-                      <td className="p-3">
-                        <button
-                          type="button"
-                          onClick={() => togglePromoStatus(item.id, item.is_active)}
-                          className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border transition ${
-                            item.is_active 
-                              ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20' 
-                              : 'bg-slate-700/30 text-slate-400 border-slate-700 hover:bg-slate-700/50'
-                          }`}
-                        >
-                          {item.is_active ? '● Aktif' : '○ Nonaktif'}
-                        </button>
-                      </td>
-                      <td className="p-3 text-right">
-                        <button
-                          type="button"
-                          onClick={() => handleDeletePromo(item.id)}
-                          className="text-rose-400 hover:text-rose-300 font-bold px-2 py-1 rounded-lg hover:bg-rose-500/10 transition"
-                        >
-                          Hapus
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-
-                  {promos.length === 0 && (
-                    <tr>
-                      <td colSpan={6} className="text-center py-8 text-slate-500 text-xs font-semibold">
-                        Belum ada kode promo yang dibuat.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* MODAL BUAT PROMO BARU */}
-          {showPromoModal && (
-            <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
-              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 w-full max-w-md space-y-4 shadow-2xl">
-                <div className="flex justify-between items-center border-b border-slate-800 pb-3">
-                  <h3 className="text-sm font-black text-amber-700">Buat Kode Promo Baru</h3>
-                  <button type="button" onClick={() => setShowPromoModal(false)} className="text-slate-400 hover:text-white font-bold text-sm">✕</button>
-                </div>
-
-                <form onSubmit={handleSavePromo} className="space-y-3 text-xs">
-                  <div>
-                    <label className="block text-slate-400 font-bold mb-1">Kode Promo (KAPITAL)</label>
-                    <input
-                      type="text"
-                      placeholder="Contoh: HEMAT50"
-                      value={promoForm.code}
-                      onChange={(e) => setPromoForm({ ...promoForm, code: e.target.value })}
-                      required
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white font-bold uppercase focus:outline-none focus:ring-2 focus:ring-amber-500"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-slate-400 font-bold mb-1">Tipe Diskon</label>
-                      <select
-                        value={promoForm.discount_type}
-                        onChange={(e) => setPromoForm({ ...promoForm, discount_type: e.target.value })}
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white font-bold focus:outline-none"
-                      >
-                        <option value="nominal">Nominal (Rp)</option>
-                        <option value="percent">Persentase (%)</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-slate-400 font-bold mb-1">Nilai Diskon</label>
-                      <input
-                        type="number"
-                        placeholder="Contoh: 5000"
-                        value={promoForm.discount_value}
-                        onChange={(e) => setPromoForm({ ...promoForm, discount_value: e.target.value })}
-                        required
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white font-bold focus:outline-none focus:ring-2 focus:ring-amber-500"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-400 font-bold mb-1">Batas Kuota Pemakaian</label>
-                    <input
-                      type="number"
-                      placeholder="Contoh: 100"
-                      value={promoForm.max_quota}
-                      onChange={(e) => setPromoForm({ ...promoForm, max_quota: e.target.value })}
-                      required
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white font-bold focus:outline-none focus:ring-2 focus:ring-amber-500"
-                    />
-                  </div>
-
-                  <div className="pt-3 flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowPromoModal(false)}
-                      className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 rounded-xl transition"
-                    >
-                      Batal
-                    </button>
-                    <button
-                      type="submit"
-                      className="flex-1 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-slate-950 font-black py-2.5 rounded-xl transition shadow-lg shadow-amber-500/20"
-                    >
-                      Simpan Promo
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </div>
-          )}
-
-            {/* TABEL RANKING OUTLET & SUPERVISOR */}
+            {/* TABEL LEADERBOARD SUPERVISOR & RANKING OUTLET */}
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 md:gap-6 pt-2">
-              <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-                <div className="bg-emerald-600 text-white p-4 flex justify-between items-center">
-                  <h3 className="font-black text-sm">🏆 Ranking Omset Semua Outlet</h3>
-                  <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded font-mono">{period.replace('_', ' ')}</span>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs text-left whitespace-nowrap">
-                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold">
-                      <tr><th className="p-3">No / Outlet</th><th className="p-3">Supervisor</th><th className="p-3 text-right">Omset Offline</th><th className="p-3 text-right">Omset Online</th><th className="p-3 text-right">Total Omset</th><th className="p-3 text-right">Net Profit</th></tr>
-                    </thead>
-                    <tbody>
-                      {outletLeaderboard.map((o, i) => (
-                        <tr key={i} className={`border-b border-slate-100 hover:bg-slate-50 ${selectedOutlet === o.id ? 'bg-emerald-50/60 font-bold' : ''}`}>
-                          <td className="p-3 font-bold text-slate-800"><span className="inline-block w-4 text-emerald-600">{i + 1}.</span> {o.name} {selectedOutlet === o.id && '(Terpilih)'}</td>
-                          <td className="p-3 font-semibold text-indigo-600 text-[10px] uppercase">{o.supervisor}</td>
-                          <td className="p-3 text-right font-medium text-slate-600">Rp {o.offline_rev.toLocaleString('id-ID')}</td>
-                          <td className="p-3 text-right font-medium text-indigo-600">Rp {o.online_rev.toLocaleString('id-ID')}</td>
-                          <td className="p-3 text-right font-black text-slate-900">Rp {o.rev.toLocaleString('id-ID')}</td>
-                          <td className="p-3 text-right font-bold text-emerald-600">Rp {o.profit.toLocaleString('id-ID')}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
               <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
                 <div className="bg-indigo-600 text-white p-4 flex justify-between items-center">
                   <h3 className="font-black text-sm">👔 Leaderboard Supervisor</h3>
@@ -1262,32 +916,34 @@ export default function Dashboard() {
                   </table>
                 </div>
               </div>
-            </div>
 
-            <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden mt-4">
-              <div className="p-4 md:p-5 border-b border-slate-100 flex justify-between"><h3 className="font-bold text-slate-800 text-sm">Audit Transaksi Periode Ini</h3><span className="text-xs text-slate-400 font-medium">{tableData.length} Data</span></div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-[10px] md:text-xs whitespace-nowrap">
-                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold">
-                    <tr><th className="p-3 md:p-4">Tanggal</th><th className="p-3 md:p-4">Kategori</th><th className="p-3 md:p-4">Deskripsi</th><th className="p-3 md:p-4 text-right">Nominal (Rp)</th></tr>
-                  </thead>
-                  <tbody>
-                    {tableData.map((row, idx) => (
-                      <tr
-                        key={idx}
-                        className={`border-b border-slate-100 ${row.rawData ? 'cursor-pointer hover:bg-indigo-50' : ''}`}
-                        onClick={() => row.rawData && setSelectedTxDetail(row.rawData)}
-                      >
-                        <td className="p-3 md:p-4 text-slate-600 font-mono">{new Date(row.date).toLocaleString('id-ID')}</td>
-                        <td className="p-3 md:p-4"><span className={`px-2 py-1 rounded text-[9px] md:text-[10px] font-bold ${row.type === 'Income' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{row.category}</span></td>
-                        <td className="p-3 md:p-4 text-slate-800 font-medium">{row.desc}{row.rawData ? <span className="ml-1 text-[9px] text-indigo-400 font-bold">timeline</span> : null}</td>
-                        <td className={`p-3 md:p-4 text-right font-bold ${row.type === 'Income' ? 'text-emerald-600' : 'text-rose-600'}`}>{row.type === 'Income' ? '+' : ''} Rp {Math.abs(row.amount).toLocaleString('id-ID')}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+                <div className="bg-emerald-600 text-white p-4 flex justify-between items-center">
+                  <h3 className="font-black text-sm">🏆 Ranking Omset Outlet</h3>
+                  <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded font-mono">{period.replace('_', ' ')}</span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs text-left whitespace-nowrap">
+                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold">
+                      <tr><th className="p-3">No / Outlet</th><th className="p-3">Supervisor</th><th className="p-3 text-right">Omset Offline</th><th className="p-3 text-right">Omset Online</th><th className="p-3 text-right">Total Omset</th><th className="p-3 text-right">Net Profit</th></tr>
+                    </thead>
+                    <tbody>
+                      {outletLeaderboard.map((o, i) => (
+                        <tr key={i} className={`border-b border-slate-100 hover:bg-slate-50 ${selectedOutlet === o.id ? 'bg-emerald-50/60 font-bold' : ''}`}>
+                          <td className="p-3 font-bold text-slate-800"><span className="inline-block w-4 text-emerald-600">{i + 1}.</span> {o.name} {selectedOutlet === o.id && '(Terpilih)'}</td>
+                          <td className="p-3 font-semibold text-indigo-600 text-[10px] uppercase">{o.supervisor}</td>
+                          <td className="p-3 text-right font-medium text-slate-600">Rp {o.offline_rev.toLocaleString('id-ID')}</td>
+                          <td className="p-3 text-right font-medium text-indigo-600">Rp {o.online_rev.toLocaleString('id-ID')}</td>
+                          <td className="p-3 text-right font-black text-slate-900">Rp {o.rev.toLocaleString('id-ID')}</td>
+                          <td className="p-3 text-right font-bold text-emerald-600">Rp {o.profit.toLocaleString('id-ID')}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
+
           </div>
         )}
 

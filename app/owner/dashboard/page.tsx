@@ -2,15 +2,11 @@
 import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
-import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
-import RequisitionForm from '@/components/RequisitionForm';
-import RoleTaskInbox from '@/components/RoleTaskInbox';
-import HeadTaskDelegator from '@/components/HeadTaskDelegator';
 import StageTimeline from '@/components/StageTimeline';
+import OwnerExecNav from '@/components/OwnerExecNav';
 import { isVoidTransaction } from '@/lib/voidTx';
 import { canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
 import { staffRolesForForm } from '@/lib/staffRoles';
-import OutletCsatPanel from '@/components/OutletCsatPanel';
 import { toast } from '@/lib/toast';
 import {
   SUPERVISOR_DECISIONS,
@@ -683,6 +679,8 @@ setDeleteRequests(delData);
               Management <span className="font-bold text-indigo-600">({currentUserRole.toUpperCase()})</span>
             </p>
           </div>
+          <div className="flex flex-col items-stretch md:items-end gap-2 w-full md:w-auto">
+          <OwnerExecNav active="main" />
           <div className="flex w-full md:w-auto overflow-x-auto pb-2 md:pb-0 gap-2 hide-scrollbar items-center">
           <button onClick={() => setActiveTab('pnl')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'pnl' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>📊 Laporan PnL</button>
           <button onClick={() => setActiveTab('history')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'history' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>📦 History 1 Thn</button>
@@ -716,118 +714,12 @@ setDeleteRequests(delData);
           </button>
 
           <button onClick={handleLogout} className="whitespace-nowrap bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold text-xs px-3 py-2 rounded-xl transition ml-1">Keluar</button>
-        </div>
-        {/* WIDGET TO-DO LIST KELUHAN & KENDALA OUTLET */}
-      <div className="bg-white border border-slate-200 rounded-3xl p-5 space-y-4 shadow-sm my-4">
-        <div className="flex justify-between items-center border-b pb-3">
-          <div>
-            <h3 className="text-sm font-extrabold text-slate-900 flex items-center gap-2">
-              📋 To-Do List Keluhan & Kendala Outlet
-            </h3>
-            <p className="text-[11px] text-slate-500">Laporan realtime dari Kasir yang memerlukan tindakan Supervisor/Owner</p>
           </div>
-          <span className="bg-rose-100 text-rose-700 font-black text-xs px-3 py-1 rounded-full">
-            {outletIssues.filter(i => i.status !== 'Selesai').length} Belum Selesai
-          </span>
+          </div>
         </div>
 
-        <div className="space-y-3">
-          {outletIssues.map((issue) => (
-            <div key={issue.id} className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-xs space-y-2.5">
-              <div className="flex justify-between items-start">
-                <div>
-                  <span className="bg-blue-100 text-blue-800 font-extrabold text-[10px] px-2.5 py-0.5 rounded-md mr-2">
-                    📍 {issue.outlets?.name || 'Outlet'}
-                  </span>
-                  <span className={`font-extrabold text-[10px] px-2.5 py-0.5 rounded-md ${
-                    issue.urgency === 'Critical' ? 'bg-rose-100 text-rose-700' : issue.urgency === 'Mendesak' ? 'bg-amber-100 text-amber-700' : 'bg-slate-200 text-slate-700'
-                  }`}>
-                    {issue.urgency}
-                  </span>
-                  <h4 className="font-extrabold text-slate-900 mt-1.5 text-sm">{issue.category}</h4>
-                </div>
-                <span className={`font-black text-[10px] px-3 py-1 rounded-full border ${
-                  issue.status === 'Selesai' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'
-                }`}>
-                  {issue.status}
-                </span>
-              </div>
-
-              <p className="text-slate-700 font-medium bg-white p-3 rounded-xl border border-slate-200 leading-relaxed">
-                {isComplaintIssue(issue) ? issueDescriptionPlain(issue) : issue.description}
-              </p>
-              {isComplaintIssue(issue) && issue.findings && (
-                <p className="text-[11px] text-indigo-800 bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-2">
-                  Temuan CS Care: {issue.findings}
-                  {issue.cctv_notes ? ` · CCTV: ${issue.cctv_notes}` : ''}
-                </p>
-              )}
-
-              <div className="flex justify-between items-center pt-2 border-t border-slate-200 text-[10px]">
-                <span className="text-slate-400 font-bold">Pelapor: {issue.reporter_name} • {new Date(issue.created_at).toLocaleString('id-ID')}</span>
-                <div className="flex gap-2">
-                  {isComplaintIssue(issue) && complaintStepOf(issue) === 'pending_supervisor' ? (
-                    <div className="flex flex-col items-end gap-1.5">
-                      <input
-                        value={supNote}
-                        onChange={(e) => setSupNote(e.target.value)}
-                        placeholder="Catatan (opsional)"
-                        className="border border-slate-200 rounded-lg px-2 py-1 text-[10px] w-44"
-                      />
-                      <div className="flex gap-1">
-                        {SUPERVISOR_DECISIONS.map((d) => (
-                          <button
-                            key={d.value}
-                            type="button"
-                            disabled={supBusy === `${issue.id}-${d.value}`}
-                            onClick={() => handleSupervisorDecision(issue, d.value)}
-                            className={`font-bold px-2.5 py-1.5 rounded-lg text-white ${
-                              d.value === 'reject' ? 'bg-rose-600' : d.value === 'cash' ? 'bg-emerald-600' : 'bg-indigo-600'
-                            }`}
-                          >
-                            {d.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ) : isComplaintIssue(issue) ? (
-                    <span className="text-[10px] font-bold text-slate-500">
-                      {complaintStepOf(issue) === 'resolved' ? 'Selesai' : 'Diproses CS Care'}
-                    </span>
-                  ) : (
-                    <>
-                      {issue.status !== 'Sedang Diproses' && issue.status !== 'Selesai' && (
-                        <button
-                          onClick={() => handleUpdateIssueStatus(issue.id, 'Sedang Diproses')}
-                          className="bg-amber-500 hover:bg-amber-600 text-white font-bold px-3 py-1.5 rounded-lg shadow-sm transition"
-                        >
-                          Proses Task
-                        </button>
-                      )}
-                      {issue.status !== 'Selesai' && (
-                        <button
-                          onClick={() => handleUpdateIssueStatus(issue.id, 'Selesai')}
-                          className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1.5 rounded-lg shadow-sm transition"
-                        >
-                          ✓ Tandai Selesai
-                        </button>
-                      )}
-                    </>
-                  )}
-                </div>
-              </div>
-            </div>
-          ))}
-
-          {outletIssues.length === 0 && (
-            <div className="text-center py-6 text-slate-400 text-xs font-bold">
-              🎉 Semua aman! Belum ada laporan kendala dari kasir.
-            </div>
-          )}
-        </div>
-      </div>
-
-            {/* FILTER CABANG, PERIODE & EXPORT PnL */}
+        {activeTab === 'pnl' && (
+          <div className="space-y-4 md:space-y-6">
             <div className="bg-white border border-slate-200 p-3 md:p-4 rounded-2xl shadow-sm flex flex-col md:flex-row gap-3 md:items-end">
               <div className="flex-1">
                 <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Cabang Outlet</label>
@@ -836,17 +728,14 @@ setDeleteRequests(delData);
                   onChange={(e) => setSelectedOutlet(e.target.value)}
                   className="w-full text-xs font-bold border border-slate-300 rounded-xl px-3 py-2.5 bg-white text-slate-800 cursor-pointer focus:outline-none focus:border-indigo-500 transition"
                 >
-                  <option value="ALL">🏢 Semua Cabang</option>
+                  <option value="ALL">Semua Cabang (Pusat)</option>
                   {outlets.map((o) => (
-                    <option key={o.id} value={o.id}>
-                      {o.name}
-                    </option>
+                    <option key={o.id} value={o.id}>{o.name}</option>
                   ))}
                 </select>
               </div>
-
               <div className="flex-1">
-                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Periode Laporan</label>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Periode Transaksi</label>
                 <select
                   value={period}
                   onChange={(e) => setPeriod(e.target.value)}
@@ -854,74 +743,31 @@ setDeleteRequests(delData);
                 >
                   <option value="THIS_MONTH">Bulan Ini</option>
                   <option value="LAST_MONTH">Bulan Lalu</option>
-                  <option value="THIS_YEAR">Tahun Ini</option>
-                  <option value="ALL">Semua Periode</option>
+                  <option value="THIS_YEAR">1 Tahun Terakhir (365 Hari)</option>
+                  <option value="ALL">Semua Waktu (All Time)</option>
                 </select>
               </div>
-
-              <button
-                type="button"
-                onClick={exportCSV}
-                className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-5 py-2.5 rounded-xl shadow transition whitespace-nowrap"
-              >
-                📥 Export PnL CSV
+              <button type="button" onClick={exportCSV} className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-5 py-2.5 rounded-xl shadow transition whitespace-nowrap">
+                📥 EXPORT CSV
               </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4">
               <div className="bg-white border border-slate-200 p-4 md:p-6 rounded-2xl shadow-sm">
-                <p className="text-[10px] md:text-xs font-bold text-slate-500 uppercase">Gross Revenue (Total Omset)</p>
+                <p className="text-[10px] md:text-xs font-bold text-slate-500 uppercase">Total Omset (Gross Revenue)</p>
                 <h2 className="text-xl md:text-2xl font-black text-emerald-600 mt-1">Rp {stats.income.toLocaleString('id-ID')}</h2>
-                <div className="mt-2 pt-2 border-t flex justify-between text-[11px] font-semibold text-slate-500">
-                  <span>🏪 Offline: <b>Rp {stats.offlineIncome.toLocaleString('id-ID')}</b></span>
-                  <span>🌐 Online: <b className="text-indigo-600">Rp {stats.onlineIncome.toLocaleString('id-ID')}</b></span>
-                </div>
-              </div>
-              <div className="bg-white border border-slate-200 p-4 md:p-6 rounded-2xl shadow-sm">
-                <p className="text-[10px] md:text-xs font-bold text-slate-500 uppercase">Opex (Total Pengeluaran)</p>
-                <h2 className="text-xl md:text-2xl font-black text-rose-600 mt-1">Rp {stats.expense.toLocaleString('id-ID')}</h2>
+                <p className="mt-2 pt-2 border-t text-[11px] font-semibold text-slate-500">
+                  Off Rp {stats.offlineIncome.toLocaleString('id-ID')} · On Rp {stats.onlineIncome.toLocaleString('id-ID')}
+                </p>
               </div>
               <div className={`p-4 md:p-6 rounded-2xl border shadow-sm ${stats.profit >= 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-rose-50 border-rose-200'}`}>
-                <p className={`text-[10px] md:text-xs font-bold uppercase ${stats.profit >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>Net Profit (Laba Bersih)</p>
+                <p className={`text-[10px] md:text-xs font-bold uppercase ${stats.profit >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>Total Net Profit</p>
                 <h2 className={`text-xl md:text-2xl font-black mt-1 ${stats.profit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>Rp {stats.profit.toLocaleString('id-ID')}</h2>
+                <p className="mt-2 pt-2 border-t text-[11px] font-semibold text-slate-500">OPEX Rp {stats.expense.toLocaleString('id-ID')}</p>
               </div>
             </div>
 
-            <OutletCsatPanel />
-
-            {/* TABEL RANKING OUTLET & SUPERVISOR */}
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 md:gap-6 pt-2">
-              <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-                <div className="bg-emerald-600 text-white p-4 flex justify-between items-center">
-                  <h3 className="font-black text-sm">🏆 Ranking Omset Semua Outlet</h3>
-                  <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded font-mono">{period.replace('_', ' ')}</span>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs text-left whitespace-nowrap">
-                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold">
-                      <tr><th className="p-3">No / Outlet</th><th className="p-3">Supervisor</th><th className="p-3 text-right">Omset Offline</th><th className="p-3 text-right">Omset Online</th><th className="p-3 text-right">Total Omset</th><th className="p-3 text-right">Net Profit</th></tr>
-                    </thead>
-                    <tbody>
-                      {outletLeaderboard.map((o, i) => (
-                        <tr
-                          key={i}
-                          onClick={() => setSelectedOutlet(selectedOutlet === o.id ? 'ALL' : o.id)}
-                          title="Klik untuk memfilter laporan ke cabang ini"
-                          className={`border-b border-slate-100 hover:bg-slate-50 cursor-pointer ${selectedOutlet === o.id ? 'bg-emerald-50/60 font-bold' : ''}`}
-                        >
-                          <td className="p-3 font-bold text-slate-800"><span className="inline-block w-4 text-emerald-600">{i + 1}.</span> {o.name} {selectedOutlet === o.id && '(Terpilih)'}</td>
-                          <td className="p-3 font-semibold text-indigo-600 text-[10px] uppercase">{o.supervisor}</td>
-                          <td className="p-3 text-right font-medium text-slate-600">Rp {o.offline_rev.toLocaleString('id-ID')}</td>
-                          <td className="p-3 text-right font-medium text-indigo-600">Rp {o.online_rev.toLocaleString('id-ID')}</td>
-                          <td className="p-3 text-right font-black text-slate-900">Rp {o.rev.toLocaleString('id-ID')}</td>
-                          <td className="p-3 text-right font-bold text-emerald-600">Rp {o.profit.toLocaleString('id-ID')}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
               <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
                 <div className="bg-indigo-600 text-white p-4 flex justify-between items-center">
                   <h3 className="font-black text-sm">👔 Leaderboard Supervisor</h3>
@@ -945,33 +791,35 @@ setDeleteRequests(delData);
                   </table>
                 </div>
               </div>
-            </div>
 
-            <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden mt-4">
-              <div className="p-4 md:p-5 border-b border-slate-100 flex justify-between"><h3 className="font-bold text-slate-800 text-sm">Audit Transaksi Periode Ini</h3><span className="text-xs text-slate-400 font-medium">{tableData.length} Data</span></div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-[10px] md:text-xs whitespace-nowrap">
-                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold">
-                    <tr><th className="p-3 md:p-4">Tanggal</th><th className="p-3 md:p-4">Kategori</th><th className="p-3 md:p-4">Deskripsi</th><th className="p-3 md:p-4 text-right">Nominal (Rp)</th></tr>
-                  </thead>
-                  <tbody>
-                    {tableData.map((row, idx) => (
-                      <tr
-                        key={idx}
-                        className={`border-b border-slate-100 ${row.rawData ? 'cursor-pointer hover:bg-indigo-50' : ''}`}
-                        onClick={() => row.rawData && setSelectedTxDetail(row.rawData)}
-                      >
-                        <td className="p-3 md:p-4 text-slate-600 font-mono">{new Date(row.date).toLocaleString('id-ID')}</td>
-                        <td className="p-3 md:p-4"><span className={`px-2 py-1 rounded text-[9px] md:text-[10px] font-bold ${row.type === 'Income' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>{row.category}</span></td>
-                        <td className="p-3 md:p-4 text-slate-800 font-medium">{row.desc}</td>
-                        <td className={`p-3 md:p-4 text-right font-bold ${row.type === 'Income' ? 'text-emerald-600' : 'text-rose-600'}`}>{row.type === 'Income' ? '+' : ''} Rp {Math.abs(row.amount).toLocaleString('id-ID')}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+                <div className="bg-emerald-600 text-white p-4 flex justify-between items-center">
+                  <h3 className="font-black text-sm">🏆 Ranking Omset Outlet</h3>
+                  <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded font-mono">{period.replace('_', ' ')}</span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs text-left whitespace-nowrap">
+                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold">
+                      <tr><th className="p-3">No / Outlet</th><th className="p-3">Supervisor</th><th className="p-3 text-right">Omset Offline</th><th className="p-3 text-right">Omset Online</th><th className="p-3 text-right">Total Omset</th><th className="p-3 text-right">Net Profit</th></tr>
+                    </thead>
+                    <tbody>
+                      {outletLeaderboard.map((o, i) => (
+                        <tr key={i} className={`border-b border-slate-100 hover:bg-slate-50 ${selectedOutlet === o.id ? 'bg-emerald-50/60 font-bold' : ''}`}>
+                          <td className="p-3 font-bold text-slate-800"><span className="inline-block w-4 text-emerald-600">{i + 1}.</span> {o.name} {selectedOutlet === o.id && '(Terpilih)'}</td>
+                          <td className="p-3 font-semibold text-indigo-600 text-[10px] uppercase">{o.supervisor}</td>
+                          <td className="p-3 text-right font-medium text-slate-600">Rp {o.offline_rev.toLocaleString('id-ID')}</td>
+                          <td className="p-3 text-right font-medium text-indigo-600">Rp {o.online_rev.toLocaleString('id-ID')}</td>
+                          <td className="p-3 text-right font-black text-slate-900">Rp {o.rev.toLocaleString('id-ID')}</td>
+                          <td className="p-3 text-right font-bold text-emerald-600">Rp {o.profit.toLocaleString('id-ID')}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           </div>
+        )}
 
         {/* 📜 TAB: HISTORY 1 TAHUN KE BELAKANG */}
         {activeTab === 'history' && (
@@ -1399,7 +1247,7 @@ setDeleteRequests(delData);
         </div>
       )}
       
-{/* WIDGET APPROVAL PENGELUARAN SUPERVISOR */}
+{activeTab === 'loans' && (
 <div className="bg-white border rounded-2xl p-4 md:p-6 space-y-4 mb-6">
         <h3 className="font-bold text-slate-800 text-sm md:text-lg flex items-center gap-2">
           💸 Pengajuan Pengeluaran Ops (Menunggu Approval)
@@ -1446,15 +1294,7 @@ setDeleteRequests(delData);
           </table>
         </div>
       </div>
-      {/* WIDGET TO-DO & SLA MANAGEMENT */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-        <RoleTaskInbox role={currentUserRole || undefined} />
-        {['owner', 'supervisor'].includes(currentUserRole) && <HeadTaskDelegator />}
-      </div>
-      <KpiRoleMonitoring />
-      <div className="mb-6">
-        <RequisitionForm employeeName={currentUserName} role={currentUserRole} />
-      </div>
+      )}
       {activeTab === 'delete_requests' && (
               <div className="bg-white border rounded-2xl p-4 md:p-6 space-y-4">
                 <h3 className="font-bold text-rose-600 text-sm md:text-lg">🗑️ Permintaan Hapus Transaksi</h3>
