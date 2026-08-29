@@ -55,11 +55,15 @@ export const insertChatMessage = async (input: {
   is_claimed?: boolean;
   attachment_url?: string | null;
   attachment_type?: string | null;
+  image_url?: string | null;
 }) => {
   const thread_key = threadKeyOf(input);
-  const withFile = input.attachment_url
-    ? `${input.message || ''}${input.message ? '\n' : ''}${input.attachment_url}`.trim()
-    : input.message;
+  const media = input.image_url || input.attachment_url || null;
+  const isInline = Boolean(media && String(media).startsWith('data:'));
+  const withFile =
+    media && !isInline
+      ? `${input.message || ''}${input.message ? '\n' : ''}${media}`.trim()
+      : input.message;
   const full: Record<string, any> = {
     customer_phone: input.customer_phone || null,
     order_id: input.order_id || null,
@@ -71,8 +75,9 @@ export const insertChatMessage = async (input: {
     assigned_to_agent_id: input.assigned_to_agent_id || null,
     assigned_to_agent_name: input.assigned_to_agent_name || null,
     is_claimed: !!input.is_claimed,
-    attachment_url: input.attachment_url || null,
-    attachment_type: input.attachment_type || null
+    attachment_url: media,
+    image_url: media,
+    attachment_type: input.attachment_type || (isInline || String(media || '').includes('image') ? 'image' : null)
   };
 
   const attempts = [
@@ -80,17 +85,31 @@ export const insertChatMessage = async (input: {
     { ...full, assigned_to_agent_id: undefined, assigned_to_agent_name: undefined, is_claimed: undefined },
     {
       ...full,
-      attachment_url: undefined,
-      attachment_type: undefined,
       assigned_to_agent_id: undefined,
       assigned_to_agent_name: undefined,
-      is_claimed: undefined
+      is_claimed: undefined,
+      attachment_url: undefined
+    },
+    {
+      ...full,
+      assigned_to_agent_id: undefined,
+      assigned_to_agent_name: undefined,
+      is_claimed: undefined,
+      image_url: undefined
     },
     {
       customer_phone: full.customer_phone,
       order_id: full.order_id,
       sender_type: input.is_internal ? 'internal' : input.sender_type,
-      message: withFile
+      message: isInline && media ? `${withFile}\n${media}`.trim() : withFile,
+      image_url: media,
+      attachment_url: media
+    },
+    {
+      customer_phone: full.customer_phone,
+      order_id: full.order_id,
+      sender_type: input.is_internal ? 'internal' : input.sender_type,
+      message: isInline && media ? `${withFile}\n${media}`.trim() : withFile
     }
   ];
 

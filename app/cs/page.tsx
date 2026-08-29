@@ -23,8 +23,10 @@ import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
 import StatusBadge from '@/components/ui/StatusBadge';
 import ChatAttachment, { visibleChatText } from '@/components/ChatAttachment';
 import PhotoLightbox from '@/components/PhotoLightbox';
-import { uploadProofFile } from '@/lib/uploadProof';
-import { confirmTransactionPayment, isPaymentLocked } from '@/lib/paymentVerify';
+import { confirmPaymentProof, uploadChatAttachment } from '@/lib/uploadProof';
+import { confirmTransactionPayment, isPaymentLocked, markInvoicePaid } from '@/lib/paymentVerify';
+import { sendInvoiceToLiveChat } from '@/lib/chatInvoice';
+import ChatInvoiceCard from '@/components/ChatInvoiceCard';
 import { isTaskCompleted } from '@/lib/taskRoles';
 import { toast } from '@/lib/toast';
 
@@ -460,6 +462,7 @@ export default function CsCommandCenter() {
       assigned_to_agent_name: agent.name,
       is_claimed: true,
       attachment_url: file?.url || null,
+      image_url: file?.url || null,
       attachment_type: file?.type || null
     });
     if (error) {
@@ -488,7 +491,7 @@ export default function CsCommandCenter() {
     if (!file || !selected) return;
     if (!canSend && !noteMode) return toast('Klaim chat dulu sebelum mengirim lampiran.', 'warn');
     try {
-      const url = await uploadProofFile(file, `chat_cs_${selected.phone || 'thread'}`);
+      const url = await uploadChatAttachment(file, `chat_cs_${selected.phone || 'thread'}`);
       const type = file.type.includes('pdf') ? 'pdf' : file.type.includes('image') ? 'image' : 'file';
       await send(input, noteMode, { url, type });
     } catch (err: any) {
@@ -503,13 +506,14 @@ export default function CsCommandCenter() {
     }
     setPayBusy(true);
     try {
-      const url = await uploadProofFile(payFile, `pay_${payModal.id}`);
+      const url = await confirmPaymentProof(payFile, `pay_${payModal.id}`);
       const { error } = await confirmTransactionPayment({
         transactionId: payModal.id,
         proofUrl: url,
         receipt: payModal.receipt_number,
         agentName: agent.name,
-        customerPhone: phone || payModal.customer_phone
+        customerPhone: phone || payModal.customer_phone,
+        amount: Number(payModal.amount) || 0
       });
       if (error) {
         toast('Gagal konfirmasi: ' + error.message, 'err');
@@ -837,6 +841,7 @@ export default function CsCommandCenter() {
                       >
                         {internal && <p className="text-[9px] font-black uppercase mb-0.5">Catatan internal</p>}
                         {visibleChatText(m) && <p className="whitespace-pre-wrap">{visibleChatText(m)}</p>}
+                        <ChatInvoiceCard message={m} />
                         <ChatAttachment message={m} onOpen={setLightboxSrc} />
                         <p className="text-[9px] text-slate-400 mt-1 text-right">
                           {m.sender_name ? `${m.sender_name} · ` : ''}
@@ -1002,10 +1007,43 @@ export default function CsCommandCenter() {
                     </p>
                     <button
                       type="button"
-                      onClick={() => { setPayModal(o); setPayFile(null); }}
+                      onClick={async () => {
+                        const { error } = await sendInvoiceToLiveChat({ ...o, customer_phone: phone || o.customer_phone }, agent.name);
+                        if (error) return toast('Gagal kirim tagihan: ' + error.message, 'err');
+                        toast('Tagihan dikirim ke live chat.', 'ok');
+                        if (selectedKey) loadMessages(selectedKey);
+                      }}
+                      className="w-full text-[11px] font-black bg-blue-600 text-white py-2.5 rounded-xl"
+                    >
+                      📲 Kirim Tagihan
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!confirm(`Tandai ${o.receipt_number || 'tagihan'} sudah terbayar?`)) return;
+                        const { error } = await markInvoicePaid({
+                          transactionId: o.id,
+                          amount: Number(o.amount) || 0,
+                          receipt: o.receipt_number,
+                          agentName: agent.name,
+                          customerPhone: phone || o.customer_phone
+                        });
+                        if (error) return toast('Gagal konfirmasi: ' + error.message, 'err');
+                        toast('Pembayaran diverifikasi. POS terbuka untuk Sortir.', 'ok');
+                        if (selectedKey) loadContext(phoneFromThread(selectedKey));
+                        loadPayTasks();
+                        if (selectedKey) loadMessages(selectedKey);
+                      }}
                       className="w-full text-[11px] font-black bg-emerald-600 text-white py-2.5 rounded-xl"
                     >
-                      ✅ Konfirmasi Pembayaran & Upload Bukti
+                      ✅ Tagihan Sudah Terbayarkan
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setPayModal(o); setPayFile(null); }}
+                      className="w-full text-[11px] font-bold border border-emerald-200 text-emerald-800 py-2 rounded-xl"
+                    >
+                      Upload bukti transfer
                     </button>
                   </div>
                 ))}

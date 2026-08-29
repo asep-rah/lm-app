@@ -11,7 +11,7 @@ import RequisitionForm from '@/components/RequisitionForm';
 import OutletIssueForm from '@/components/OutletIssueForm';
 import RoleTaskInbox from '@/components/RoleTaskInbox';
 import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
-import { updatePickupOrder } from '@/lib/pickupUpdates';
+import { updatePickupOrder, markPickupConvertedToPos } from '@/lib/pickupUpdates';
 import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
 import { uploadProofFile } from '@/lib/uploadProof';
 import { createPaymentVerifyTask, isCsVerifiedPaid, isNonCashVerifyMethod, isPaymentLocked, PENDING_PAY_STATUS } from '@/lib/paymentVerify';
@@ -1310,10 +1310,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     const pickupId = params.get('pickup_id') || customerOrder?.id || '';
 
     if (pickupId) {
-      await updatePickupOrder(pickupId, {
-        status: 'Tiba di Outlet',
-        transaction_id: newTx.id
-      });
+      await markPickupConvertedToPos(pickupId, newTx.id);
       const linked = await supabase.from('transactions').update({ pickup_id: pickupId }).eq('id', newTx.id);
       if (linked.error) console.warn('pickup_id pada transactions dilewati:', linked.error.message);
     }
@@ -1950,14 +1947,16 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
       s.includes('tiba') ||
       s.includes('disetujui') ||
       s.includes('dikonfirmasi') ||
+      s === 'paid' ||
+      s.includes('lunas') ||
       !s
     )) {
       return (
         <div className="space-y-2">
           <div className="w-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-bold py-2 px-3 rounded-xl text-center">
-            ✅ Pembayaran Lunas (Verified CS)
+            ✅ Lunas - Siap Masuk Sortir
           </div>
-          {stepButton('🔍 Mulai Proses / Sortir', 'Sortir', 'bg-slate-700 hover:bg-slate-800')}
+          {stepButton('🔍 Sortir / Mulai Proses', 'Sortir', 'bg-slate-700 hover:bg-slate-800')}
         </div>
       );
     }
@@ -3011,7 +3010,7 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
                         </h4>
                         <span className="text-[10px] font-mono font-bold bg-slate-100 border border-slate-200 text-slate-700 px-2 py-0.5 rounded-md">{order.receipt_number || 'TRX-POS'}</span>
                         {isPaymentLocked(order) && <span className="text-[9px] font-black uppercase bg-amber-100 text-amber-800 border border-amber-200 px-2 py-0.5 rounded-md animate-pulse">⏳ Bayar CS</span>}
-                        {isCsVerifiedPaid(order) && <span className="text-[9px] font-black uppercase bg-emerald-100 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-md">✅ Lunas CS</span>}
+                        {isCsVerifiedPaid(order) && <span className="text-[9px] font-black uppercase bg-emerald-100 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-md">✅ Lunas</span>}
                         {express && <span className="text-[9px] font-black uppercase bg-violet-100 text-violet-800 border border-violet-200 px-2 py-0.5 rounded-md">Express</span>}
                         <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-md border ${sla.overdue ? 'bg-rose-100 text-rose-800 border-rose-300 animate-pulse' : 'bg-sky-50 text-sky-800 border-sky-200'}`}>{sla.label}</span>
                       </div>

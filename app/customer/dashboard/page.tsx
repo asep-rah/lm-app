@@ -11,7 +11,8 @@ import { laundryFallbackReply } from '@/lib/laundryFaq';
 import AIChatWidget from '@/components/AIChatWidget';
 import PhotoLightbox from '@/components/PhotoLightbox';
 import ChatAttachment, { visibleChatText } from '@/components/ChatAttachment';
-import { uploadProofFile } from '@/lib/uploadProof';
+import ChatInvoiceCard from '@/components/ChatInvoiceCard';
+import { uploadChatAttachment } from '@/lib/uploadProof';
 import { nearestOpenOutlet } from '@/lib/outletCapacity';
 
 const supabase = createClient(
@@ -229,7 +230,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       let attachmentType = '';
       if (file) {
         try {
-          attachmentUrl = await uploadProofFile(file, `chat_cust_${customerPhone || 'anon'}`);
+          attachmentUrl = await uploadChatAttachment(file, `chat_cust_${customerPhone || 'anon'}`);
           attachmentType = file.type.includes('pdf') ? 'pdf' : 'image';
         } catch (err: any) {
           alert('Gagal unggah lampiran: ' + (err?.message || 'Coba lagi'));
@@ -243,6 +244,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
         sender_type: 'customer',
         message: attachmentUrl ? `${messageText}\n${attachmentUrl}` : messageText,
         attachment_url: attachmentUrl || null,
+        image_url: attachmentUrl || null,
         attachment_type: attachmentType || null,
         created_at: new Date().toISOString()
       };
@@ -254,6 +256,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
         sender_type: 'customer',
         message: messageText,
         attachment_url: attachmentUrl || null,
+        image_url: attachmentUrl || null,
         attachment_type: attachmentType || null
       });
 
@@ -2071,6 +2074,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                         }`}
                       >
                         {visibleChatText(msg) && <p className="whitespace-pre-wrap">{visibleChatText(msg)}</p>}
+                        <ChatInvoiceCard message={msg} />
                         <ChatAttachment message={msg} onOpen={setLightboxSrc} />
                         <span className={`text-[8px] block mt-1 ${isCustomer ? 'text-slate-900/70 text-right' : 'text-slate-400'}`}>
                           {new Date(msg.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}

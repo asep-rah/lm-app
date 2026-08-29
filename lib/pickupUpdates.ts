@@ -36,6 +36,33 @@ export const updatePickupOrder = async (id: string, payload: Record<string, any>
   return { error: null, stripped: true };
 };
 
+/** Pickup sudah jadi nota POS — hilang dari kolom Antrean Masuk POS. */
+export const isPickupConvertedToPos = (p: any) => {
+  if (p?.transaction_id) return true;
+  const s = String(p?.status || '').toLowerCase();
+  return (
+    s.includes('diproses_pos') ||
+    s.includes('pos_created') ||
+    s.includes('nota pos') ||
+    (s.includes('pos') && (s.includes('proses') || s.includes('created')))
+  );
+};
+
+export const markPickupConvertedToPos = async (pickupId: string, transactionId: string) => {
+  const attempts = [
+    { status: 'diproses_pos', transaction_id: transactionId },
+    { status: 'pos_created', transaction_id: transactionId },
+    { status: 'diproses_pos' },
+    { status: 'pos_created' },
+    { transaction_id: transactionId }
+  ];
+  for (const payload of attempts) {
+    const { error } = await supabase.from('pickup_orders').update(payload).eq('id', pickupId);
+    if (!error) return { error: null };
+  }
+  return updatePickupOrder(pickupId, { status: 'diproses_pos', transaction_id: transactionId });
+};
+
 /** Catatan waktu kurir ke work_logs bila ada transaction_id; gagal tidak membatalkan status. */
 export const logCourierStage = async (order: any, stage: string, employeeName: string) => {
   const txId = order?.transaction_id || order?.tx_id;

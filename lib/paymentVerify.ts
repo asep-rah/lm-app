@@ -10,17 +10,23 @@ export const isNonCashVerifyMethod = (method: any) => {
 };
 
 export const isPaymentLocked = (order: any) => {
+  if (order?.is_paid === true) return false;
   const pay = String(order?.payment_status || '').toLowerCase();
   const st = String(order?.status || '').toLowerCase();
   if (['paid', 'lunas', 'verified'].includes(pay)) return false;
+  if (st === 'paid' || st.includes('lunas')) return false;
   if (st.includes('menunggu_pembayaran') || st.includes('menunggu pembayaran')) return true;
   return pay === 'pending' || pay === 'menunggu';
 };
 
 export const isCsVerifiedPaid = (order: any) => {
+  if (order?.is_paid === true) return true;
   const pay = String(order?.payment_status || '').toLowerCase();
+  if (['paid', 'lunas', 'verified'].includes(pay)) return true;
+  const st = String(order?.status || '').toLowerCase();
+  if (st === 'paid' || st.includes('lunas')) return true;
   if (!isNonCashVerifyMethod(order?.payment_method)) return false;
-  return ['paid', 'lunas', 'verified'].includes(pay) || Boolean(order?.payment_proof_url);
+  return Boolean(order?.payment_proof_url);
 };
 
 export async function createPaymentVerifyTask(tx: {
@@ -102,25 +108,36 @@ export async function completePaymentVerifyTasks(transactionId: string, receipt?
   }
 }
 
-export async function confirmTransactionPayment(opts: {
+export async function markInvoicePaid(opts: {
   transactionId: string;
-  proofUrl: string;
+  amount?: number;
+  proofUrl?: string;
   receipt?: string;
   agentName?: string;
   customerPhone?: string;
 }) {
+  const paidAt = new Date().toISOString();
   const { error } = await updateWithFallback(
     'transactions',
     [
       {
         payment_status: 'paid',
-        payment_proof_url: opts.proofUrl,
+        is_paid: true,
+        paid_at: paidAt,
+        paid_verified_by: opts.agentName || 'CS',
+        payment_proof_url: opts.proofUrl || undefined,
         status: 'Diterima'
       },
       {
         payment_status: 'paid',
+        is_paid: true,
+        paid_at: paidAt,
+        paid_verified_by: opts.agentName || 'CS',
         status: 'Diterima'
       },
+      { payment_status: 'paid', is_paid: true, status: 'Diterima' },
+      { payment_status: 'paid', status: 'Diterima' },
+      { is_paid: true, status: 'Diterima' },
       { status: 'Diterima' }
     ],
     { column: 'id', value: opts.transactionId }
@@ -130,16 +147,29 @@ export async function confirmTransactionPayment(opts: {
   await completePaymentVerifyTasks(opts.transactionId, opts.receipt);
 
   if (opts.customerPhone) {
+    const nominal = Number(opts.amount || 0).toLocaleString('id-ID');
     await insertChatMessage({
       customer_phone: opts.customerPhone,
       order_id: opts.transactionId,
       sender_type: 'cs',
       sender_name: opts.agentName || 'CS',
-      message: `Pembayaran ${opts.receipt || ''} sudah dikonfirmasi. Cucian siap diproses kasir.`.trim(),
-      attachment_url: opts.proofUrl,
-      attachment_type: 'image'
+      message: `Terima kasih! Pembayaran Anda sebesar Rp ${nominal} telah diverifikasi oleh CS.`,
+      attachment_url: opts.proofUrl || null,
+      image_url: opts.proofUrl || null,
+      attachment_type: opts.proofUrl ? 'image' : null
     });
   }
 
   return { error: null };
+}
+
+export async function confirmTransactionPayment(opts: {
+  transactionId: string;
+  proofUrl?: string;
+  receipt?: string;
+  agentName?: string;
+  customerPhone?: string;
+  amount?: number;
+}) {
+  return markInvoicePaid(opts);
 }

@@ -2,7 +2,7 @@
 import { useState, useRef, useEffect } from "react";
 import { laundryFallbackReply } from "@/lib/laundryFaq";
 import { insertChatMessage } from "@/lib/csChat";
-import { uploadProofFile } from "@/lib/uploadProof";
+import { uploadChatAttachment } from "@/lib/uploadProof";
 import ChatAttachment from "@/components/ChatAttachment";
 
 interface AIChatWidgetProps {
@@ -13,13 +13,34 @@ interface Message {
   sender: "user" | "ai";
   text: string;
   attachment_url?: string;
+  image_url?: string;
   attachment_type?: string;
 }
+
+const FAB_SIZE = 48;
+const FAB_MARGIN = 12;
+const POS_KEY = "laundry_chat_fab_pos";
+
+const clampFab = (x: number, y: number) => {
+  if (typeof window === "undefined") return { x, y };
+  const maxX = Math.max(FAB_MARGIN, window.innerWidth - FAB_SIZE - FAB_MARGIN);
+  const maxY = Math.max(FAB_MARGIN, window.innerHeight - FAB_SIZE - FAB_MARGIN - 56);
+  return {
+    x: Math.min(maxX, Math.max(FAB_MARGIN, x)),
+    y: Math.min(maxY, Math.max(FAB_MARGIN, y)),
+  };
+};
+
+const defaultFabPos = () => {
+  if (typeof window === "undefined") return { x: 16, y: 400 };
+  return clampFab(window.innerWidth - FAB_SIZE - 16, window.innerHeight - FAB_SIZE - 96);
+};
 
 export default function AIChatWidget({ customerPhone = "" }: AIChatWidgetProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
+  const [fabPos, setFabPos] = useState<{ x: number; y: number } | null>(null);
   const [chatHistory, setChatHistory] = useState<Message[]>([
     {
       sender: "ai",
@@ -28,6 +49,32 @@ export default function AIChatWidget({ customerPhone = "" }: AIChatWidgetProps) 
   ]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const dragging = useRef(false);
+  const moved = useRef(false);
+  const dragOrigin = useRef({ px: 0, py: 0, x: 0, y: 0 });
+  const lastPosRef = useRef<{ x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(POS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Number.isFinite(parsed?.x) && Number.isFinite(parsed?.y)) {
+          setFabPos(clampFab(parsed.x, parsed.y));
+          return;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    setFabPos(defaultFabPos());
+  }, []);
+
+  useEffect(() => {
+    const onResize = () => setFabPos((prev) => (prev ? clampFab(prev.x, prev.y) : defaultFabPos()));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -175,19 +222,75 @@ export default function AIChatWidget({ customerPhone = "" }: AIChatWidgetProps) 
     );
   };
 
+  const onFabPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (e.button !== 0 && e.pointerType === "mouse") return;
+    dragging.current = true;
+    moved.current = false;
+    const current = fabPos || defaultFabPos();
+    dragOrigin.current = { px: e.clientX, py: e.clientY, x: current.x, y: current.y };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const onFabPointerMove = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (!dragging.current) return;
+    const dx = e.clientX - dragOrigin.current.px;
+    const dy = e.clientY - dragOrigin.current.py;
+    if (Math.abs(dx) + Math.abs(dy) > 8) moved.current = true;
+    if (moved.current) {
+      const next = clampFab(dragOrigin.current.x + dx, dragOrigin.current.y + dy);
+      lastPosRef.current = next;
+      setFabPos(next);
+    }
+  };
+
+  const onFabPointerUp = () => {
+    dragging.current = false;
+    if (moved.current) {
+      const saved = lastPosRef.current || fabPos;
+      if (saved) {
+        try {
+          sessionStorage.setItem(POS_KEY, JSON.stringify(saved));
+        } catch {
+          /* ignore */
+        }
+      }
+      return;
+    }
+    setIsOpen(true);
+  };
+
+  const pos = fabPos || defaultFabPos();
+
   return (
-    <div className="fixed bottom-20 right-4 z-50">
+    <>
       {!isOpen && (
         <button
-          onClick={() => setIsOpen(true)}
-          className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2.5 rounded-full shadow-2xl flex items-center gap-2 transition-transform active:scale-95 border border-blue-400/30"
+          type="button"
+          title="Mulai Chat"
+          aria-label="Mulai Chat"
+          onPointerDown={onFabPointerDown}
+          onPointerMove={onFabPointerMove}
+          onPointerUp={onFabPointerUp}
+          onPointerCancel={() => {
+            dragging.current = false;
+          }}
+          style={{ left: pos.x, top: pos.y }}
+          className="fixed z-40 w-12 h-12 rounded-full bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-600/30 border border-white/20 flex items-center justify-center touch-none select-none"
         >
-          🎧 Tanya Customer Service
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+              d="M12 3a7 7 0 0 0-7 7v1.2c0 .6-.2 1.1-.6 1.5L3.2 14A1 1 0 0 0 4 16h1.2c.4 0 .8.2 1 .5.7 1 1.9 1.8 3.3 2.2V20h4.9v-1.3c1.4-.4 2.6-1.2 3.3-2.2.2-.3.6-.5 1-.5H20a1 1 0 0 0 .8-1.6l-1.2-1.3c-.4-.4-.6-.9-.6-1.5V10a7 7 0 0 0-7-7Z"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinejoin="round"
+            />
+          </svg>
+          <span className="sr-only">Mulai Chat</span>
         </button>
       )}
 
       {isOpen && (
-        <div className="w-[340px] sm:w-[380px] h-[480px] bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl flex flex-col overflow-hidden text-white">
+        <div className="fixed bottom-24 right-3 z-40 w-[min(380px,calc(100vw-1.5rem))] h-[min(480px,calc(100vh-8rem))] bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl flex flex-col overflow-hidden text-white">
           <div className="p-3.5 bg-slate-800 border-b border-slate-700 flex justify-between items-center">
             <div className="flex items-center gap-2.5">
               <span className="text-xl">🤖</span>
@@ -220,7 +323,7 @@ export default function AIChatWidget({ customerPhone = "" }: AIChatWidgetProps) 
                   {msg.sender === "user" ? (
                     <div>
                       <p className="whitespace-pre-line leading-relaxed">{msg.text}</p>
-                      <ChatAttachment message={msg} />
+                      <ChatAttachment message={{ ...msg, image_url: msg.image_url || msg.attachment_url }} />
                     </div>
                   ) : (
                     renderMessageContent(msg.text)
@@ -282,12 +385,12 @@ export default function AIChatWidget({ customerPhone = "" }: AIChatWidgetProps) 
                 e.target.value = "";
                 if (!file) return;
                 try {
-                  const url = await uploadProofFile(file, `chat_widget_${customerPhone || "anon"}`);
+                  const url = await uploadChatAttachment(file, `chat_widget_${customerPhone || "anon"}`);
                   const type = file.type.includes("pdf") ? "pdf" : "image";
                   const caption = file.type.includes("pdf") ? "📄 Invoice / file terlampir" : "📷 Bukti pembayaran terlampir";
                   setChatHistory((prev) => [
                     ...prev,
-                    { sender: "user", text: caption, attachment_url: url, attachment_type: type },
+                    { sender: "user", text: caption, attachment_url: url, image_url: url, attachment_type: type },
                     {
                       sender: "ai",
                       text: "Bukti sudah kami terima. CS akan cek dan konfirmasi pembayaran Kak.",
@@ -299,6 +402,7 @@ export default function AIChatWidget({ customerPhone = "" }: AIChatWidgetProps) 
                       sender_type: "customer",
                       message: caption,
                       attachment_url: url,
+                      image_url: url,
                       attachment_type: type,
                     });
                   }
@@ -334,6 +438,6 @@ export default function AIChatWidget({ customerPhone = "" }: AIChatWidgetProps) 
           </form>
         </div>
       )}
-    </div>
+    </>
   );
 }

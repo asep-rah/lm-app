@@ -7,6 +7,11 @@ import RoleTaskInbox from '@/components/RoleTaskInbox';
 import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
 import { getStaffSession } from '@/lib/staffSession';
 import { insertChatMessage, threadKeyOf } from '@/lib/csChat';
+import { sendInvoiceToLiveChat } from '@/lib/chatInvoice';
+import { isPaymentLocked, markInvoicePaid } from '@/lib/paymentVerify';
+import { toast } from '@/lib/toast';
+import ChatInvoiceCard from '@/components/ChatInvoiceCard';
+import { visibleChatText } from '@/components/ChatAttachment';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -216,9 +221,34 @@ export default function CSDashboard() {
     openWhatsApp(p.customer_phone, msg);
   };
 
-  const handleSendBillConfirm = (t: any) => {
-    const msg = `Halo Kak ${t.customer_name}! CS Laundrivery di sini 😊\n\nCucian Anda di cabang *${t.outlets?.name}* dengan Resi *${t.receipt_number}* telah selesai ditimbang dan divalidasi.\n\n*Rincian Tagihan:*\n• Layanan: ${t.service_type}\n• Berat/Jml: ${t.weight_kg > 0 ? t.weight_kg + ' Kg' : ''} ${t.pcs_count > 0 ? t.pcs_count + ' Pcs' : ''}\n• Total Tagihan: *Rp ${Number(t.amount).toLocaleString('id-ID')}*\n\nSilakan cek status dan selesaikan pembayaran melalui aplikasi: https://lm-coral.vercel.app/customer/dashboard\n\nTerima kasih! 🙏`;
-    openWhatsApp(t.customer_phone || t.receipt_number, msg);
+  const handleSendBillConfirm = async (t: any) => {
+    const agent = getStaffSession();
+    if (!t.customer_phone) return alert('⚠️ Nomor pelanggan tidak ditemukan!');
+    const { error } = await sendInvoiceToLiveChat(t, agent.name);
+    if (error) {
+      alert('❌ Gagal kirim tagihan ke live chat: ' + error.message);
+      return;
+    }
+    toast('Tagihan terkirim ke live chat pelanggan.', 'ok');
+    alert('✅ Tagihan & QRIS dikirim ke live chat pelanggan.');
+  };
+
+  const handleMarkBillPaid = async (t: any) => {
+    const agent = getStaffSession();
+    if (!confirm(`Tandai tagihan ${t.receipt_number} sudah terbayar?`)) return;
+    const { error } = await markInvoicePaid({
+      transactionId: t.id,
+      amount: Number(t.amount) || 0,
+      receipt: t.receipt_number,
+      agentName: agent.name,
+      customerPhone: t.customer_phone
+    });
+    if (error) {
+      alert('❌ Gagal konfirmasi pembayaran: ' + error.message);
+      return;
+    }
+    toast('Pembayaran diverifikasi. POS terbuka untuk Sortir.', 'ok');
+    loadCSData();
   };
 
   const handleSendFinishNotice = (t: any) => {
@@ -639,7 +669,7 @@ export default function CSDashboard() {
                       <th className="p-3">Layanan & Berat</th>
                       <th className="p-3">Status</th>
                       <th className="p-3 text-right">Total Tagihan</th>
-                      <th className="p-3 text-center">Aksi CS (1-Click WA)</th>
+                      <th className="p-3 text-center">Aksi CS</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -673,14 +703,23 @@ export default function CSDashboard() {
                           Rp {Number(t.amount).toLocaleString('id-ID')}
                         </td>
                         <td className="p-3">
-                          <div className="flex justify-center gap-1.5">
+                          <div className="flex justify-center gap-1.5 flex-wrap">
                             <button
                               onClick={() => handleSendBillConfirm(t)}
-                              title="Kirim Rincian Tagihan Final"
+                              title="Kirim tagihan ke live chat"
                               className="bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 font-bold px-2.5 py-1 rounded-lg text-[10px] transition"
                             >
                               📲 Kirim Tagihan
                             </button>
+                            {isPaymentLocked(t) && (
+                              <button
+                                onClick={() => handleMarkBillPaid(t)}
+                                title="Tandai tagihan sudah dibayar"
+                                className="bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200 font-bold px-2.5 py-1 rounded-lg text-[10px] transition"
+                              >
+                                ✅ Tagihan Sudah Terbayarkan
+                              </button>
+                            )}
                             {(t.status === 'Selesai' || t.status === 'Siap Diambil') && (
                               <button
                                 onClick={() => handleSendFinishNotice(t)}
@@ -731,7 +770,8 @@ export default function CSDashboard() {
                         : 'bg-white border border-slate-200 text-slate-800 rounded-bl-none shadow-sm'
                     }`}
                   >
-                    <p>{msg.message}</p>
+                    <p className="whitespace-pre-wrap">{visibleChatText(msg)}</p>
+                    <ChatInvoiceCard message={msg} />
                     <span className="text-[9px] text-slate-400 mt-1 block text-right">
                       {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </span>

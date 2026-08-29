@@ -5,6 +5,7 @@ import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
 import { getStaffSession, isOutletLockedRole } from '@/lib/staffSession';
 import { updateWithFallback } from '@/lib/safeWrite';
+import { isPickupConvertedToPos } from '@/lib/pickupUpdates';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -77,6 +78,9 @@ export default function AdminPickupsPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'pickup_orders' }, () => {
         fetchPickups();
       })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
+        fetchPickups();
+      })
       .subscribe();
 
     return () => {
@@ -121,9 +125,10 @@ export default function AdminPickupsPage() {
 
   const arrivedAtOutlet = pickups.filter(
     (p) =>
-      p.status === 'Telah Tiba di Outlet' ||
-      p.status === 'Tiba di Outlet' ||
-      p.status === 'Selesai Jemput'
+      !isPickupConvertedToPos(p) &&
+      (p.status === 'Telah Tiba di Outlet' ||
+        p.status === 'Tiba di Outlet' ||
+        p.status === 'Selesai Jemput')
   );
 
   return (

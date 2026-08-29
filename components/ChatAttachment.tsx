@@ -1,13 +1,21 @@
 'use client';
 
+import { stripInvoiceTag } from '@/lib/chatInvoice';
+
 const IMAGE_RE = /\.(jpe?g|png|gif|webp|heic|bmp)(\?|$)/i;
 const URL_RE = /https?:\/\/[^\s]+/i;
+const DATA_IMAGE_RE = /data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+/;
 
 export function attachmentFromMessage(m: any): { url: string; type: string } | null {
-  const url = String(m?.attachment_url || '').trim();
+  const url = String(m?.image_url || m?.attachment_url || '').trim();
   const type = String(m?.attachment_type || '').toLowerCase();
-  if (url) return { url, type: type || (IMAGE_RE.test(url) ? 'image' : 'file') };
-  const text = String(m?.message || '');
+  if (url) {
+    const isImg = type.includes('image') || url.startsWith('data:image') || IMAGE_RE.test(url);
+    return { url, type: isImg ? 'image' : type || 'file' };
+  }
+  const text = stripInvoiceTag(String(m?.message || ''));
+  const data = text.match(DATA_IMAGE_RE);
+  if (data) return { url: data[0], type: 'image' };
   const found = text.match(URL_RE);
   if (!found) return null;
   const href = found[0];
@@ -18,7 +26,7 @@ export function visibleChatText(m: any) {
   const att = attachmentFromMessage(m);
   let text = String(m?.message || '');
   if (att?.url) text = text.replace(att.url, '').trim();
-  return text;
+  return stripInvoiceTag(text);
 }
 
 export default function ChatAttachment({
@@ -30,7 +38,7 @@ export default function ChatAttachment({
 }) {
   const att = attachmentFromMessage(message);
   if (!att) return null;
-  const isImg = att.type.includes('image') || IMAGE_RE.test(att.url);
+  const isImg = att.type.includes('image') || att.url.startsWith('data:image') || IMAGE_RE.test(att.url);
   if (isImg) {
     return (
       <button
