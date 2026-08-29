@@ -203,6 +203,8 @@ const handleApproveExpense = async (expenseId: string) => {
     }
     setCurrentUserRole(role);
     setCurrentUserName(user.name);
+    const tab = new URLSearchParams(window.location.search).get('tab');
+    if (tab === 'history' || tab === 'transaksi') setActiveTab('history');
   }, []);
 
   const handleLogout = () => {
@@ -683,7 +685,7 @@ setDeleteRequests(delData);
           <OwnerExecNav active="main" />
           <div className="flex w-full md:w-auto overflow-x-auto pb-2 md:pb-0 gap-2 hide-scrollbar items-center">
           <button onClick={() => setActiveTab('pnl')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'pnl' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>📊 Laporan PnL</button>
-          <button onClick={() => setActiveTab('history')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'history' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>📦 History 1 Thn</button>
+          <button onClick={() => setActiveTab('history')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'history' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>📦 Transaksi</button>
           <button onClick={() => setActiveTab('loans')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'loans' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>💸 Kasbon Crew</button>
 
           {isOwnerRole(currentUserRole) && (

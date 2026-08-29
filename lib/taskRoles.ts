@@ -27,6 +27,19 @@ export const inboxRolesFor = (loginRole: string): string[] => {
   return r ? [r] : [];
 };
 
+/** Role tujuan tugas (target_role atau assigned_to_role). */
+export const taskTargetRole = (item: any) =>
+  String(item?.target_role || item?.assigned_to_role || '').toLowerCase().trim();
+
+/** Owner melihat semua; role lain hanya tugas yang ditujukan ke rolenya. */
+export const tasksVisibleForRole = (tasks: any[], loginRole: string) => {
+  const r = String(loginRole || '').toLowerCase().trim();
+  if (r === 'owner') return tasks;
+  const aliases = new Set(inboxRolesFor(r));
+  aliases.add(r);
+  return (tasks || []).filter((item) => aliases.has(taskTargetRole(item)));
+};
+
 export const kpiRoleOfTask = (assignedTo: any): string | null => {
   const a = String(assignedTo || '').toLowerCase().trim();
   for (const [key, aliases] of Object.entries(KPI_ROLE_ALIASES)) {

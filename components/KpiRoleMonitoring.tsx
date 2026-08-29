@@ -55,7 +55,7 @@ export default function KpiRoleMonitoring() {
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-5 gap-3">
         <div>
           <h3 className="text-lg font-black text-slate-900">
-            {allowedKeys === null ? 'Monitoring KPI 7 Role' : 'KPI Role Anda'}
+            Pencapaian KPI
           </h3>
           <p className="text-xs text-slate-400 mt-1">
             Skor = realisasi vs target {monthYear}

@@ -5,7 +5,7 @@ import Link from 'next/link';
 import OwnerExecNav from '@/components/OwnerExecNav';
 import { fetchRoleKpis, type KpiCard, type KpiMetricLine } from '@/lib/kpiMetrics';
 import { currentMonthYear } from '@/lib/kpiCatalog';
-import { canAccessSettings, canAccessKpiSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
+import { canAccessSettings, canAccessKpiSettings, homePathForRole, isOwnerRole, isWorkspaceRole, kpiKeysVisibleForRole } from '@/lib/staffSession';
 import StatusBadge from '@/components/ui/StatusBadge';
 
 const fmtHours = (h: number) => {
@@ -54,6 +54,7 @@ const targetDetailOf = (card: KpiCard) => {
 export default function OwnerKpiPage() {
   const [ready, setReady] = useState(false);
   const [canEditTargets, setCanEditTargets] = useState(false);
+  const [viewerRole, setViewerRole] = useState('');
   const [cards, setCards] = useState<KpiCard[]>([]);
   const [monthYear, setMonthYear] = useState(currentMonthYear());
   const [loading, setLoading] = useState(true);
@@ -74,6 +75,7 @@ export default function OwnerKpiPage() {
       return;
     }
     setCanEditTargets(canAccessKpiSettings(role));
+    setViewerRole(role);
     setReady(true);
   }, []);
 
@@ -83,7 +85,10 @@ export default function OwnerKpiPage() {
     setLoading(true);
     fetchRoleKpis(monthYear)
       .then((res) => {
-        if (!cancelled) setCards(res.cards);
+        if (!cancelled) {
+          const allowed = kpiKeysVisibleForRole(viewerRole);
+          setCards(allowed ? res.cards.filter((c) => allowed.includes(c.roleKey)) : res.cards);
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -91,7 +96,7 @@ export default function OwnerKpiPage() {
     return () => {
       cancelled = true;
     };
-  }, [ready, monthYear]);
+  }, [ready, monthYear, viewerRole]);
 
   const healthy = useMemo(() => cards.filter((c) => c.healthy).length, [cards]);
 
@@ -103,7 +108,7 @@ export default function OwnerKpiPage() {
         <div className="bg-white border border-slate-200/80 p-5 md:p-6 rounded-2xl shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div>
             <p className="text-[10px] font-bold uppercase tracking-widest text-sky-600">Owner Analytics</p>
-            <h1 className="text-2xl font-black text-slate-900 mt-0.5">Monitoring KPI 7 Role</h1>
+            <h1 className="text-2xl font-black text-slate-900 mt-0.5">Pencapaian KPI</h1>
             <p className="text-xs text-slate-400 mt-0.5">Capaian vs target per divisi · {monthYear}</p>
           </div>
           <div className="flex flex-col items-stretch md:items-end gap-2 w-full md:w-auto">
@@ -126,7 +131,7 @@ export default function OwnerKpiPage() {
 
         <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
           <div className="px-4 py-3 border-b border-slate-100 flex justify-between items-center">
-            <p className="text-xs font-bold text-slate-500">{healthy}/{cards.length || 7} role on target</p>
+            <p className="text-xs font-bold text-slate-500">{healthy}/{cards.length || 0} role on target</p>
             {loading && <p className="text-[10px] text-slate-400">Memuat…</p>}
           </div>
           <div className="overflow-x-auto">
@@ -142,7 +147,7 @@ export default function OwnerKpiPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {(cards.length ? cards : Array.from({ length: 7 })).map((card: any, i) => {
+                {(cards.length ? cards : Array.from({ length: Math.max(1, kpiKeysVisibleForRole(viewerRole)?.length || 7) })).map((card: any, i) => {
                   const sla = card?.roleKey ? slaStatusOf(card) : null;
                   return (
                     <tr key={card?.roleKey || i} className="hover:bg-slate-50">

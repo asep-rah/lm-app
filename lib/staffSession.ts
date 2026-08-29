@@ -94,12 +94,12 @@ export const homePathForRole = (role: string) => {
 };
 
 /**
- * Kartu KPI yang boleh dilihat role ini.
- * Owner/Head = semua; Supervisor = Kasir + Supervisor; lainnya = kartu sendiri.
+ * Baris Pencapaian KPI yang boleh dilihat role ini.
+ * Owner = semua 7 role; Supervisor = Supervisor Operasional + Kasir / POS; lainnya = role sendiri.
  */
 export const kpiKeysVisibleForRole = (role: string): string[] | null => {
   const r = String(role || '').toLowerCase().trim();
-  if (isOwnerRole(r) || isHeadManagementRole(r)) return null;
+  if (isOwnerRole(r)) return null;
   if (r === 'supervisor') return ['kasir', 'supervisor'];
   if (r === 'kasir' || r === 'pos') return ['kasir'];
   if (['cs', 'head_cs', 'cs_care', 'driver', 'courier', 'kurir'].includes(r)) return ['kurir_cs'];

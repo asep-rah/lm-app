@@ -14,6 +14,9 @@ import { roleLabelOf } from '@/lib/staffRoles';
 import { completeTaskWithSlaCheck } from '@/utils/taskSlaEvaluator';
 import HeadTaskDelegator from '@/components/HeadTaskDelegator';
 import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
+import FinanceWorkspacePanel from '@/components/FinanceWorkspacePanel';
+import RequisitionForm from '@/components/RequisitionForm';
+import { prAmount, prQty } from '@/lib/cmsRequisition';
 import { toast } from '@/lib/toast';
 import { updateWithFallback } from '@/lib/safeWrite';
 import {
@@ -50,6 +53,7 @@ export default function StaffWorkspace() {
   const [issues, setIssues] = useState<any[]>([]);
   const [unassignedChats, setUnassignedChats] = useState(0);
   const [outletCaps, setOutletCaps] = useState<any[]>([]);
+  const [outletNames, setOutletNames] = useState<Record<string, string>>({});
   const [capBusy, setCapBusy] = useState<string | null>(null);
   const [supNote, setSupNote] = useState('');
   const [supBusy, setSupBusy] = useState<string | null>(null);
@@ -93,6 +97,8 @@ export default function StaffWorkspace() {
       const { data: outs } = await supabase.from('outlets').select('id, name, is_overcapacity').order('name');
       setOutletCaps(outs || []);
     }
+    const { data: outs } = await supabase.from('outlets').select('id, name');
+    setOutletNames(Object.fromEntries((outs || []).map((o: any) => [o.id, o.name])));
     if (role === 'cs' || role === 'head_cs' || role === 'cs_care') {
       const { count } = await supabase
         .from('support_chat_sessions')
@@ -234,6 +240,9 @@ export default function StaffWorkspace() {
                 Analytics
               </Link>
             )}
+            <Link href="/history" className="text-[11px] font-semibold px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50">
+              Transaksi
+            </Link>
             {canAccessKpiSettings(role) && (
               <Link href="/owner/kpi-settings" className="text-[11px] font-semibold px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50">
                 KPI Settings
@@ -256,7 +265,13 @@ export default function StaffWorkspace() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-4 py-5 grid grid-cols-1 lg:grid-cols-12 gap-4">
+      <main className="max-w-6xl mx-auto px-4 py-5 space-y-4">
+        {(role === 'admin_ops' || role === 'admin') && (
+          <section className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+            <RequisitionForm employeeName={session.name} role={role} selectedOutlet={session.outletId || undefined} />
+          </section>
+        )}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
         <section className="lg:col-span-7 bg-white border border-slate-200/80 rounded-2xl shadow-[0_1px_2px_rgba(0,0,0,0.04)] overflow-hidden flex flex-col min-h-[70vh]">
           <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-3">
             <div>
@@ -296,6 +311,24 @@ export default function StaffWorkspace() {
                     </span>
                   </div>
                   {t.description && <p className="text-[12px] text-slate-500 mt-1 leading-relaxed">{t.description}</p>}
+                  <div className="mt-2 grid grid-cols-3 gap-1.5 text-[10px]">
+                    <div className="rounded-lg bg-slate-50 px-2 py-1">
+                      <p className="text-slate-400 font-bold uppercase">Qty</p>
+                      <p className="font-semibold text-slate-800">{prQty(t) || t.quantity || '—'}</p>
+                    </div>
+                    <div className="rounded-lg bg-slate-50 px-2 py-1">
+                      <p className="text-slate-400 font-bold uppercase">Outlet</p>
+                      <p className="font-semibold text-slate-800 truncate">{outletNames[t.outlet_id] || t.outlet_name || '—'}</p>
+                    </div>
+                    <div className="rounded-lg bg-slate-50 px-2 py-1">
+                      <p className="text-slate-400 font-bold uppercase">Budget</p>
+                      <p className="font-semibold text-slate-800">
+                        {prAmount(t) || Number(t.estimated_cost || t.amount || 0)
+                          ? `Rp ${Number(prAmount(t) || t.estimated_cost || t.amount || 0).toLocaleString('id-ID')}`
+                          : '—'}
+                      </p>
+                    </div>
+                  </div>
                   <p className="text-[10px] text-slate-400 mt-2">
                     {t.assigned_to_role}
                     {t.due_date ? ` · due ${new Date(t.due_date).toLocaleString('id-ID')}` : ''}
@@ -358,12 +391,12 @@ export default function StaffWorkspace() {
               </div>
             )}
 
-            {(role === 'finance' || role === 'head_finance') && (
-              <div className="space-y-3">
-                <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Financial entries</p>
-                <Link href="/expense" className="block text-center text-xs font-semibold py-2 rounded-lg bg-slate-900 text-white">
-                  Buka buku pengeluaran
-                </Link>
+            {(role === 'finance' || role === 'head_finance') && <FinanceWorkspacePanel />}
+
+            {(role === 'admin_ops' || role === 'admin') && (
+              <div className="space-y-2">
+                <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">CMS Approval & Fulfillment</p>
+                <p className="text-[11px] text-slate-500">Pending → Approved → Paid → Fulfilled. Export untuk log restock.</p>
               </div>
             )}
 
@@ -461,6 +494,7 @@ export default function StaffWorkspace() {
           </div>
           <KpiRoleMonitoring />
         </aside>
+        </div>
       </main>
     </div>
   );

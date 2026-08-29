@@ -11,17 +11,22 @@ import {
 import {
   PR_STATUS,
   cmsInsertPayload,
+  exportPurchaseRequestsCsv,
   isPrApprovedAwaiting,
+  isPrFulfilled,
   isPrPaid,
   isPrPending,
   prAmount,
   prDescription,
+  prQty,
   prReceiptUrl,
   prRequestedBy,
+  prStatusLabel,
   prTitle
 } from '@/lib/cmsRequisition';
 import { toast } from '@/lib/toast';
 import FileProofInput from '@/components/FileProofInput';
+import { updateWithFallback } from '@/lib/safeWrite';
 
 const formatRp = (n: any) => `Rp ${Number(n || 0).toLocaleString('id-ID')}`;
 
@@ -30,6 +35,7 @@ const statusBadge = (status: string) => {
   if (s === PR_STATUS.PENDING) return 'bg-amber-100 text-amber-800 border-amber-200';
   if (s === PR_STATUS.APPROVED) return 'bg-blue-100 text-blue-800 border-blue-200';
   if (s === PR_STATUS.PAID) return 'bg-emerald-100 text-emerald-800 border-emerald-200';
+  if (String(s).toLowerCase().includes('fulfil')) return 'bg-violet-100 text-violet-800 border-violet-200';
   if (s.toLowerCase().includes('reject')) return 'bg-rose-100 text-rose-800 border-rose-200';
   return 'bg-slate-100 text-slate-600 border-slate-200';
 };
@@ -290,6 +296,22 @@ export default function RequisitionForm({
     }
   };
 
+  const handleFulfill = async (req: any) => {
+    setBusyId(req.id);
+    const { error } = await updateWithFallback(
+      'purchase_requests',
+      [{ status: PR_STATUS.FULFILLED }, { status: 'Fulfilled' }],
+      { column: 'id', value: req.id }
+    );
+    setBusyId(null);
+    if (error) {
+      toast('Gagal menandai Fulfilled: ' + error.message, 'err');
+      return;
+    }
+    toast('Pengajuan ditandai Fulfilled.', 'ok');
+    loadRequests();
+  };
+
   const mine = requests.filter(
     (r) => prRequestedBy(r) === actorName || r.outlet_id === outletId
   );
@@ -407,10 +429,17 @@ export default function RequisitionForm({
           <div>
             <h3 className="text-sm font-black text-slate-900">Purchase Requisitions</h3>
             <p className="text-[11px] text-slate-400">
-              {pending.length} pending · {awaitingPay.length} awaiting pay · Paid menulis `expenses`
+              {pending.length} Pending · {awaitingPay.length} Approved · Paid / Fulfilled
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => exportPurchaseRequestsCsv(tableRows, 'pengajuan_cms')}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] px-3 py-2 rounded-xl"
+            >
+              EXPORT PENGAJUAN (CSV / EXCEL)
+            </button>
             <input
               type="search"
               placeholder="Cari judul, pemohon, status…"
@@ -448,7 +477,8 @@ export default function RequisitionForm({
                 <th className="p-2.5">Judul</th>
                 <th className="p-2.5">Outlet</th>
                 <th className="p-2.5">Kategori</th>
-                <th className="p-2.5 text-right">Nominal</th>
+                <th className="p-2.5 text-right">Qty</th>
+                <th className="p-2.5 text-right">Budget</th>
                 <th className="p-2.5">Status</th>
                 <th className="p-2.5 text-right">Aksi</th>
               </tr>
@@ -463,10 +493,11 @@ export default function RequisitionForm({
                   </td>
                   <td className="p-2.5 text-slate-600">{req.outlets?.name || '—'}</td>
                   <td className="p-2.5 text-slate-600">{req.category || '—'}</td>
+                  <td className="p-2.5 text-right font-bold">{prQty(req) || '—'}</td>
                   <td className="p-2.5 text-right font-black text-slate-900">{formatRp(prAmount(req))}</td>
                   <td className="p-2.5">
                     <span className={`px-2 py-0.5 rounded-full border text-[9px] font-bold ${statusBadge(req.status)}`}>
-                      {req.status}
+                      {prStatusLabel(req)}
                     </span>
                   </td>
                   <td className="p-2.5 text-right">
@@ -520,8 +551,23 @@ export default function RequisitionForm({
                           </button>
                         </>
                       )}
-                      {isPrPaid(req) && (
-                        <span className="text-[10px] text-emerald-600 font-bold">Logged to expenses</span>
+                      {isPrPaid(req) && !isPrFulfilled(req) && (
+                        <>
+                          <span className="text-[10px] text-emerald-600 font-bold">Logged to expenses</span>
+                          {canPay && (
+                            <button
+                              type="button"
+                              disabled={busyId === req.id}
+                              onClick={() => handleFulfill(req)}
+                              className="w-full bg-violet-600 text-white font-bold py-1.5 rounded-lg text-[10px]"
+                            >
+                              Tandai Fulfilled
+                            </button>
+                          )}
+                        </>
+                      )}
+                      {isPrFulfilled(req) && (
+                        <span className="text-[10px] text-violet-700 font-bold">Barang terpenuhi</span>
                       )}
                     </div>
                   </td>

@@ -6,7 +6,7 @@ import HeadTaskDelegator from '@/components/HeadTaskDelegator';
 import SupervisorComplaintPanel from '@/components/SupervisorComplaintPanel';
 import { supabase } from '@/lib/supabaseClient';
 import { getStaffSession, canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
-import { isTaskCompleted, isTaskOverdueOpen } from '@/lib/taskRoles';
+import { isTaskCompleted, isTaskOverdueOpen, tasksVisibleForRole } from '@/lib/taskRoles';
 import { completeTaskWithSlaCheck } from '@/utils/taskSlaEvaluator';
 import StatusBadge from '@/components/ui/StatusBadge';
 
@@ -37,7 +37,8 @@ export default function OwnerDelegasiPage() {
       setTasks([]);
       return;
     }
-    setTasks(data || []);
+    const viewerRole = String(role || getStaffSession().role || '').toLowerCase();
+    setTasks(tasksVisibleForRole(data || [], viewerRole));
   };
 
   useEffect(() => {
@@ -147,7 +148,7 @@ export default function OwnerDelegasiPage() {
                         <p className="font-black text-slate-900">{t.title || '—'}</p>
                         {t.description ? <p className="text-[11px] text-slate-500 mt-0.5 max-w-md whitespace-normal">{t.description}</p> : null}
                       </td>
-                      <td className="p-3 font-bold uppercase text-indigo-700">{t.assigned_to_role || '—'}</td>
+                      <td className="p-3 font-bold uppercase text-indigo-700">{t.target_role || t.assigned_to_role || '—'}</td>
                       <td className="p-3">
                         <p className="font-semibold text-slate-800">
                           {t.due_date ? new Date(t.due_date).toLocaleString('id-ID') : '—'}
