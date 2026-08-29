@@ -326,8 +326,12 @@ export default function Dashboard() {
         id: m.id, 
         date: m.created_at, 
         category: 'members', 
-        title: `Member ${m.package_name || ''}`, 
-        desc: `No. WA: ${m.customer_phone || '-'} (${m.order_type || 'Offline'})`, 
+        title: String(m.package_name || '').toLowerCase().includes('top up')
+          ? String(m.package_name)
+          : `Member ${m.package_name || ''}`, 
+        desc: String(m.package_name || '').toLowerCase().includes('top up')
+          ? `QRIS Mayar · ${m.customer_phone || '-'} · LUNAS`
+          : `No. WA: ${m.customer_phone || '-'} (${m.order_type || 'Offline'})`, 
         amount: Number(m.price) || 0, 
         outlet: m.outlet_id 
       }));
@@ -400,7 +404,15 @@ export default function Dashboard() {
       filteredMems.forEach((m) => { 
         const amt = Number(m.price) || 0; inc += amt;
         if (m.order_type === 'Online') onlineInc += amt; else offlineInc += amt;
-        combinedData.push({ date: m.created_at, type: 'Income', category: 'Membership', desc: `Paket ${m.package_name} (${m.customer_phone}) - ${m.order_type || 'Offline'}`, amount: amt }); 
+        combinedData.push({
+          date: m.created_at,
+          type: 'Income',
+          category: String(m.package_name || '').toLowerCase().includes('top up') ? 'Top Up Deposit' : 'Membership',
+          desc: String(m.package_name || '').toLowerCase().includes('top up')
+            ? `${m.package_name} · QRIS Mayar (${m.customer_phone})`
+            : `Paket ${m.package_name} (${m.customer_phone}) - ${m.order_type || 'Offline'}`,
+          amount: amt
+        }); 
       });
 
       filteredExps.forEach((e) => { 

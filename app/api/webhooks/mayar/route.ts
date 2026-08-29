@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { insertChatMessage } from '@/lib/csChat';
 import { completePaymentVerifyTasks, gatewayPaidAttempts } from '@/lib/paymentVerify';
 import { isMayarPaidEvent, mayarWebhookRefs } from '@/lib/mayar';
+import { creditDepositTopup, depositPackageOf, findDepositTopup } from '@/lib/depositTopup';
 
 export const dynamic = 'force-dynamic';
 
@@ -65,32 +66,78 @@ const applyPaid = async (tx: any, agentName: string) => {
 
 export async function POST(req: Request) {
   try {
-    const secret = process.env.MAYAR_WEBHOOK_SECRET;
-    if (secret) {
-      const header =
-        req.headers.get('x-mayar-signature') ||
-        req.headers.get('x-callback-token') ||
-        req.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
-      if (header !== secret) {
+    const expected = process.env.MAYAR_WEBHOOK_TOKEN || process.env.MAYAR_WEBHOOK_SECRET || '';
+    const header =
+      req.headers.get('x-mayar-signature') ||
+      req.headers.get('x-callback-token') ||
+      req.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ||
+      '';
+    const isProd = process.env.NODE_ENV === 'production';
+    if (isProd) {
+      if (!expected || header !== expected) {
         return NextResponse.json({ error: 'Unauthorized webhook' }, { status: 401 });
       }
+    } else if (expected && header !== expected) {
+      return NextResponse.json({ error: 'Unauthorized webhook' }, { status: 401 });
     }
 
     const body = await req.json().catch(() => ({}));
+    if (isProd && body?.simulate) {
+      return NextResponse.json({ error: 'Simulasi dinonaktifkan' }, { status: 403 });
+    }
     if (!isMayarPaidEvent(body) && !body?.simulate) {
       return NextResponse.json({ status: 'ignored', event: body?.event || null });
     }
 
     const refs = mayarWebhookRefs(body);
     const tx = await findTransaction(refs, body.transactionId || body?.data?.transactionId);
-    if (!tx) {
-      return NextResponse.json({ error: 'Transaksi tidak ditemukan', refs }, { status: 404 });
+    if (tx) {
+      const { error } = await applyPaid(tx, body.simulate ? 'Mayar Mock' : 'Mayar QRIS');
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({ status: 'success', transactionId: tx.id, is_paid: true });
     }
 
-    const { error } = await applyPaid(tx, body.simulate ? 'Mayar Mock' : 'Mayar QRIS');
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    const topup = await findDepositTopup(supabase, {
+      topupId: body.topupId || body?.data?.topupId,
+      paymentId: refs.paymentId,
+      receipt: refs.receipt,
+      mobile: refs.mobile || body.customerPhone
+    });
+    if (topup) {
+      const { error, already, balance } = await creditDepositTopup(supabase, topup, {
+        agentName: body.simulate ? 'Mayar Mock' : 'Mayar QRIS'
+      });
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({
+        status: 'success',
+        type: 'deposit',
+        topupId: topup.id,
+        already: !!already,
+        balance
+      });
+    }
 
-    return NextResponse.json({ status: 'success', transactionId: tx.id, is_paid: true });
+    const desc = `${refs.data?.description || ''} ${refs.data?.productName || ''} ${body?.description || ''}`;
+    const pkg = depositPackageOf(desc) || depositPackageOf(refs.receipt);
+    if (pkg && (refs.mobile || body.customerPhone)) {
+      const { error, balance } = await creditDepositTopup(
+        supabase,
+        {
+          customer_phone: refs.mobile || body.customerPhone,
+          customer_name: refs.data?.customerName || 'Pelanggan',
+          package_name: pkg.key,
+          amount: refs.amount || pkg.pay,
+          balance_added: pkg.credit,
+          mayar_payment_id: refs.paymentId,
+          status: 'PENDING'
+        },
+        { agentName: body.simulate ? 'Mayar Mock' : 'Mayar QRIS' }
+      );
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({ status: 'success', type: 'deposit', balance });
+    }
+
+    return NextResponse.json({ error: 'Transaksi / top-up tidak ditemukan', refs }, { status: 404 });
   } catch (err: any) {
     console.error('Mayar webhook:', err);
     return NextResponse.json({ error: err?.message || 'Webhook error' }, { status: 500 });

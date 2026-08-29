@@ -19,6 +19,7 @@ import FileProofInput from '@/components/FileProofInput';
 import { createPaymentVerifyTask, isCsVerifiedPaid, isNonCashVerifyMethod, isPaymentLocked, PENDING_PAY_STATUS } from '@/lib/paymentVerify';
 import { sendInvoiceToLiveChat } from '@/lib/chatInvoice';
 import { simulateMayarAutoPay } from '@/lib/mayar';
+import { creditCustomerDeposit, decrementCustomerDeposit } from '@/lib/depositTopup';
 import { toast } from '@/lib/toast';
 import {
   classifyQueueOrder,
@@ -49,6 +50,16 @@ const cleanPhone = (phoneStr: string) => {
   let cleaned = phoneStr.trim().replace(/\D/g, '');
   if (cleaned.startsWith('0')) cleaned = '62' + cleaned.slice(1);
   return cleaned;
+};
+
+const UNPAID_HANDOVER_MSG = 'Transaksi belum lunas. Selesaikan pembayaran sebelum penyerahan.';
+
+const blockUnpaidHandover = (order: any) => {
+  if (order?.is_paid === false || isPaymentLocked(order)) {
+    toast(UNPAID_HANDOVER_MSG, 'warn');
+    return true;
+  }
+  return false;
 };
 
 const getDistanceInMeters = (lat1: number, lon1: number, lat2: number, lon2: number) => {
@@ -945,7 +956,15 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       ]);
       let combinedHistory: any[] = [];
       txHist?.forEach((t: any) => combinedHistory.push({ type: 'Cucian', title: `${t.service_type} (${t.receipt_number})`, amount: t.amount, date: t.created_at, status: t.status }));
-      memHist?.forEach((m: any) => combinedHistory.push({ type: 'Top-Up Member', title: `Paket ${m.package_name} (+Rp ${Number(m.balance_added).toLocaleString('id-ID')})`, amount: m.price, date: m.created_at, status: 'Berhasil' }));
+      memHist?.forEach((m: any) => combinedHistory.push({
+        type: String(m.package_name || '').toLowerCase().includes('top up') ? 'Top Up Deposit' : 'Top-Up Member',
+        title: String(m.package_name || '').toLowerCase().includes('top up')
+          ? `${m.package_name} · QRIS Mayar (+Rp ${Number(m.balance_added).toLocaleString('id-ID')})`
+          : `Paket ${m.package_name} (+Rp ${Number(m.balance_added).toLocaleString('id-ID')})`,
+        amount: m.price,
+        date: m.created_at,
+        status: 'LUNAS'
+      }));
       combinedHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       setCustomerHistory(combinedHistory);
     }
@@ -1213,15 +1232,6 @@ const handleApplyLoan = async (e: React.FormEvent) => {
 
     setIsSubmitting(true);
 
-    if (depositDeductionAmount > 0 && normalizedPhone) {
-      const { data: custData } = await supabase.from('customers').select('deposit_balance').eq('phone', normalizedPhone).limit(1);
-      const currentBal = Number(custData?.[0]?.deposit_balance) || 0;
-      const updatedBalance = currentBal - depositDeductionAmount;
-
-      await supabase.from('customers').update({ deposit_balance: updatedBalance }).eq('phone', normalizedPhone);
-      setCustomerDeposit(updatedBalance);
-    }
-
     const generatedResi = 'TRX-' + Math.floor(100000 + Math.random() * 900000);
 
     let primaryServiceLabel = selectedServiceInput || serviceType || 'Cuci Kering Gosok';
@@ -1280,6 +1290,16 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       newTx = retry.data;
       error = retry.error;
     }
+    let nextDepositBal: number | null = null;
+    if (!error && newTx && depositDeductionAmount > 0 && normalizedPhone) {
+      const deducted = await decrementCustomerDeposit(supabase as any, normalizedPhone, depositDeductionAmount);
+      if (deducted.error) {
+        toast(`Nota tersimpan, tetapi potong deposit gagal: ${deducted.error.message}`, 'err');
+      } else {
+        nextDepositBal = deducted.balance;
+        setCustomerDeposit(deducted.balance);
+      }
+    }
     if (!error && newTx) {
       if (needsPayVerify) {
         await updateWithFallback(
@@ -1317,7 +1337,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
         customer_phone: customerPhone || null,
         outletName: outletName, 
         outletPhone: curOutletPhone,
-        remainingDeposit: depositDeductionAmount > 0 ? (customerDeposit! - depositDeductionAmount) : null, 
+        remainingDeposit: nextDepositBal != null ? nextDepositBal : (depositDeductionAmount > 0 ? customerDeposit : null), 
         created_at: newTx.created_at 
       });
       
@@ -1387,15 +1407,28 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     else if (memberPackage === 'Platinum') { price = 900000; balanceAdded = 1000000; commission = 20000; }
 
     const { data: existingCust } = await supabase.from('customers').select('*').eq('phone', normalizedPhone).limit(1);
-    let commissionOwner = employeeName; let newBalance = balanceAdded;
-
+    let commissionOwner = employeeName;
     if (existingCust && existingCust.length > 0) {
       commissionOwner = existingCust[0].registered_by || employeeName;
-      newBalance = (Number(existingCust[0].deposit_balance) || 0) + balanceAdded;
-      await supabase.from('customers').update({ deposit_balance: newBalance, name: memberName.trim() }).eq('phone', normalizedPhone);
-    } else {
-      await supabase.from('customers').insert([{ phone: normalizedPhone, name: memberName.trim(), deposit_balance: newBalance, registered_by: employeeName }]);
     }
+
+    const credited = await creditCustomerDeposit(
+      supabase as any,
+      normalizedPhone,
+      balanceAdded,
+      `pos-member-${normalizedPhone}-${Date.now()}`
+    );
+    if (credited.error) {
+      alert('❌ Gagal kredit deposit: ' + credited.error.message);
+      setIsSubmitting(false);
+      return;
+    }
+    const newBalance = Number(credited.balance ?? balanceAdded);
+    const targetPhone = existingCust?.[0]?.phone || normalizedPhone;
+    await supabase.from('customers').update({
+      name: memberName.trim(),
+      ...(existingCust?.[0] ? {} : { registered_by: employeeName })
+    }).eq('phone', targetPhone);
 
     const { error: logErr } = await supabase.from('membership_logs').insert([{ outlet_id: selectedOutlet, processed_by: employeeName, commission_owner: commissionOwner, customer_phone: normalizedPhone, package_name: memberPackage, price: price, balance_added: balanceAdded, commission: commission, order_type: memberOrderType }]);
     if (!logErr) {
@@ -1686,6 +1719,7 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
   const handleSubmitRack = async () => {
     const order = selectedOrderForRack;
     if (!order?.id) return;
+    if (blockUnpaidHandover(order)) return;
     if (selectedOutlet && order.outlet_id && String(order.outlet_id) !== String(selectedOutlet)) {
       alert('Pesanan ini milik outlet lain. Kasir hanya dapat memproses pesanan cabang sendiri.');
       return;
@@ -1882,6 +1916,7 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
   };
 
   const handlePickupFinish = async (order: any) => {
+    if (blockUnpaidHandover(order)) return;
     if (selectedOutlet && order.outlet_id && String(order.outlet_id) !== String(selectedOutlet)) {
       alert('Pesanan ini milik outlet lain. Kasir hanya dapat memproses pesanan cabang sendiri.');
       return;
@@ -2776,7 +2811,7 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
                     {customerHistory.map((item, idx) => (
                       <div key={idx} className="bg-white p-2 rounded-lg border border-slate-100 flex justify-between items-center text-[10px]">
                         <div>
-                          <span className={`font-bold px-1.5 py-0.5 rounded text-[8px] mr-1 ${item.type === 'Top-Up Member' ? 'bg-purple-100 text-purple-700' : 'bg-emerald-100 text-emerald-700'}`}>{item.type}</span>
+                          <span className={`font-bold px-1.5 py-0.5 rounded text-[8px] mr-1 ${item.type === 'Top-Up Member' || item.type === 'Top Up Deposit' ? 'bg-purple-100 text-purple-700' : 'bg-emerald-100 text-emerald-700'}`}>{item.type}</span>
                           <span className="font-semibold text-slate-700">{item.title}</span><span className="block text-[8px] text-slate-400">{new Date(item.date).toLocaleDateString('id-ID')}</span>
                         </div>
                         <span className="font-bold text-slate-800">Rp {Number(item.amount).toLocaleString('id-ID')}</span>

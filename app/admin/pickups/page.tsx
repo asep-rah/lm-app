@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
-import { getStaffSession, isOutletLockedRole } from '@/lib/staffSession';
+import { getStaffSession, isCsRole, isOutletLockedRole } from '@/lib/staffSession';
 import { updateWithFallback } from '@/lib/safeWrite';
 import { isPickupConvertedToPos } from '@/lib/pickupUpdates';
 
@@ -17,7 +17,10 @@ export default function AdminPickupsPage() {
   const [outlets, setOutlets] = useState<any[]>([]);
   const [selectedOutlet, setSelectedOutlet] = useState<string>('');
   const [loading, setLoading] = useState(true);
-  const [currentUserRole, setCurrentUserRole] = useState<string>('kasir');
+  const [currentUserRole, setCurrentUserRole] = useState<string>(() => {
+    if (typeof window === 'undefined') return 'kasir';
+    return getStaffSession().role || localStorage.getItem('user_role') || 'kasir';
+  });
 
   const fetchPickups = async () => {
     setLoading(true);
@@ -143,7 +146,11 @@ export default function AdminPickupsPage() {
             </h1>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Role Akses: <span className="text-emerald-400 font-bold uppercase tracking-wider">KASIR / DRIVER</span> | Live Monitoring Kanban Board
+            Role Akses:{' '}
+            <span className="text-emerald-400 font-bold uppercase tracking-wider">
+              {isCsRole(currentUserRole) ? currentUserRole.replace('_', ' ') : 'KASIR / DRIVER'}
+            </span>{' '}
+            | Live Monitoring Kanban Board
           </p>
         </div>
 
@@ -167,12 +174,21 @@ export default function AdminPickupsPage() {
             ))}
           </select>
 
-          <Link
-            href="/pos"
-            className="bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-black px-5 py-2.5 rounded-2xl text-xs shadow-lg shadow-emerald-500/20 transition-all whitespace-nowrap active:scale-95"
-          >
-            Portal Kasir ➔
-          </Link>
+          {isCsRole(currentUserRole) ? (
+            <Link
+              href="/cs"
+              className="bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-600 hover:to-indigo-700 text-white font-black px-5 py-2.5 rounded-2xl text-xs shadow-lg shadow-sky-500/20 transition-all whitespace-nowrap active:scale-95"
+            >
+              Workspace CS ➔
+            </Link>
+          ) : (
+            <Link
+              href="/pos"
+              className="bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-black px-5 py-2.5 rounded-2xl text-xs shadow-lg shadow-emerald-500/20 transition-all whitespace-nowrap active:scale-95"
+            >
+              Portal Kasir ➔
+            </Link>
+          )}
         </div>
       </div>
 

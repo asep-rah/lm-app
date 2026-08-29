@@ -42,6 +42,10 @@ export const isSupervisorRole = (role: string) =>
 export const isOutletLockedRole = (role: string) =>
   ['kasir', 'pos'].includes(String(role || '').toLowerCase().trim());
 
+/** CS / CS Care / Head CS — workspace live chat, bukan POS. */
+export const isCsRole = (role: string) =>
+  ['cs', 'cs_care', 'head_cs'].includes(String(role || '').toLowerCase().trim());
+
 /** Settings / KPI Settings / Pengaturan: Owner & Supervisor saja. */
 export const canAccessSettings = (role: string) => {
   const r = String(role || '').toLowerCase().trim();

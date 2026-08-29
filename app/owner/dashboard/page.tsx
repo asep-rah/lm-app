@@ -297,7 +297,17 @@ setDeleteRequests(delData);
 
       let historyCombined: any[] = [];
       allTxs?.filter(t => new Date(t.created_at) >= oneYearAgo).forEach(t => historyCombined.push({ id: t.id, date: t.created_at, category: 'transactions', title: `${t.receipt_number || 'TRX'} - ${t.customer_name}`, desc: `${t.service_type} (${t.order_type || 'Offline'})`, amount: t.amount, outlet: t.outlet_id, rawData: t }));
-      allMems?.filter(m => new Date(m.created_at) >= oneYearAgo).forEach(m => historyCombined.push({ id: m.id, date: m.created_at, category: 'members', title: `Member ${m.package_name}`, desc: `No. WA: ${m.customer_phone} (${m.order_type || 'Offline'})`, amount: m.price, outlet: m.outlet_id }));
+      allMems?.filter(m => new Date(m.created_at) >= oneYearAgo).forEach(m => historyCombined.push({
+        id: m.id,
+        date: m.created_at,
+        category: 'members',
+        title: String(m.package_name || '').toLowerCase().includes('top up') ? String(m.package_name) : `Member ${m.package_name}`,
+        desc: String(m.package_name || '').toLowerCase().includes('top up')
+          ? `QRIS Mayar · ${m.customer_phone} · LUNAS`
+          : `No. WA: ${m.customer_phone} (${m.order_type || 'Offline'})`,
+        amount: m.price,
+        outlet: m.outlet_id
+      }));
       allExps?.filter(e => new Date(e.created_at) >= oneYearAgo).forEach(e => historyCombined.push({ id: e.id, date: e.created_at, category: 'expenses', title: `Pengeluaran: ${e.category}`, desc: e.description || '-', amount: -Number(e.amount), outlet: e.outlet_id }));
 
       historyCombined.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
@@ -358,7 +368,15 @@ setDeleteRequests(delData);
       filteredMems.forEach((m) => { 
         const amt = Number(m.price) || 0; inc += amt;
         if (m.order_type === 'Online') onlineInc += amt; else offlineInc += amt;
-        combinedData.push({ date: m.created_at, type: 'Income', category: 'Membership', desc: `Paket ${m.package_name} (${m.customer_phone}) - ${m.order_type || 'Offline'}`, amount: amt }); 
+        combinedData.push({
+          date: m.created_at,
+          type: 'Income',
+          category: String(m.package_name || '').toLowerCase().includes('top up') ? 'Top Up Deposit' : 'Membership',
+          desc: String(m.package_name || '').toLowerCase().includes('top up')
+            ? `${m.package_name} · QRIS Mayar (${m.customer_phone})`
+            : `Paket ${m.package_name} (${m.customer_phone}) - ${m.order_type || 'Offline'}`,
+          amount: amt
+        }); 
       });
 
       filteredExps.forEach((e) => { 

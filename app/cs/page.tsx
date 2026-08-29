@@ -34,8 +34,9 @@ import { isTaskCompleted } from '@/lib/taskRoles';
 import { toast } from '@/lib/toast';
 import FileProofInput from '@/components/FileProofInput';
 import { notifyOps, unlockOpsAudio } from '@/lib/opsNotify';
-import { isComplaintIssue } from '@/lib/csCare';
+import { complaintStepOf, isComplaintIssue, issuePhone } from '@/lib/csCare';
 import { simulateMayarAutoPay } from '@/lib/mayar';
+import { formatTrxId } from '@/lib/posQueue';
 
 type Thread = {
   key: string;
@@ -51,6 +52,42 @@ type Thread = {
 };
 
 const waitTone = (ms: number) => (ms < 60_000 ? 'emerald' : ms < 180_000 ? 'amber' : 'rose');
+
+const extractPhone = (text: any) => String(text || '').match(/(\+?62|0)\d{8,13}/)?.[0] || '';
+
+const parsePayAmount = (text: any) => {
+  const m = String(text || '').match(/Rp\s*([\d.]+)/i);
+  if (!m) return 0;
+  return Number(String(m[1]).replace(/\./g, '')) || 0;
+};
+
+const payBillMeta = (task: any) => {
+  const tx = task?.tx;
+  const desc = String(task?.description || '');
+  const title = String(task?.title || '');
+  const name =
+    tx?.customer_name ||
+    desc.split('·')[0]?.trim() ||
+    'Pelanggan';
+  const resiFromTitle = title.replace(/konfirmasi pembayaran\s*/i, '').trim();
+  const resi = formatTrxId(tx || { receipt_number: resiFromTitle || task?.source_id });
+  const amount = Number(tx?.amount || tx?.total_amount || 0) || parsePayAmount(desc);
+  const phone = tx?.customer_phone || extractPhone(desc);
+  return { name, resi, amount, phone };
+};
+
+const threadPhonesOf = (t: { key: string; phone: string }) => {
+  const out = new Set(phoneVariants(t.phone));
+  if (t.key.startsWith('p:')) phoneVariants(t.key.slice(2)).forEach((p) => out.add(p));
+  return out;
+};
+
+const matchesThreadPhone = (t: { key: string; phone: string }, rawPhone: any) => {
+  if (!rawPhone) return false;
+  const variants = phoneVariants(String(rawPhone));
+  const threadPhones = threadPhonesOf(t);
+  return variants.some((p) => threadPhones.has(p));
+};
 
 const fmtWait = (ms: number) => {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -100,6 +137,8 @@ export default function CsCommandCenter() {
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const presenceRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const [payTasks, setPayTasks] = useState<any[]>([]);
+  const [unpaidOrders, setUnpaidOrders] = useState<any[]>([]);
+  const [openComplaints, setOpenComplaints] = useState<any[]>([]);
   const [payModal, setPayModal] = useState<any | null>(null);
   const [payFile, setPayFile] = useState<File | null>(null);
   const [payBusy, setPayBusy] = useState(false);
@@ -112,23 +151,41 @@ export default function CsCommandCenter() {
   const pendingPayOrders = orders.filter((o) => isPaymentLocked(o));
 
   const loadPayTasks = useCallback(async () => {
-    const { data } = await supabase
-      .from('system_tasks')
-      .select('*')
-      .in('assigned_to_role', ['cs', 'head_cs'])
-      .order('created_at', { ascending: false })
-      .limit(60);
-    setPayTasks(
-      (data || []).filter(
-        (t: any) =>
-          !isTaskCompleted(t.status) &&
-          (t.source_type === 'PAYMENT_VERIFY' || String(t.title || '').includes('Konfirmasi Pembayaran'))
-      )
+    const [{ data }, { data: txs }] = await Promise.all([
+      supabase
+        .from('system_tasks')
+        .select('*')
+        .in('assigned_to_role', ['cs', 'head_cs'])
+        .order('created_at', { ascending: false })
+        .limit(60),
+      supabase
+        .from('transactions')
+        .select('id, receipt_number, customer_name, customer_phone, amount, is_paid, payment_status, status, created_at')
+        .order('created_at', { ascending: false })
+        .limit(120)
+    ]);
+    const txMap: Record<string, any> = {};
+    (txs || []).forEach((tx: any) => {
+      txMap[String(tx.id)] = tx;
+    });
+    const tasks = (data || []).filter(
+      (t: any) =>
+        !isTaskCompleted(t.status) &&
+        (t.source_type === 'PAYMENT_VERIFY' || String(t.title || '').includes('Konfirmasi Pembayaran'))
+    );
+    setPayTasks(tasks.map((t: any) => ({ ...t, tx: txMap[String(t.source_id)] || null })));
+    setUnpaidOrders((txs || []).filter((tx: any) => isPaymentLocked(tx)));
+  }, []);
+
+  const loadOpenComplaints = useCallback(async () => {
+    const { data } = await supabase.from('outlet_issues').select('*').order('created_at', { ascending: false }).limit(80);
+    setOpenComplaints(
+      (data || []).filter((row: any) => isComplaintIssue(row) && complaintStepOf(row) !== 'resolved')
     );
   }, []);
 
   const loadThreads = useCallback(async () => {
-    const [msgs, { data: sessions }, { data: payRows }] = await Promise.all([
+    const [msgs, { data: sessions }, { data: payRows }, { data: unpaidRows }] = await Promise.all([
       fetchRecentChatRows(900),
       supabase.from('support_chat_sessions').select('*'),
       supabase
@@ -136,7 +193,12 @@ export default function CsCommandCenter() {
         .select('id, title, description, source_id, source_type, status, created_at')
         .in('assigned_to_role', ['cs', 'head_cs'])
         .order('created_at', { ascending: false })
-        .limit(40)
+        .limit(40),
+      supabase
+        .from('transactions')
+        .select('id, receipt_number, customer_name, customer_phone, amount, created_at, is_paid, payment_status, status')
+        .order('created_at', { ascending: false })
+        .limit(80)
     ]);
     const sessMap: Record<string, any> = {};
     (sessions || []).forEach((s: any) => {
@@ -248,6 +310,25 @@ export default function CsCommandCenter() {
       setFilter('all');
     }
 
+    (unpaidRows || [])
+      .filter((tx: any) => isPaymentLocked(tx) && tx.customer_phone)
+      .forEach((tx: any) => {
+        const careKey = threadKeyOf({ customer_phone: tx.customer_phone });
+        if (next.some((x) => x.key === careKey)) return;
+        next.unshift({
+          key: careKey,
+          phone: canonicalPhone(tx.customer_phone) || tx.customer_phone,
+          preview: `Tagihan ${formatTrxId(tx)} menunggu pembayaran`,
+          lastAt: tx.created_at || new Date().toISOString(),
+          lastSender: 'kasir',
+          waitingFrom: Date.now(),
+          assignedId: '',
+          assignedName: '',
+          claimed: false,
+          resolved: false
+        });
+      });
+
     setThreads(next);
 
     const start = new Date();
@@ -328,6 +409,7 @@ export default function CsCommandCenter() {
     }
     loadThreads();
     loadPayTasks();
+    loadOpenComplaints();
     supabase.from('employees').select('id, name, role').then(({ data }) => {
       const rows = (data || []).filter((e: any) =>
         ['cs', 'supervisor', 'owner', 'head_cs', 'cs_care'].includes(String(e.role || '').toLowerCase())
@@ -417,18 +499,20 @@ export default function CsCommandCenter() {
           const key = hp ? threadKeyOf({ customer_phone: hp[0] }) : '';
           notifyOps('payment', 'Kasir: Menunggu Konfirmasi Tagihan. Ketuk untuk cek chat.', true, {
             onClick: () => {
-              setFilter('unassigned');
+              setFilter('all');
               if (key) setSelectedKey(key);
             }
           });
         }
         loadPayTasks();
+        loadOpenComplaints();
       })
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'outlet_issues' }, (payload) => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'outlet_issues' }, (payload) => {
         const row: any = payload.new;
-        if (isComplaintIssue(row)) {
+        if (isComplaintIssue(row) && payload.eventType === 'INSERT') {
           notifyOps('complaint', 'Komplain baru dari pelanggan. Perlu investigasi CS Care.', true);
         }
+        loadOpenComplaints();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, (payload) => {
         const row: any = payload.new;
@@ -528,11 +612,60 @@ export default function CsCommandCenter() {
     return () => clearTimeout(t);
   }, [messages, canSend]);
 
-  const visibleThreads = threads.filter((t) => {
-    if (filter === 'unassigned') return !t.claimed && !t.resolved;
-    if (filter === 'mine') return t.claimed && (t.assignedId === agent.id || t.assignedName === agent.name) && !t.resolved;
-    return !t.resolved;
-  });
+  const pendingBills = useMemo(() => {
+    if (payTasks.length > 0) return payTasks;
+    return unpaidOrders.map((tx) => ({
+      id: tx.id,
+      source_id: tx.id,
+      title: `Konfirmasi Pembayaran ${formatTrxId(tx)}`,
+      description: `${tx.customer_name || 'Pelanggan'} · ${tx.customer_phone || '-'} · Rp ${Number(tx.amount || tx.total_amount || 0).toLocaleString('id-ID')}`,
+      tx
+    }));
+  }, [payTasks, unpaidOrders]);
+
+  const threadFlagsOf = (t: Thread) => {
+    const unpaid =
+      unpaidOrders.some((o) => matchesThreadPhone(t, o.customer_phone)) ||
+      pendingBills.some((task) => matchesThreadPhone(t, payBillMeta(task).phone));
+    const complaint = openComplaints.some((c) => matchesThreadPhone(t, issuePhone(c)));
+    const unread = t.waitingFrom > 0 && t.lastSender === 'customer';
+    return { unpaid, complaint, unread };
+  };
+
+  const openPendingBill = (task?: any) => {
+    const bill = task || pendingBills[0];
+    if (!bill) {
+      loadThreads();
+      return;
+    }
+    const meta = payBillMeta(bill);
+    const key = meta.phone ? threadKeyOf({ customer_phone: meta.phone }) : '';
+    if (!key || key === 'unknown') {
+      toast('Nomor pelanggan pada tagihan tidak ditemukan.', 'warn');
+      loadThreads();
+      return;
+    }
+    setFilter('all');
+    setSelectedKey(key);
+    loadThreads();
+  };
+
+  const visibleThreads = threads
+    .filter((t) => {
+      if (filter === 'unassigned') return !t.claimed && !t.resolved;
+      if (filter === 'mine') return t.claimed && (t.assignedId === agent.id || t.assignedName === agent.name) && !t.resolved;
+      return !t.resolved;
+    })
+    .slice()
+    .sort((a, b) => {
+      const fa = threadFlagsOf(a);
+      const fb = threadFlagsOf(b);
+      const score = (f: { complaint: boolean; unpaid: boolean; unread: boolean }) =>
+        f.complaint ? 0 : f.unpaid ? 1 : f.unread ? 2 : 3;
+      const d = score(fa) - score(fb);
+      if (d !== 0) return d;
+      return new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime();
+    });
 
   const send = async (
     text: string,
@@ -786,7 +919,7 @@ export default function CsCommandCenter() {
           <p className="text-sm font-black text-slate-900 flex items-center gap-2">
             {agent.name}
             {unassignedCount > 0 && <StatusBadge tone="rose">{unassignedCount} antri</StatusBadge>}
-            {payTasks.length > 0 && <StatusBadge tone="amber">{payTasks.length} bayar</StatusBadge>}
+            {pendingBills.length > 0 && <StatusBadge tone="amber">{pendingBills.length} bayar</StatusBadge>}
           </p>
         </div>
         <div className="flex-1 grid grid-cols-4 gap-2">
@@ -834,10 +967,19 @@ export default function CsCommandCenter() {
         </Link>
       </header>
 
-      {payTasks.length > 0 && (
-        <div className="bg-amber-50 border-b border-amber-200 px-4 py-2 text-[11px] font-bold text-amber-900 shrink-0">
-          ⏳ {payTasks.length} pembayaran menunggu konfirmasi. Buka chat pelanggan lalu unggah bukti transfer.
-        </div>
+      {pendingBills.length > 0 && (
+        <button
+          type="button"
+          onClick={() => openPendingBill(pendingBills[0])}
+          className="bg-amber-50 border-b border-amber-200 px-4 py-2 text-[11px] font-bold text-amber-900 shrink-0 text-left hover:bg-amber-100 transition"
+        >
+          ⚠️ {pendingBills.length} Tagihan Menunggu Konfirmasi:{' '}
+          {(() => {
+            const m = payBillMeta(pendingBills[0]);
+            return `${m.name} (${m.resi}) - Rp ${Number(m.amount || 0).toLocaleString('id-ID')}`;
+          })()}
+          {pendingBills.length > 1 ? ` · +${pendingBills.length - 1} lainnya.` : '.'} Klik untuk buka chat.
+        </button>
       )}
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 min-h-0">
         <aside className="lg:col-span-3 border-r border-slate-200/80 bg-white flex flex-col min-h-0">
@@ -855,7 +997,9 @@ export default function CsCommandCenter() {
             ))}
           </div>
           <div className="flex-1 overflow-y-auto">
-            {visibleThreads.map((t) => (
+            {visibleThreads.map((t) => {
+              const flags = threadFlagsOf(t);
+              return (
               <button
                 key={t.key}
                 onClick={() => setSelectedKey(t.key)}
@@ -870,21 +1014,44 @@ export default function CsCommandCenter() {
                   )}
                 </div>
                 <p className="text-[11px] text-slate-400 truncate mt-0.5">{t.preview}</p>
+                <div className="flex flex-wrap gap-1 mt-1.5">
+                  {flags.unpaid && (
+                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[8px] font-black tracking-wide bg-amber-100 text-amber-800 border border-amber-200">
+                      💳 UNPAID / MENUNGGU BAYAR
+                    </span>
+                  )}
+                  {flags.unread && (
+                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[8px] font-black tracking-wide bg-emerald-100 text-emerald-800 border border-emerald-200">
+                      💬 CHAT BARU
+                    </span>
+                  )}
+                  {flags.complaint && (
+                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[8px] font-black tracking-wide bg-rose-100 text-rose-800 border border-rose-200">
+                      ⚠️ UNBOXING COMPLAINT
+                    </span>
+                  )}
+                </div>
                 <p className="text-[9px] text-slate-400 mt-0.5">
                   {t.claimed ? t.assignedName || 'Claimed' : 'Unassigned'}
                 </p>
               </button>
-            ))}
+              );
+            })}
             {visibleThreads.length === 0 && (
               <div className="p-6 text-center space-y-2">
                 <p className="text-xs text-slate-400">Tidak ada percakapan di antrean ini.</p>
-                {payTasks.length > 0 && filter === 'unassigned' && (
+                {pendingBills.length > 0 && (
                   <button
                     type="button"
-                    onClick={() => loadThreads()}
-                    className="text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg"
+                    onClick={() => openPendingBill(pendingBills[0])}
+                    className="text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg text-left"
                   >
-                    {payTasks.length} tagihan menunggu — sinkronkan antrean
+                    ⚠️ {pendingBills.length} Tagihan Menunggu Konfirmasi:{' '}
+                    {(() => {
+                      const m = payBillMeta(pendingBills[0]);
+                      return `${m.name} (${m.resi}) - Rp ${Number(m.amount || 0).toLocaleString('id-ID')}`;
+                    })()}
+                    . Klik untuk buka chat.
                   </button>
                 )}
               </div>

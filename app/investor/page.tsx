@@ -175,8 +175,10 @@ export default function InvestorDashboard() {
         combinedData.push({
           date: m.created_at,
           type: 'Pemasukan',
-          category: 'Membership',
-          desc: `Paket ${m.package_name || ''}`.trim(),
+          category: String(m.package_name || '').toLowerCase().includes('top up') ? 'Top Up Deposit' : 'Membership',
+          desc: String(m.package_name || '').toLowerCase().includes('top up')
+            ? `${m.package_name} · QRIS Mayar`
+            : `Paket ${m.package_name || ''}`.trim(),
           amount: amt,
           outlet: outMap[m.outlet_id] || '—'
         });

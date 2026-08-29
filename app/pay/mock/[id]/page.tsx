@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { simulateMayarAutoPay } from '@/lib/mayar';
 
 export default function MockMayarPayPage() {
-  const [meta, setMeta] = useState({ paymentId: '', resi: '-', amount: 0, tx: '', href: '' });
+  const [meta, setMeta] = useState({ paymentId: '', resi: '-', amount: 0, tx: '', topup: '', phone: '', href: '' });
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [err, setErr] = useState('');
@@ -17,6 +17,8 @@ export default function MockMayarPayPage() {
       resi: q.get('resi') || '-',
       amount: Number(q.get('amount') || 0),
       tx: q.get('tx') || '',
+      topup: q.get('topup') || '',
+      phone: q.get('phone') || '',
       href: window.location.href
     });
   }, []);
@@ -26,14 +28,20 @@ export default function MockMayarPayPage() {
     : '';
 
   const pay = async () => {
-    if (!meta.tx) {
+    if (!meta.tx && !meta.topup) {
       setErr('Transaksi tidak tertaut. Gunakan tombol Test Auto-Payment di CS/POS.');
       return;
     }
     setBusy(true);
     setErr('');
     try {
-      await simulateMayarAutoPay({ transactionId: meta.tx, receipt: meta.resi, amount: meta.amount });
+      await simulateMayarAutoPay({
+        transactionId: meta.tx || undefined,
+        topupId: meta.topup || undefined,
+        receipt: meta.resi,
+        amount: meta.amount,
+        customerPhone: meta.phone || undefined
+      });
       setDone(true);
     } catch (e: any) {
       setErr(e?.message || 'Gagal simulasi');

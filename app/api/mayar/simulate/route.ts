@@ -5,9 +5,12 @@ export const dynamic = 'force-dynamic';
 /** Test Auto-Payment: POST the same webhook receiver with a mock paid event. */
 export async function POST(req: Request) {
   try {
+    if (process.env.NODE_ENV === 'production') {
+      return NextResponse.json({ error: 'Simulasi dinonaktifkan di production' }, { status: 403 });
+    }
     const body = await req.json().catch(() => ({}));
-    if (!body.transactionId && !body.receipt) {
-      return NextResponse.json({ error: 'transactionId atau receipt wajib' }, { status: 400 });
+    if (!body.transactionId && !body.topupId && !body.receipt) {
+      return NextResponse.json({ error: 'transactionId, topupId, atau receipt wajib' }, { status: 400 });
     }
 
     const origin = new URL(req.url).origin;
@@ -15,15 +18,18 @@ export async function POST(req: Request) {
       event: 'payment.received',
       simulate: true,
       transactionId: body.transactionId || null,
+      topupId: body.topupId || null,
+      customerPhone: body.customerPhone || '',
       data: {
         status: 'SUCCESS',
         transactionStatus: 'paid',
         id: body.paymentId || `sim_${Date.now()}`,
         transactionId: body.transactionId || null,
+        topupId: body.topupId || null,
         amount: Number(body.amount) || 0,
         customerMobile: body.customerPhone || '',
         productName: `Laundrivery ${body.receipt || ''}`.trim(),
-        description: `Simulasi auto-pay ${body.receipt || body.transactionId}`
+        description: `Simulasi auto-pay ${body.receipt || body.topupId || body.transactionId}`
       }
     };
 
@@ -31,8 +37,8 @@ export async function POST(req: Request) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(process.env.MAYAR_WEBHOOK_SECRET
-          ? { 'x-callback-token': process.env.MAYAR_WEBHOOK_SECRET }
+        ...(process.env.MAYAR_WEBHOOK_TOKEN || process.env.MAYAR_WEBHOOK_SECRET
+          ? { 'x-callback-token': process.env.MAYAR_WEBHOOK_TOKEN || process.env.MAYAR_WEBHOOK_SECRET || '' }
           : {})
       },
       body: JSON.stringify(payload)

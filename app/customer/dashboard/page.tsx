@@ -17,6 +17,8 @@ import FileProofInput from '@/components/FileProofInput';
 import { fileToCompressedDataUrl, uploadChatAttachment, uploadProofFile } from '@/lib/uploadProof';
 import { displayItemAmount, kiloanLineTotal } from '@/lib/kiloanPrice';
 import { formatEstSelesai, formatTrxId } from '@/lib/posQueue';
+import { DEPOSIT_PACKAGES, depositPackageShort } from '@/lib/depositTopup';
+import { simulateMayarAutoPay } from '@/lib/mayar';
 import {
   complaintStepOf,
   customerRespondComplaint,
@@ -252,33 +254,47 @@ export default function CustomerDashboardPage() {
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-// Fungsi Trigger Xendit Top-Up
-const handleTopupXendit = async (priceAmount: number, packageName: string) => {
-  try {
-    setIsSubmitting(true);
-    const res = await fetch('/api/qris/charge', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        amount: priceAmount,
-        customerName: customerData?.name || 'Pelanggan',
-        customerPhone: customerPhone,
-        description: `Top-Up Deposit ${packageName}`,
-        type: 'deposit'
-      })
-    });
-    const data = await res.json();
-    if (data.invoiceUrl) {
-      window.location.href = data.invoiceUrl;
-    } else {
-      alert('Gagal: ' + (data.error || 'Terjadi kesalahan'));
+  const [depositCheckout, setDepositCheckout] = useState<any | null>(null);
+  const [depositPayBusy, setDepositPayBusy] = useState(false);
+
+  const handleTopupMayar = async (pkg: (typeof DEPOSIT_PACKAGES)[number]) => {
+    const phone = cleanPhone(customerPhone);
+    if (!phone) return alert('Masuk dulu dengan nomor WhatsApp Anda.');
+    try {
+      setIsSubmitting(true);
+      const res = await fetch('/api/mayar/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: pkg.pay,
+          name: `Top Up Deposit - ${pkg.key}`,
+          description: `Top Up Deposit - ${pkg.key}`,
+          mobile: phone,
+          customerPhone: phone,
+          customerName: customerData?.name || customerName || 'Pelanggan',
+          outletId: selectedOutlet || undefined,
+          type: 'deposit',
+          packageName: pkg.key,
+          balanceAdded: pkg.credit
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || 'Gagal membuat QRIS Mayar');
+      setDepositCheckout({
+        ...data,
+        packageName: pkg.key,
+        packageLabel: pkg.label,
+        amount: pkg.pay,
+        balanceAdded: pkg.credit,
+        bonus: pkg.credit - pkg.pay,
+        openedAt: Date.now()
+      });
+    } catch (err: any) {
+      alert('Gagal: ' + (err?.message || 'Terjadi kesalahan'));
+    } finally {
+      setIsSubmitting(false);
     }
-  } catch (err: any) {
-    alert('Koneksi gagal: ' + err.message);
-  } finally {
-    setIsSubmitting(false);
-  }
-};
+  };
   const [bagCount, setBagCount] = useState('');
   const [washProcess, setWashProcess] = useState('');
   const [hasFading, setHasFading] = useState('');
@@ -340,6 +356,39 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       document.body.style.overflow = prev;
     };
   }, [activeChatOrderId]);
+
+  useEffect(() => {
+    if (!depositCheckout || depositCheckout.paid) return;
+    const phone = cleanPhone(customerPhone);
+    const openedAt = Number(depositCheckout.openedAt || Date.now());
+    const markPaid = () => {
+      setDepositCheckout((c: any) => (c ? { ...c, paid: true } : c));
+      if (phone) fetchCustomerProfile(phone);
+      toast('Top up deposit berhasil. Saldo sudah ditambahkan.', 'ok');
+    };
+    const check = async () => {
+      if (depositCheckout.topupId) {
+        const { data } = await supabase.from('deposit_topups').select('status').eq('id', depositCheckout.topupId).maybeSingle();
+        if (data && ['SUCCESS', 'LUNAS', 'PAID'].includes(String(data.status || '').toUpperCase())) {
+          markPaid();
+          return;
+        }
+      }
+      if (!phone) return;
+      const { data: logs } = await supabase
+        .from('membership_logs')
+        .select('id, created_at, package_name')
+        .eq('customer_phone', phone)
+        .gte('created_at', new Date(openedAt - 8000).toISOString())
+        .limit(5);
+      if (logs?.some((l: any) => String(l.package_name || '').includes(depositCheckout.packageName))) {
+        markPaid();
+      }
+    };
+    check();
+    const t = window.setInterval(check, 4000);
+    return () => window.clearInterval(t);
+  }, [depositCheckout?.topupId, depositCheckout?.paid, depositCheckout?.packageName, customerPhone]);
 
   const handleSendChat = async (file?: File) => {
     const messageText = inputChat.trim() || (file ? (file.type.includes('pdf') ? 'Invoice / file terlampir' : 'Bukti pembayaran terlampir') : '');
@@ -957,13 +1006,40 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       historyArr.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       setCompletedOrders(historyArr);
 
-      const { data: memLogs } = await supabase
-        .from('membership_logs')
+      const { data: topupRows } = await supabase
+        .from('deposit_topups')
         .select('*')
         .eq('customer_phone', norm)
         .order('created_at', { ascending: false });
-
-      if (memLogs) setDepositLogs(memLogs);
+      const paidTopups = (topupRows || []).filter((r: any) =>
+        ['SUCCESS', 'LUNAS', 'PAID'].includes(String(r.status || '').toUpperCase())
+      );
+      if (paidTopups.length) {
+        setDepositLogs(
+          paidTopups.map((r: any) => ({
+            ...r,
+            package_name: depositPackageShort(r.package_name),
+            price: r.amount,
+            balance_added: r.balance_added,
+            payment_method: r.payment_method || 'QRIS Mayar',
+            status: 'LUNAS'
+          }))
+        );
+      } else {
+        const { data: memLogs } = await supabase
+          .from('membership_logs')
+          .select('*')
+          .eq('customer_phone', norm)
+          .order('created_at', { ascending: false });
+        setDepositLogs(
+          (memLogs || []).map((r: any) => ({
+            ...r,
+            package_name: depositPackageShort(r.package_name),
+            payment_method: String(r.processed_by || '').toLowerCase().includes('mayar') ? 'QRIS Mayar' : r.order_type || 'Kasir',
+            status: 'LUNAS'
+          }))
+        );
+      }
     } catch (e) {
       setCustomerData({ name: 'Pelanggan', deposit_balance: 0 });
     }
@@ -1992,55 +2068,90 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                 </div>
 
                 <div className="grid grid-cols-1 gap-3 text-left">
-                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 flex justify-between items-center">
-                    <div>
-                      <p className="font-extrabold text-slate-900 text-xs">Paket Silver</p>
-                      <p className="text-[10px] text-slate-500 font-medium">Bayar Rp 300.000</p>
-                    </div>
-                    <span className="text-blue-600 font-black text-xs bg-blue-50 px-3 py-1.5 rounded-full border border-blue-100">+ Rp 320.000 Saldo</span>
-                  </div>
-
-                  <div className="bg-slate-50 p-4 rounded-2xl border border-amber-200 flex justify-between items-center bg-amber-50/30">
-                    <div>
-                      <p className="font-extrabold text-slate-900 text-xs">Paket Gold</p>
-                      <p className="text-[10px] text-slate-500 font-medium">Bayar Rp 500.000</p>
-                    </div>
-                    <span className="text-amber-700 font-black text-xs bg-amber-50 px-3 py-1.5 rounded-full border border-amber-200">+ Rp 550.000 Saldo</span>
-                  </div>
-
-                  <div className="bg-slate-50 p-4 rounded-2xl border border-indigo-200 flex justify-between items-center bg-indigo-50/30">
-                    <div>
-                      <p className="font-extrabold text-slate-900 text-xs">Paket Platinum</p>
-                      <p className="text-[10px] text-slate-500 font-medium">Bayar Rp 900.000</p>
-                    </div>
-                    <span className="text-indigo-700 font-black text-xs bg-indigo-50 px-3 py-1.5 rounded-full border border-indigo-200">+ Rp 1.000.000 Saldo</span>
-                  </div>
+                  {DEPOSIT_PACKAGES.map((pkg) => (
+                    <button
+                      key={pkg.key}
+                      type="button"
+                      disabled={isSubmitting}
+                      onClick={() => handleTopupMayar(pkg)}
+                      className={`w-full p-4 rounded-2xl border flex justify-between items-center text-left transition active:scale-[0.99] disabled:opacity-60 ${
+                        pkg.key === 'Gold'
+                          ? 'bg-amber-50/30 border-amber-200'
+                          : pkg.key === 'Platinum'
+                          ? 'bg-indigo-50/30 border-indigo-200'
+                          : 'bg-slate-50 border-slate-200'
+                      }`}
+                    >
+                      <div>
+                        <p className="font-extrabold text-slate-900 text-xs">{pkg.label}</p>
+                        <p className="text-[10px] text-slate-500 font-medium">Bayar Rp {pkg.pay.toLocaleString('id-ID')}</p>
+                      </div>
+                      <span
+                        className={`font-black text-xs px-3 py-1.5 rounded-full border ${
+                          pkg.key === 'Gold'
+                            ? 'text-amber-700 bg-amber-50 border-amber-200'
+                            : pkg.key === 'Platinum'
+                            ? 'text-indigo-700 bg-indigo-50 border-indigo-200'
+                            : 'text-blue-600 bg-blue-50 border-blue-100'
+                        }`}
+                      >
+                        + Rp {pkg.credit.toLocaleString('id-ID')} Saldo
+                      </span>
+                    </button>
+                  ))}
                 </div>
 
-                <a
-                href={`https://wa.me/${(currentOutletObj?.phonee || '6281234567890').replace(/[^0-9]/g, '').replace(/^0/, '62')}?text=${encodeURIComponent(`Halo Admin ${currentOutletObj?.name || ''}, saya ingin konfirmasi Top Up Saldo Deposit.`)}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-2xl text-xs shadow inline-flex items-center justify-center gap-2"
-              >
-                <MessageSquare className="w-4 h-4" />
-                <span>Hubungi Admin via WhatsApp ({currentOutletObj?.name || 'OUTLET'})</span>
-              </a>
+                <button
+                  type="button"
+                  onClick={() => setActiveChatOrderId('GENERAL_CS')}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-2xl text-xs shadow inline-flex items-center justify-center gap-2"
+                >
+                  <Headphones className="w-4 h-4" />
+                  <span>Bantuan Customer Service (Live Chat)</span>
+                </button>
               </div>
 
               <div className="space-y-2">
                 <h4 className="text-xs font-extrabold text-slate-700 uppercase tracking-wider inline-flex items-center gap-1.5">
                   <History className="w-3.5 h-3.5" /> Riwayat Top Up Saldo
                 </h4>
-                {depositLogs.map((log, i) => (
-                  <div key={i} className="bg-white border border-slate-200 p-3.5 rounded-2xl text-xs flex justify-between items-center shadow-sm">
-                    <div>
-                      <p className="font-extrabold text-slate-900">Paket {log.package_name}</p>
-                      <p className="text-[10px] text-slate-400 font-medium">{new Date(log.created_at).toLocaleDateString('id-ID')}</p>
+                {depositLogs.length === 0 && (
+                  <p className="text-[11px] text-slate-400 text-center py-4">Belum ada top up. Pilih paket di atas untuk bayar via QRIS Mayar.</p>
+                )}
+                {depositLogs.map((log, i) => {
+                  const paid = Number(log.price || log.amount || 0);
+                  const credited = Number(log.balance_added || 0);
+                  const bonus = credited > paid ? credited - paid : Number(log.bonus || 0);
+                  return (
+                    <div key={log.id || i} className="bg-white border border-slate-200 p-3.5 rounded-2xl text-xs shadow-sm space-y-1.5">
+                      <div className="flex justify-between items-start gap-2">
+                        <div>
+                          <p className="font-extrabold text-slate-900">Paket {depositPackageShort(log.package_name)}</p>
+                          <p className="text-[10px] text-slate-400 font-medium">
+                            {new Date(log.paid_at || log.created_at).toLocaleString('id-ID', {
+                              day: 'numeric',
+                              month: 'short',
+                              year: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            })}
+                          </p>
+                        </div>
+                        <span className="text-[9px] font-black bg-emerald-50 text-emerald-700 border border-emerald-100 px-2 py-0.5 rounded-full">
+                          {log.status || 'LUNAS'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-[10px] text-slate-500">
+                        <span>Bayar Rp {paid.toLocaleString('id-ID')}</span>
+                        <span className="font-black text-blue-600">+ Rp {credited.toLocaleString('id-ID')} saldo</span>
+                      </div>
+                      <div className="flex justify-between text-[10px] text-slate-400">
+                        <span>{log.payment_method || 'QRIS Mayar'}</span>
+                        {bonus > 0 && <span>Bonus Rp {bonus.toLocaleString('id-ID')}</span>}
+                      </div>
                     </div>
-                    <span className="font-black text-blue-600">+ Rp {Number(log.balance_added).toLocaleString('id-ID')}</span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -2226,6 +2337,103 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
             >
               Saya Mengerti
             </button>
+          </div>
+        </div>
+      )}
+
+      {depositCheckout && (
+        <div className="fixed inset-0 z-[70] bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
+          <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+            <div className="bg-[#075e54] text-white px-4 py-3 flex items-center justify-between">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-100">QRIS Mayar</p>
+                <p className="font-extrabold text-sm">{depositCheckout.packageLabel || `Paket ${depositCheckout.packageName}`}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDepositCheckout(null)}
+                className="w-9 h-9 rounded-full bg-white/15 flex items-center justify-center"
+                aria-label="Tutup"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-3 text-center overflow-y-auto">
+              {depositCheckout.paid ? (
+                <div className="space-y-2 py-6">
+                  <CheckCircle2 className="w-12 h-12 text-emerald-600 mx-auto" />
+                  <p className="font-black text-slate-900">Pembayaran Lunas</p>
+                  <p className="text-xs text-slate-500">
+                    Saldo +Rp {Number(depositCheckout.balanceAdded || 0).toLocaleString('id-ID')} sudah masuk.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setDepositCheckout(null)}
+                    className="w-full bg-emerald-600 text-white font-black text-xs py-3 rounded-2xl"
+                  >
+                    Selesai
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <p className="text-2xl font-black text-emerald-700">
+                    Rp {Number(depositCheckout.amount || 0).toLocaleString('id-ID')}
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    Saldo diterima Rp {Number(depositCheckout.balanceAdded || 0).toLocaleString('id-ID')}
+                    {depositCheckout.bonus ? ` · Bonus Rp ${Number(depositCheckout.bonus).toLocaleString('id-ID')}` : ''}
+                  </p>
+                  {depositCheckout.qrisUrl || depositCheckout.invoiceUrl ? (
+                    <img
+                      src={
+                        depositCheckout.qrisUrl ||
+                        `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(depositCheckout.invoiceUrl)}`
+                      }
+                      alt="QRIS Mayar"
+                      className="w-48 h-48 mx-auto bg-white rounded-2xl border border-slate-200 object-contain"
+                    />
+                  ) : null}
+                  <p className="text-[11px] text-slate-500 font-medium">Scan QRIS Mayar sesuai nominal. Status akan berubah otomatis setelah webhook payment.received.</p>
+                  {depositCheckout.invoiceUrl && (
+                    <a
+                      href={depositCheckout.invoiceUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block text-[11px] font-bold text-indigo-600"
+                    >
+                      Buka tautan invoice
+                    </a>
+                  )}
+                  {depositCheckout.mock && (
+                    <button
+                      type="button"
+                      disabled={depositPayBusy}
+                      onClick={async () => {
+                        setDepositPayBusy(true);
+                        try {
+                          await simulateMayarAutoPay({
+                            topupId: depositCheckout.topupId,
+                            receipt: depositCheckout.receipt,
+                            amount: depositCheckout.amount,
+                            customerPhone: cleanPhone(customerPhone)
+                          });
+                          setDepositCheckout((c: any) => (c ? { ...c, paid: true } : c));
+                          fetchCustomerProfile(cleanPhone(customerPhone));
+                          toast('Top up deposit berhasil. Saldo sudah ditambahkan.', 'ok');
+                        } catch (err: any) {
+                          alert(err?.message || 'Gagal simulasi pembayaran');
+                        } finally {
+                          setDepositPayBusy(false);
+                        }
+                      }}
+                      className="w-full bg-amber-500 text-white font-black text-xs py-3 rounded-2xl"
+                    >
+                      {depositPayBusy ? 'Memproses…' : 'Test Auto-Payment (Mock)'}
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         </div>
       )}
