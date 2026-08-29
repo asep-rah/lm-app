@@ -29,35 +29,43 @@ export const createSupervisorIssueTask = async (issue: IssueForTask) => {
   const title = `Kendala Outlet: ${issue.category || 'Lainnya'}`;
   const description = `${issue.reporter_name || 'Karyawan'}: ${issue.description || '-'}`;
 
-  const { data, error } = await insertWithFallback<{ id: string }>('system_tasks', [
-    {
-      title,
-      description,
-      assigned_to_role: 'supervisor',
-      sla_hours: slaHours,
-      due_date: due.toISOString(),
-      kpi_penalty_points: slaHours <= 4 ? 20 : 10,
-      created_by_name: issue.reporter_name || 'Outlet',
-      status: 'pending',
-      source_type: 'OUTLET_ISSUE',
-      source_id: issue.id
-    },
-    {
-      title,
-      description,
-      assigned_to_role: 'supervisor',
-      sla_hours: slaHours,
-      due_date: due.toISOString(),
-      kpi_penalty_points: slaHours <= 4 ? 20 : 10,
-      status: 'pending'
-    },
-    {
-      title,
-      description,
-      assigned_to_role: 'supervisor',
-      status: 'pending'
-    }
-  ], { select: 'id' });
+  let data: { id: string }[] | null = null;
+  let error: { message: string } | null = null;
+  try {
+    const res = await insertWithFallback<{ id: string }>('system_tasks', [
+      {
+        title,
+        description,
+        assigned_to_role: 'supervisor',
+        sla_hours: slaHours,
+        due_date: due.toISOString(),
+        kpi_penalty_points: slaHours <= 4 ? 20 : 10,
+        created_by_name: issue.reporter_name || 'Outlet',
+        status: 'pending',
+        source_type: 'OUTLET_ISSUE',
+        source_id: issue.id
+      },
+      {
+        title,
+        description,
+        assigned_to_role: 'supervisor',
+        sla_hours: slaHours,
+        due_date: due.toISOString(),
+        kpi_penalty_points: slaHours <= 4 ? 20 : 10,
+        status: 'pending'
+      },
+      {
+        title,
+        description,
+        assigned_to_role: 'supervisor',
+        status: 'pending'
+      }
+    ], { select: 'id' });
+    data = res.data;
+    error = res.error;
+  } catch (e: unknown) {
+    error = { message: e instanceof Error ? e.message : 'Failed to fetch' };
+  }
 
   if (error || !data?.[0]?.id) {
     console.error('Gagal membuat system_tasks dari outlet_issues:', error?.message);
@@ -65,12 +73,15 @@ export const createSupervisorIssueTask = async (issue: IssueForTask) => {
   }
 
   const taskId = data[0].id;
-  const { error: linkErr } = await supabase
-    .from('outlet_issues')
-    .update({ task_id: taskId })
-    .eq('id', issue.id);
-
-  if (linkErr) console.warn('Gagal menautkan task_id ke outlet_issues:', linkErr.message);
+  try {
+    const { error: linkErr } = await supabase
+      .from('outlet_issues')
+      .update({ task_id: taskId })
+      .eq('id', issue.id);
+    if (linkErr) console.warn('Gagal menautkan task_id ke outlet_issues:', linkErr.message);
+  } catch (e) {
+    console.warn('Gagal menautkan task_id ke outlet_issues:', e);
+  }
 
   return { error: null, taskId };
 };

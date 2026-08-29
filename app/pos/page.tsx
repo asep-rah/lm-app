@@ -7,8 +7,8 @@ import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
 import StageTimeline from '@/components/StageTimeline';
 import { PAID_STAGE_KEYS, stageKeyOf } from '@/lib/stageTimeline';
-import { createSupervisorIssueTask } from '@/lib/createOutletIssueTask';
 import RequisitionForm from '@/components/RequisitionForm';
+import OutletIssueForm from '@/components/OutletIssueForm';
 import RoleTaskInbox from '@/components/RoleTaskInbox';
 import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
 import { updatePickupOrder } from '@/lib/pickupUpdates';
@@ -162,13 +162,6 @@ export function POSContent() {
   const [physicalCashCount, setPhysicalCashCount] = useState('');
   const [closingNotes, setClosingNotes] = useState('');
 
-  // State Form Kendala / Keluhan POS Kasir
-  const [showIssueModal, setShowIssueModal] = useState(false);
-  const [issueCategory, setIssueCategory] = useState('Peralatan/Mesin');
-  const [issueUrgency, setIssueUrgency] = useState('Biasa');
-  const [issueDescription, setIssueDescription] = useState('');
-  const [isSubmittingIssue, setIsSubmittingIssue] = useState(false);
-  
   // Reset state penguncian tombol saat halaman dimuat
   useEffect(() => {
     setIsSubmitting(false);
@@ -433,8 +426,6 @@ const [loanReason, setLoanReason] = useState('');
 const [isSpecialLoan, setIsSpecialLoan] = useState(false);
 const [piutangDocNo, setPiutangDocNo] = useState('');
 
-const [incidentTitle, setIncidentTitle] = useState('');
-const [incidentDesc, setIncidentDesc] = useState('');
 const [coaList, setCoaList] = useState<any[]>([]);
 
 // Hitung Limit Kasbon Otomatis berbasis Hari Kerja (26 Hari / Bulan & 60% Cap)
@@ -492,30 +483,6 @@ const handleApplyLoan = async (e: React.FormEvent) => {
   }
 };
 
-// Handler Pengaduan Kendala Outlet ke Supervisor
-const handleReportIncident = async (e: React.FormEvent) => {
-  e.preventDefault();
-  if (!incidentTitle.trim() || !incidentDesc.trim()) return alert('⚠️ Lengkapi judul dan deskripsi kendala!');
-
-  const { error } = await supabase.from('supervisor_incidents').insert([
-    {
-      outlet_id: selectedOutlet,
-      reporter_id: employeeId || '00000000-0000-0000-0000-000000000000',
-      supervisor_id: '00000000-0000-0000-0000-000000000000',
-      title: incidentTitle.trim(),
-      description: incidentDesc.trim(),
-      resolution_status: 'open'
-    }
-  ]);
-
-  if (!error) {
-    alert('🚨 Kendala berhasil dilaporkan ke Supervisor!');
-    setIncidentTitle('');
-    setIncidentDesc('');
-  } else {
-    alert('❌ Gagal melaporkan kendala: ' + error.message);
-  }
-};
   // Form Transaksi Baru
   const [orderType, setOrderType] = useState('Offline');
   const [deliveryFee, setDeliveryFee] = useState('');
@@ -892,39 +859,6 @@ const handleReportIncident = async (e: React.FormEvent) => {
     };
   }, [selectedOutlet]);
 
-// Handler Submit Laporan Kendala POS Kasir ke To-Do List Supervisor
-const handleSubmitIssue = async (e: React.FormEvent) => {
-  e.preventDefault();
-  if (!issueDescription.trim()) return alert('⚠️ Tuliskan deskripsi kendala!');
-
-  setIsSubmittingIssue(true);
-  const { data: inserted, error } = await supabase.from('outlet_issues').insert([
-    {
-      outlet_id: selectedOutlet || null,
-      reporter_name: employeeName || 'Kasir Outlet',
-      category: issueCategory,
-      urgency: issueUrgency,
-      description: issueDescription.trim(),
-      status: 'Perlu Penanganan'
-    }
-  ]).select('id').single();
-
-  if (!error && inserted?.id) {
-    await createSupervisorIssueTask({
-      id: inserted.id,
-      category: issueCategory,
-      description: issueDescription.trim(),
-      reporter_name: employeeName || 'Kasir Outlet',
-      urgency: issueUrgency
-    });
-    alert('✅ Laporan kendala terkirim. Tugas SLA Supervisor otomatis dibuat.');
-    setIssueDescription('');
-    setShowIssueModal(false);
-  } else {
-    alert('❌ Gagal mengirim laporan: ' + (error?.message || 'Koneksi bermasalah'));
-  }
-  setIsSubmittingIssue(false);
-};
   useEffect(() => {
     async function checkCustDeposit() {
       const normalizedPhone = cleanPhone(customerPhone);
@@ -2128,7 +2062,7 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
           <button onClick={() => setActiveTab('pos')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'pos' ? 'bg-emerald-600 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>🛒 POS</button>
           
           <Link href="/admin/pickups" className="py-2 rounded-lg text-[10px] font-bold text-center bg-blue-50 text-blue-800 border border-blue-200 hover:bg-blue-100 flex items-center justify-center gap-0.5 relative transition">
-            <span>🛵 Jemput</span>
+            <span>🛵 Online</span>
             {incomingPickupsCount > 0 && (
               <span className="bg-rose-500 text-white text-[8px] font-black px-1.5 py-0.2 rounded-full ml-0.5 animate-pulse">
                 {incomingPickupsCount}
@@ -2136,10 +2070,10 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
             )}
           </Link>
 
-          <button onClick={() => setActiveTab('workflow')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'workflow' ? 'bg-amber-500 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>⚙️ Kerja ({activeOrders.length})</button>
+          <button onClick={() => setActiveTab('workflow')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'workflow' ? 'bg-amber-500 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>⚙️ Proses ({activeOrders.length})</button>
           <button onClick={() => setActiveTab('pickup')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'pickup' ? 'bg-blue-600 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>🛍️ Ambil ({pickupOrders.length})</button>
-          <button onClick={() => setActiveTab('member')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'member' ? 'bg-purple-600 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>💳 Member</button>
-          <button onClick={() => setActiveTab('expense')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'expense' ? 'bg-rose-500 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>💸 Keluar</button>
+          <button onClick={() => setActiveTab('member')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'member' ? 'bg-purple-600 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>💳 Membership</button>
+          <button onClick={() => setActiveTab('expense')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'expense' ? 'bg-rose-500 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>💸 Pengajuan</button>
           <button onClick={() => setActiveTab('performance')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'performance' ? 'bg-indigo-600 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>📊 Gaji</button>
         </div>
 
@@ -2156,13 +2090,13 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
                 </span>
               )}
             </span>
-            <span className="text-[9px] font-bold mt-1">Jemput</span>
+            <span className="text-[9px] font-bold mt-1">Online</span>
           </Link>
 
-          <button onClick={() => setActiveTab('workflow')} className={`flex flex-col items-center flex-1 p-1 ${activeTab === 'workflow' ? 'text-amber-500' : 'text-slate-400'}`}><span className="text-xl relative">⚙️<span className="absolute -top-1 -right-2 bg-rose-500 text-white text-[8px] rounded-full px-1">{activeOrders.length}</span></span><span className="text-[9px] font-bold mt-1">Kerja</span></button>
+          <button onClick={() => setActiveTab('workflow')} className={`flex flex-col items-center flex-1 p-1 ${activeTab === 'workflow' ? 'text-amber-500' : 'text-slate-400'}`}><span className="text-xl relative">⚙️<span className="absolute -top-1 -right-2 bg-rose-500 text-white text-[8px] rounded-full px-1">{activeOrders.length}</span></span><span className="text-[9px] font-bold mt-1">Proses</span></button>
           <button onClick={() => setActiveTab('pickup')} className={`flex flex-col items-center flex-1 p-1 ${activeTab === 'pickup' ? 'text-blue-600' : 'text-slate-400'}`}><span className="text-xl relative">🛍️<span className="absolute -top-1 -right-2 bg-rose-500 text-white text-[8px] rounded-full px-1">{pickupOrders.length}</span></span><span className="text-[9px] font-bold mt-1">Ambil</span></button>
-          <button onClick={() => setActiveTab('member')} className={`flex flex-col items-center flex-1 p-1 ${activeTab === 'member' ? 'text-purple-600' : 'text-slate-400'}`}><span className="text-xl">💳</span><span className="text-[9px] font-bold mt-1">Member</span></button>
-          <button onClick={() => setActiveTab('expense')} className={`flex flex-col items-center flex-1 p-1 ${activeTab === 'expense' ? 'text-rose-500' : 'text-slate-400'}`}><span className="text-xl">💸</span><span className="text-[9px] font-bold mt-1">Kas</span></button>
+          <button onClick={() => setActiveTab('member')} className={`flex flex-col items-center flex-1 p-1 ${activeTab === 'member' ? 'text-purple-600' : 'text-slate-400'}`}><span className="text-xl">💳</span><span className="text-[9px] font-bold mt-1">Membership</span></button>
+          <button onClick={() => setActiveTab('expense')} className={`flex flex-col items-center flex-1 p-1 ${activeTab === 'expense' ? 'text-rose-500' : 'text-slate-400'}`}><span className="text-xl">💸</span><span className="text-[9px] font-bold mt-1">Pengajuan</span></button>
           <button onClick={() => setActiveTab('performance')} className={`flex flex-col items-center flex-1 p-1 ${activeTab === 'performance' ? 'text-indigo-600' : 'text-slate-400'}`}><span className="text-xl">📊</span><span className="text-[9px] font-bold mt-1">Gaji</span></button>
         </div>
 
@@ -2710,6 +2644,35 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
                 employeeName={employeeName || 'Kasir'}
                 role="kasir"
               />
+              <form onSubmit={handleApplyLoan} className="bg-white border border-slate-200 p-5 rounded-2xl space-y-3 shadow-sm">
+                <h3 className="font-bold text-xs text-indigo-900 flex items-center gap-1.5 border-b pb-2">
+                  <span>💵 Form Pengajuan Kasbon Karyawan</span>
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <input
+                    type="number"
+                    placeholder="Nominal Kasbon (Rp)"
+                    value={loanAmount}
+                    onChange={(e) => setLoanAmount(e.target.value)}
+                    className="border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:outline-none"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Alasan Pengajuan Kasbon..."
+                    value={loanReason}
+                    onChange={(e) => setLoanReason(e.target.value)}
+                    className="border border-slate-300 rounded-xl p-2.5 text-xs text-slate-900 focus:outline-none"
+                  />
+                </div>
+                <p className="text-[10px] text-slate-500 italic">* Kasbon yang disetujui Supervisor akan otomatis dipotong saat penggajian.</p>
+                <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl text-xs shadow transition">
+                  Ajukan Kasbon Sekarang
+                </button>
+              </form>
+              <OutletIssueForm
+                selectedOutlet={selectedOutlet}
+                employeeName={employeeName || 'Kasir Outlet'}
+              />
               <KpiRoleMonitoring />
               <RoleTaskInbox role="kasir" />
               <form onSubmit={handleAddStock} className="space-y-3 border rounded-xl p-4 shadow-sm">
@@ -2850,13 +2813,6 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
                 ) : !todayAttendance.check_out ? (
                   <div className="flex flex-col gap-3">
                     <div className="bg-emerald-50 text-emerald-800 px-3 py-2 rounded-lg text-xs font-bold border border-emerald-200">✅ Sudah Absen Masuk: {new Date(todayAttendance.check_in).toLocaleTimeString('id-ID')} WIB</div>
-                    <button
-                  type="button"
-                  onClick={() => setShowIssueModal(true)}
-                  className="w-full bg-rose-500 hover:bg-rose-600 text-white font-extrabold py-2.5 rounded-xl text-xs shadow transition flex items-center justify-center gap-1.5 mb-2"
-                >
-                  ⚠️ Laporkan Kendala Outlet
-                </button>
                     <button 
                   type="button" 
                   onClick={() => setShowClosingModal(true)} 
@@ -2872,76 +2828,6 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
                   </div>
                 )}
               </div>
-              {/* MODAL LAPORKAN KENDALA OUTLET (POS KASIR) */}
-      {showIssueModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <form onSubmit={handleSubmitIssue} className="bg-white rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl">
-            <div className="flex justify-between items-center border-b pb-3">
-              <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
-                🚨 Laporkan Kendala Outlet
-              </h3>
-              <button type="button" onClick={() => setShowIssueModal(false)} className="text-slate-400 font-bold">✕</button>
-            </div>
-
-            <div>
-              <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Kategori Kendala</label>
-              <select
-                value={issueCategory}
-                onChange={(e) => setIssueCategory(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3 text-xs font-bold text-slate-800"
-              >
-                <option value="Peralatan/Mesin">⚙️ Mesin Cuci / Pengering Rusak</option>
-          <option value="Stok Detergen">🧴 Stok Detergen / Softener Habis</option>
-          <option value="Stok Parfum">🌸 Stok Parfum Laundry Habis</option>
-          <option value="Stok Plastik">🛍️ Stok Plastik Packing Habis</option>
-          <option value="Listrik/Air">⚡ Kendala Listrik / Air / Internet</option>
-          <option value="Pelanggan">👤 Komplain / Kendala Pelanggan di Outlet</option>
-          <option value="Lainnya">📌 Kendala Operasional Lainnya</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Tingkat Urgensi</label>
-              <div className="grid grid-cols-3 gap-2">
-                {['Biasa', 'Mendesak', 'Critical'].map((urg) => (
-                  <button
-                    key={urg}
-                    type="button"
-                    onClick={() => setIssueUrgency(urg)}
-                    className={`py-2 rounded-xl text-xs font-extrabold border transition ${
-                      issueUrgency === urg
-                        ? urg === 'Critical' ? 'bg-rose-600 text-white border-rose-600' : urg === 'Mendesak' ? 'bg-amber-500 text-white border-amber-500' : 'bg-blue-600 text-white border-blue-600'
-                        : 'bg-slate-50 text-slate-600 border-slate-200'
-                    }`}
-                  >
-                    {urg}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Deskripsi Masalah</label>
-              <textarea
-                rows={3}
-                value={issueDescription}
-                onChange={(e) => setIssueDescription(e.target.value)}
-                placeholder="Jelaskan detail kendala yang terjadi di outlet..."
-                className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3 text-xs font-bold text-slate-800 focus:outline-none"
-                required
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={isSubmittingIssue}
-              className="w-full bg-rose-600 hover:bg-rose-700 text-white font-extrabold py-3.5 rounded-2xl text-xs uppercase shadow-md transition"
-            >
-              {isSubmittingIssue ? 'Mengirim...' : 'Kirim Laporan ke Supervisor 🚀'}
-            </button>
-          </form>
-        </div>
-      )}
               {/* MODAL BLIND CASH COUNT CLOSING SHIFT */}
       {showClosingModal && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
@@ -3001,56 +2887,6 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
           </div>
         </div>
       )}
-{/* FORM PENGAJUAN KASBON KARYAWAN */}
-<form onSubmit={handleApplyLoan} className="bg-white border border-slate-200 p-5 rounded-2xl space-y-3 shadow-sm">
-              <h3 className="font-bold text-xs text-indigo-900 flex items-center gap-1.5 border-b pb-2">
-                <span>💵 Form Pengajuan Kasbon Karyawan</span>
-              </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <input
-                  type="number"
-                  placeholder="Nominal Kasbon (Rp)"
-                  value={loanAmount}
-                  onChange={(e) => setLoanAmount(e.target.value)}
-                  className="border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:outline-none"
-                />
-                <input
-                  type="text"
-                  placeholder="Alasan Pengajuan Kasbon..."
-                  value={loanReason}
-                  onChange={(e) => setLoanReason(e.target.value)}
-                  className="border border-slate-300 rounded-xl p-2.5 text-xs text-slate-900 focus:outline-none"
-                />
-              </div>
-              <p className="text-[10px] text-slate-500 italic">* Kasbon yang disetujui Supervisor akan otomatis dipotong saat penggajian.</p>
-              <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl text-xs shadow transition">
-                Ajukan Kasbon Sekarang
-              </button>
-            </form>
-
-            {/* FORM LAPOR KENDALA OUTLET (KPI SUPERVISOR) */}
-            <form onSubmit={handleReportIncident} className="bg-white border border-rose-200 p-5 rounded-2xl space-y-3 shadow-sm">
-              <h3 className="font-bold text-xs text-rose-900 flex items-center gap-1.5 border-b pb-2">
-                <span>🚨 Lapor Kendala / Keluhan Outlet ke Supervisor</span>
-              </h3>
-              <input
-                type="text"
-                placeholder="Judul Kendala (Contoh: Mesin Cuci No. 2 Bocor)"
-                value={incidentTitle}
-                onChange={(e) => setIncidentTitle(e.target.value)}
-                className="w-full border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:outline-none"
-              />
-              <textarea
-                rows={3}
-                placeholder="Rincian kendala secara detail..."
-                value={incidentDesc}
-                onChange={(e) => setIncidentDesc(e.target.value)}
-                className="w-full border border-slate-300 rounded-xl p-2.5 text-xs text-slate-900 focus:outline-none"
-              ></textarea>
-              <button type="submit" className="w-full bg-rose-600 hover:bg-rose-700 text-white font-bold py-2.5 rounded-xl text-xs shadow transition">
-                Kirim Laporan Kendala
-              </button>
-            </form>
               {/* PRODUKSI HARI INI */}
               <div className="bg-gradient-to-r from-emerald-600 to-teal-600 rounded-2xl p-4 text-white shadow-md space-y-3">
                 <div className="flex justify-between items-center border-b border-white/20 pb-2">
