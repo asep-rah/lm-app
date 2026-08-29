@@ -8,11 +8,11 @@ import { mapDbPromo, mapSettingsPromo, promoDiscountRp, promoIsClaimable, type C
 import { createPickupRoleTasks, insertPickupOrder, createDeliveryRequestTasks } from '@/lib/pickupDispatch';
 import { updatePickupOrder } from '@/lib/pickupUpdates';
 import { laundryFallbackReply } from '@/lib/laundryFaq';
-import AIChatWidget from '@/components/AIChatWidget';
 import PhotoLightbox from '@/components/PhotoLightbox';
+import DraggableChatFab from '@/components/DraggableChatFab';
 import ChatAttachment, { visibleChatText } from '@/components/ChatAttachment';
 import ChatInvoiceCard from '@/components/ChatInvoiceCard';
-import { uploadChatAttachment } from '@/lib/uploadProof';
+import { fileToCompressedDataUrl, uploadChatAttachment } from '@/lib/uploadProof';
 import { nearestOpenOutlet } from '@/lib/outletCapacity';
 
 const supabase = createClient(
@@ -230,7 +230,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       let attachmentType = '';
       if (file) {
         try {
-          attachmentUrl = await uploadChatAttachment(file, `chat_cust_${customerPhone || 'anon'}`);
+          attachmentUrl =
+            (await uploadChatAttachment(file, `chat_cust_${customerPhone || 'anon'}`).catch(() => '')) ||
+            (await fileToCompressedDataUrl(file));
           attachmentType = file.type.includes('pdf') ? 'pdf' : 'image';
         } catch (err: any) {
           alert('Gagal unggah lampiran: ' + (err?.message || 'Coba lagi'));
@@ -1093,21 +1095,6 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                     <span className="text-xs font-extrabold text-slate-900 block">Paket Deposit</span>
                     <span className="text-[10px] text-slate-500 font-medium">Bonus Saldo Extra</span>
                   </div>
-                </button>
-              </div>
-
-              {/* FLOATING BANNER BANTUAN LIVE CS & AI */}
-              <div className="bg-gradient-to-r from-indigo-600 to-purple-600 p-4 rounded-3xl text-white my-4 shadow-lg flex justify-between items-center">
-                <div>
-                  <h4 className="font-black text-xs">💬 Butuh Bantuan / Tanya Customer Service?</h4>
-                  <p className="text-[10px] text-indigo-100">Hubungi CS Admin atau AI Assistant kami.</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setActiveChatOrderId('GENERAL_CS')}
-                  className="bg-white text-indigo-900 font-extrabold px-3.5 py-2 rounded-xl text-xs shadow hover:bg-indigo-50 transition"
-                >
-                  Mulai Chat
                 </button>
               </div>
 
@@ -2316,7 +2303,12 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
     </div>
   </div>
 )}
-      {customerData && <AIChatWidget customerPhone={customerPhone} />}
+      {customerData && (
+        <DraggableChatFab
+          hidden={!!activeChatOrderId}
+          onOpen={() => setActiveChatOrderId('GENERAL_CS')}
+        />
+      )}
       <PhotoLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
     </div>
   );

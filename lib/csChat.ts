@@ -101,7 +101,7 @@ export const insertChatMessage = async (input: {
       customer_phone: full.customer_phone,
       order_id: full.order_id,
       sender_type: input.is_internal ? 'internal' : input.sender_type,
-      message: isInline && media ? `${withFile}\n${media}`.trim() : withFile,
+      message: withFile,
       image_url: media,
       attachment_url: media
     },
@@ -109,7 +109,7 @@ export const insertChatMessage = async (input: {
       customer_phone: full.customer_phone,
       order_id: full.order_id,
       sender_type: input.is_internal ? 'internal' : input.sender_type,
-      message: isInline && media ? `${withFile}\n${media}`.trim() : withFile
+      message: withFile
     }
   ];
 

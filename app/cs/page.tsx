@@ -23,7 +23,7 @@ import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
 import StatusBadge from '@/components/ui/StatusBadge';
 import ChatAttachment, { visibleChatText } from '@/components/ChatAttachment';
 import PhotoLightbox from '@/components/PhotoLightbox';
-import { confirmPaymentProof, uploadChatAttachment } from '@/lib/uploadProof';
+import { confirmPaymentProof, fileToCompressedDataUrl, uploadChatAttachment } from '@/lib/uploadProof';
 import { confirmTransactionPayment, isPaymentLocked, markInvoicePaid } from '@/lib/paymentVerify';
 import { sendInvoiceToLiveChat } from '@/lib/chatInvoice';
 import ChatInvoiceCard from '@/components/ChatInvoiceCard';
@@ -491,8 +491,10 @@ export default function CsCommandCenter() {
     if (!file || !selected) return;
     if (!canSend && !noteMode) return toast('Klaim chat dulu sebelum mengirim lampiran.', 'warn');
     try {
-      const url = await uploadChatAttachment(file, `chat_cs_${selected.phone || 'thread'}`);
-      const type = file.type.includes('pdf') ? 'pdf' : file.type.includes('image') ? 'image' : 'file';
+      const url =
+        (await uploadChatAttachment(file, `chat_cs_${selected.phone || 'thread'}`).catch(() => '')) ||
+        (await fileToCompressedDataUrl(file));
+      const type = file.type.includes('pdf') ? 'pdf' : 'image';
       await send(input, noteMode, { url, type });
     } catch (err: any) {
       toast('Gagal unggah lampiran: ' + (err?.message || 'Coba lagi'), 'err');
@@ -506,7 +508,9 @@ export default function CsCommandCenter() {
     }
     setPayBusy(true);
     try {
-      const url = await confirmPaymentProof(payFile, `pay_${payModal.id}`);
+      const url =
+        (await confirmPaymentProof(payFile, `pay_${payModal.id}`).catch(() => '')) ||
+        (await fileToCompressedDataUrl(payFile));
       const { error } = await confirmTransactionPayment({
         transactionId: payModal.id,
         proofUrl: url,
@@ -522,10 +526,13 @@ export default function CsCommandCenter() {
       toast('Pembayaran dikonfirmasi. POS terbuka untuk produksi.', 'ok');
       setPayModal(null);
       setPayFile(null);
-      if (selectedKey) loadContext(phoneFromThread(selectedKey));
+      if (selectedKey) {
+        loadContext(phoneFromThread(selectedKey));
+        loadMessages(selectedKey);
+      }
       loadPayTasks();
     } catch (err: any) {
-      toast('Gagal unggah bukti: ' + (err?.message || 'Coba lagi'), 'err');
+      toast('Gagal menyimpan bukti: ' + (err?.message || 'Coba lagi'), 'err');
     } finally {
       setPayBusy(false);
     }

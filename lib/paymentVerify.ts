@@ -129,6 +129,11 @@ export async function markInvoicePaid(opts: {
         status: 'Diterima'
       },
       {
+        payment_proof_url: opts.proofUrl || undefined,
+        payment_status: 'paid',
+        status: 'Diterima'
+      },
+      {
         payment_status: 'paid',
         is_paid: true,
         paid_at: paidAt,

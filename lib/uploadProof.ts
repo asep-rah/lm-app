@@ -1,85 +1,125 @@
-import { supabase } from '@/lib/supabaseClient';
+/**
+ * Bukti foto: coba Storage singkat, selalu fallback ke data URL terkompresi.
+ * Tanpa bucket / 403 / 404 tidak boleh gagal.
+ */
 
-const MAX_EDGE = 1280;
-const JPEG_QUALITY = 0.72;
+const MAX_DATA_CHARS = 140_000;
 
 const readAsDataUrl = (blob: Blob) =>
   new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onload = () => {
+      const out = String(reader.result || '');
+      if (!out) reject(new Error('File kosong'));
+      else resolve(out);
+    };
     reader.onerror = () => reject(new Error('Gagal membaca file'));
     reader.readAsDataURL(blob);
   });
 
-const compressImageFile = async (file: File): Promise<Blob> => {
-  if (typeof window === 'undefined') return file;
-  if (!file.type.startsWith('image/') || file.type.includes('gif') || file.type.includes('svg')) {
-    return file;
+const loadImage = (src: string) =>
+  new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('decode'));
+    img.src = src;
+  });
+
+const canvasToJpeg = (img: HTMLImageElement, edge: number, quality: number) => {
+  let w = img.naturalWidth || img.width || 1;
+  let h = img.naturalHeight || img.height || 1;
+  if (w > edge || h > edge) {
+    const scale = edge / Math.max(w, h);
+    w = Math.max(1, Math.round(w * scale));
+    h = Math.max(1, Math.round(h * scale));
   }
-  try {
-    const dataUrl = await readAsDataUrl(file);
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const el = new Image();
-      el.onload = () => resolve(el);
-      el.onerror = () => reject(new Error('decode'));
-      el.src = dataUrl;
-    });
-    let w = img.naturalWidth || img.width;
-    let h = img.naturalHeight || img.height;
-    if (w > MAX_EDGE || h > MAX_EDGE) {
-      const scale = MAX_EDGE / Math.max(w, h);
-      w = Math.round(w * scale);
-      h = Math.round(h * scale);
-    }
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, w);
-    canvas.height = Math.max(1, h);
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return file;
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, 'image/jpeg', JPEG_QUALITY)
-    );
-    if (!blob) return file;
-    if (blob.size >= file.size && file.size < 700_000) return file;
-    return blob;
-  } catch {
-    return file;
-  }
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return '';
+  ctx.drawImage(img, 0, 0, w, h);
+  return canvas.toDataURL('image/jpeg', quality);
 };
 
-const tryStorageUpload = async (file: File, prefix: string): Promise<string | null> => {
-  const ext = file.type.includes('png') ? 'png' : file.type.includes('pdf') ? 'pdf' : 'jpg';
-  const fileName = `${prefix}_${Date.now()}.${ext}`;
-  const buckets = ['laundry-proofs', 'outlet-issues'];
-  for (const bucket of buckets) {
+/** JPEG data URL cukup kecil untuk kolom Postgres text + payload PostgREST. */
+export async function fileToCompressedDataUrl(file: File): Promise<string> {
+  if (typeof window === 'undefined') {
+    return readAsDataUrl(file);
+  }
+  try {
+    const raw = await readAsDataUrl(file);
+    if (!file.type.startsWith('image/') || file.type.includes('gif') || file.type.includes('svg')) {
+      return raw.length > MAX_DATA_CHARS ? raw.slice(0, MAX_DATA_CHARS) : raw;
+    }
+    const img = await loadImage(raw);
+    const passes: Array<{ edge: number; quality: number }> = [
+      { edge: 960, quality: 0.62 },
+      { edge: 720, quality: 0.5 },
+      { edge: 560, quality: 0.4 },
+      { edge: 420, quality: 0.32 }
+    ];
+    let best = '';
+    for (const p of passes) {
+      const next = canvasToJpeg(img, p.edge, p.quality);
+      if (!next) continue;
+      best = next;
+      if (next.length <= MAX_DATA_CHARS) return next;
+    }
+    return best || raw;
+  } catch {
     try {
+      return await readAsDataUrl(file);
+    } catch {
+      return 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+    }
+  }
+}
+
+const tryStorageUpload = async (file: File, prefix: string): Promise<string | null> => {
+  try {
+    const { supabase } = await import('@/lib/supabaseClient');
+    const fileName = `${prefix}_${Date.now()}.jpg`;
+    const buckets = ['laundry-proofs', 'outlet-issues'];
+    for (const bucket of buckets) {
       const { error } = await supabase.storage.from(bucket).upload(fileName, file, {
-        contentType: file.type || (ext === 'pdf' ? 'application/pdf' : 'image/jpeg'),
+        contentType: file.type || 'image/jpeg',
         upsert: true
       });
-      if (error) continue;
+      if (error) {
+        const msg = String(error.message || error).toLowerCase();
+        if (msg.includes('403') || msg.includes('404') || msg.includes('not found') || msg.includes('unauthorized') || msg.includes('row-level')) {
+          return null;
+        }
+        continue;
+      }
       const { data } = supabase.storage.from(bucket).getPublicUrl(fileName);
-      if (data?.publicUrl) return data.publicUrl;
-    } catch {
-      /* unauthorized / network — coba bucket berikutnya atau data URL */
+      if (data?.publicUrl?.startsWith('http')) return data.publicUrl;
     }
+  } catch {
+    return null;
   }
   return null;
 };
 
-/** Unggah ke Storage; bila gagal (unauthorized dll) pakai data URL inline. */
+const withTimeout = <T,>(p: Promise<T>, ms: number): Promise<T | null> =>
+  Promise.race([
+    p,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), ms))
+  ]);
+
+/**
+ * Coba Storage 2.5s; apa pun hasilnya (error/403/timeout) → data URL terkompresi.
+ * Fungsi ini tidak melempar.
+ */
 export async function uploadProofFile(file: File, prefix: string): Promise<string> {
-  const compressed = await compressImageFile(file);
-  const uploadFile =
-    compressed instanceof File
-      ? compressed
-      : new File([compressed], `${prefix}.jpg`, { type: compressed.type || 'image/jpeg' });
-
-  const stored = await tryStorageUpload(uploadFile, prefix);
-  if (stored) return stored;
-
-  return readAsDataUrl(uploadFile);
+  try {
+    const stored = await withTimeout(tryStorageUpload(file, prefix), 2500);
+    if (stored && stored.startsWith('http')) return stored;
+  } catch {
+    /* bucket tidak dikonfigurasi / 403 / jaringan */
+  }
+  return fileToCompressedDataUrl(file);
 }
 
 export const uploadChatAttachment = uploadProofFile;
