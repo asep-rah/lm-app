@@ -33,6 +33,7 @@ import { toast } from '@/lib/toast';
 import FileProofInput from '@/components/FileProofInput';
 import { notifyOps, unlockOpsAudio } from '@/lib/opsNotify';
 import { isComplaintIssue } from '@/lib/csCare';
+import { simulateMayarAutoPay } from '@/lib/mayar';
 
 type Thread = {
   key: string;
@@ -89,6 +90,7 @@ export default function CsCommandCenter() {
   const [audioReady, setAudioReady] = useState(false);
   const [nowTick, setNowTick] = useState(Date.now());
   const seenIds = useRef(new Set<string>());
+  const seenPaidIds = useRef(new Set<string>());
   const selectedKeyRef = useRef('');
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -358,7 +360,25 @@ export default function CsCommandCenter() {
           notifyOps('complaint', 'Komplain baru dari pelanggan. Perlu investigasi CS Care.', true);
         }
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, (payload) => {
+        const row: any = payload.new;
+        const prev: any = payload.old;
+        const nowPaid =
+          row &&
+          (row.is_paid === true ||
+            String(row.payment_status || '').toLowerCase() === 'paid' ||
+            String(row.status || '').toLowerCase() === 'paid' ||
+            String(row.status || '').toLowerCase().includes('lunas'));
+        const wasPaid =
+          prev &&
+          (prev.is_paid === true ||
+            String(prev.payment_status || '').toLowerCase() === 'paid' ||
+            String(prev.status || '').toLowerCase() === 'paid');
+        const paidKey = row?.id ? String(row.id) : '';
+        if (nowPaid && !wasPaid && paidKey && !seenPaidIds.current.has(paidKey)) {
+          seenPaidIds.current.add(paidKey);
+          notifyOps('payment', `Pembayaran QRIS terkonfirmasi${row.receipt_number ? ` (${row.receipt_number})` : ''}.`, true);
+        }
         const openKey = selectedKeyRef.current;
         if (openKey) loadContext(phoneFromThread(openKey));
         loadPayTasks();
@@ -1027,12 +1047,34 @@ export default function CsCommandCenter() {
                       onClick={async () => {
                         const { error } = await sendInvoiceToLiveChat({ ...o, customer_phone: phone || o.customer_phone }, agent.name);
                         if (error) return toast('Gagal kirim tagihan: ' + error.message, 'err');
-                        toast('Tagihan dikirim ke live chat.', 'ok');
+                        toast('Tagihan QRIS (Mayar/Mock) dikirim ke live chat.', 'ok');
                         if (selectedKey) loadMessages(selectedKey);
                       }}
                       className="w-full text-[11px] font-black bg-blue-600 text-white py-2.5 rounded-xl"
                     >
-                      📲 Kirim Tagihan
+                      📲 Kirim Tagihan QRIS
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await simulateMayarAutoPay({
+                            transactionId: o.id,
+                            receipt: o.receipt_number,
+                            amount: Number(o.amount) || 0,
+                            customerPhone: phone || o.customer_phone
+                          });
+                          toast('Simulasi auto-pay terkirim. Status lunas + chime CS.', 'ok');
+                          if (selectedKey) loadContext(phoneFromThread(selectedKey));
+                          loadPayTasks();
+                          if (selectedKey) loadMessages(selectedKey);
+                        } catch (e: any) {
+                          toast(e?.message || 'Simulasi gagal', 'err');
+                        }
+                      }}
+                      className="w-full text-[11px] font-black bg-violet-600 text-white py-2.5 rounded-xl"
+                    >
+                      🧪 Test Auto-Payment Sim
                     </button>
                     <button
                       type="button"

@@ -181,3 +181,56 @@ export async function confirmTransactionPayment(opts: {
 }) {
   return markInvoicePaid(opts);
 }
+
+export const gatewayPaidAttempts = (agentName: string) => {
+  const paidAt = new Date().toISOString();
+  return [
+    {
+      payment_status: 'paid',
+      is_paid: true,
+      paid_at: paidAt,
+      paid_verified_by: agentName,
+      status: 'paid'
+    },
+    { payment_status: 'paid', is_paid: true, status: 'paid' },
+    { is_paid: true, status: 'paid' },
+    {
+      payment_status: 'paid',
+      is_paid: true,
+      paid_at: paidAt,
+      paid_verified_by: agentName,
+      status: 'Diterima'
+    },
+    { payment_status: 'paid', is_paid: true, status: 'Diterima' },
+    { is_paid: true, status: 'Diterima' },
+    { status: 'Diterima' }
+  ];
+};
+
+export async function markGatewayPaid(opts: {
+  transactionId: string;
+  receipt?: string;
+  amount?: number;
+  agentName?: string;
+  customerPhone?: string;
+}) {
+  const agent = opts.agentName || 'Mayar QRIS';
+  const { error } = await updateWithFallback('transactions', gatewayPaidAttempts(agent), {
+    column: 'id',
+    value: opts.transactionId
+  });
+  if (error) return { error };
+  await completePaymentVerifyTasks(opts.transactionId, opts.receipt);
+  if (opts.customerPhone) {
+    const nominal = Number(opts.amount || 0).toLocaleString('id-ID');
+    await insertChatMessage({
+      customer_phone: opts.customerPhone,
+      pickup_order_id: null,
+      transaction_id: opts.transactionId,
+      sender_type: 'cs',
+      sender_name: agent,
+      message: `Pembayaran QRIS sebesar Rp ${nominal} sudah terkonfirmasi. Cucian masuk antrean produksi.`
+    });
+  }
+  return { error: null };
+}

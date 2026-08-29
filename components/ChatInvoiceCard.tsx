@@ -22,11 +22,21 @@ export default function ChatInvoiceCard({ message }: { message: any }) {
         {inv.qrisUrl ? (
           <div className="bg-slate-50 rounded-xl p-2 flex flex-col items-center">
             <img src={inv.qrisUrl} alt="QRIS" className="w-36 h-36 object-contain bg-white rounded-lg" />
-            <p className="text-[9px] text-slate-500 font-bold mt-1">Scan QRIS / Transfer sesuai nominal</p>
+            <p className="text-[9px] text-slate-500 font-bold mt-1">Scan QRIS sesuai nominal</p>
           </div>
         ) : (
-          <p className="text-[10px] text-slate-500">Bayar via QRIS sebesar nominal di atas, lalu unggah bukti di chat.</p>
+          <p className="text-[10px] text-slate-500">Bayar via QRIS sebesar nominal di atas.</p>
         )}
+        {inv.invoiceUrl ? (
+          <a
+            href={inv.invoiceUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="block text-center text-[11px] font-black bg-amber-500 text-white py-2 rounded-xl"
+          >
+            Buka tautan invoice
+          </a>
+        ) : null}
       </div>
     </div>
   );

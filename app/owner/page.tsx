@@ -131,6 +131,8 @@ export default function Dashboard() {
   const [newOutletLon, setNewOutletLon] = useState('');
   const [newOutletRadius, setNewOutletRadius] = useState('200');
   const [newOutletWA, setNewOutletWA] = useState('');
+  const [newOutletMayarKey, setNewOutletMayarKey] = useState('');
+  const [newOutletMayarPayout, setNewOutletMayarPayout] = useState('');
 
   // States Karyawan & Absensi
   const [editingEmp, setEditingEmp] = useState<any>(null);
@@ -479,7 +481,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (selectedOutletToEdit === 'NEW') {
-      setNewOutletName(''); setNewOutletCity(''); setNewOutletLat(''); setNewOutletLon(''); setNewOutletRadius('200'); setNewOutletWA('');
+      setNewOutletName(''); setNewOutletCity(''); setNewOutletLat(''); setNewOutletLon(''); setNewOutletRadius('200'); setNewOutletWA(''); setNewOutletMayarKey(''); setNewOutletMayarPayout('');
     } else {
       const targetOutlet = outlets.find(o => o.id === selectedOutletToEdit);
       if (targetOutlet) {
@@ -489,6 +491,8 @@ export default function Dashboard() {
         setNewOutletLon(targetOutlet.longitude ? String(targetOutlet.longitude) : '');
         setNewOutletRadius(targetOutlet.radius_meters ? String(targetOutlet.radius_meters) : '200');
         setNewOutletWA(targetOutlet.whatsapp_number || '');
+        setNewOutletMayarKey(targetOutlet.mayar_api_key || '');
+        setNewOutletMayarPayout(targetOutlet.mayar_payout_account_id || '');
       }
     }
   }, [selectedOutletToEdit, outlets]);
@@ -501,7 +505,9 @@ export default function Dashboard() {
     const payload: any = { 
       name: newOutletName.trim(),
       city: newOutletCity.trim() || '-',
-      whatsapp_number: newOutletWA.trim()
+      whatsapp_number: newOutletWA.trim(),
+      mayar_api_key: newOutletMayarKey.trim() || null,
+      mayar_payout_account_id: newOutletMayarPayout.trim() || null
     };
     
     if (newOutletLat) payload.latitude = Number(newOutletLat);
@@ -518,10 +524,25 @@ export default function Dashboard() {
       error = res.error;
     }
 
+    if (error && String(error.message || '').toLowerCase().includes('mayar_')) {
+      delete payload.mayar_api_key;
+      delete payload.mayar_payout_account_id;
+      if (selectedOutletToEdit === 'NEW') {
+        const res = await supabase.from('outlets').insert([payload]);
+        error = res.error;
+      } else {
+        const res = await supabase.from('outlets').update(payload).eq('id', selectedOutletToEdit);
+        error = res.error;
+      }
+      if (!error) {
+        alert('Outlet disimpan. Jalankan migrasi Mayar SQL agar API key cabang ikut tersimpan.');
+      }
+    }
+
     if (!error) {
       alert(`✅ ${selectedOutletToEdit === 'NEW' ? 'Outlet Cabang Baru Berhasil Ditambahkan!' : 'Data Outlet Berhasil Diperbarui!'}`);
       setSelectedOutletToEdit('NEW');
-      setNewOutletName(''); setNewOutletCity(''); setNewOutletLat(''); setNewOutletLon(''); setNewOutletRadius('200'); setNewOutletWA('');
+      setNewOutletName(''); setNewOutletCity(''); setNewOutletLat(''); setNewOutletLon(''); setNewOutletRadius('200'); setNewOutletWA(''); setNewOutletMayarKey(''); setNewOutletMayarPayout('');
       const { data: outletData } = await supabase.from('outlets').select('*');
       if (outletData) setOutlets(outletData);
     } else alert('❌ Gagal menyimpan outlet: ' + error.message);
@@ -1541,6 +1562,14 @@ export default function Dashboard() {
                       <div>
                         <label className="text-[10px] font-bold text-emerald-900 block mb-1">Nomor WhatsApp Cabang / CS</label>
                         <input type="text" placeholder="Contoh: 628123456789" value={newOutletWA} onChange={(e) => setNewOutletWA(e.target.value)} className="w-full border border-emerald-300 rounded-xl p-2.5 text-xs font-bold text-slate-800 bg-white" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-emerald-900 block mb-1">Mayar API Key (QRIS)</label>
+                        <input type="password" placeholder="Kosongkan = mode mock hingga KYC aktif" value={newOutletMayarKey} onChange={(e) => setNewOutletMayarKey(e.target.value)} className="w-full border border-emerald-300 rounded-xl p-2.5 text-xs font-mono text-slate-800 bg-white" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-emerald-900 block mb-1">Mayar Payout Account ID</label>
+                        <input type="text" placeholder="ID rekening pencairan Mayar" value={newOutletMayarPayout} onChange={(e) => setNewOutletMayarPayout(e.target.value)} className="w-full border border-emerald-300 rounded-xl p-2.5 text-xs font-mono text-slate-800 bg-white" />
                       </div>
 
                       <div className="grid grid-cols-2 gap-2">

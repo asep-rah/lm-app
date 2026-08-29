@@ -9,6 +9,7 @@ import { getStaffSession } from '@/lib/staffSession';
 import { insertChatMessage, threadKeyOf } from '@/lib/csChat';
 import { sendInvoiceToLiveChat } from '@/lib/chatInvoice';
 import { isPaymentLocked, markInvoicePaid } from '@/lib/paymentVerify';
+import { simulateMayarAutoPay } from '@/lib/mayar';
 import { toast } from '@/lib/toast';
 import ChatInvoiceCard from '@/components/ChatInvoiceCard';
 import { visibleChatText } from '@/components/ChatAttachment';
@@ -714,13 +715,35 @@ export default function CSDashboard() {
                               📲 Kirim Tagihan
                             </button>
                             {isPaymentLocked(t) && (
-                              <button
-                                onClick={() => handleMarkBillPaid(t)}
-                                title="Tandai tagihan sudah dibayar"
-                                className="bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200 font-bold px-2.5 py-1 rounded-lg text-[10px] transition"
-                              >
-                                ✅ Tagihan Sudah Terbayarkan
-                              </button>
+                              <>
+                                <button
+                                  onClick={async () => {
+                                    try {
+                                      await simulateMayarAutoPay({
+                                        transactionId: t.id,
+                                        receipt: t.receipt_number,
+                                        amount: Number(t.amount) || 0,
+                                        customerPhone: t.customer_phone
+                                      });
+                                      toast('Simulasi auto-pay Mayar terkirim.', 'ok');
+                                      loadCSData();
+                                    } catch (e: any) {
+                                      toast(e?.message || 'Simulasi gagal', 'err');
+                                    }
+                                  }}
+                                  title="Simulasi pembayaran Mayar (mock)"
+                                  className="bg-violet-50 text-violet-800 hover:bg-violet-100 border border-violet-200 font-bold px-2.5 py-1 rounded-lg text-[10px] transition"
+                                >
+                                  🧪 Test Auto-Pay
+                                </button>
+                                <button
+                                  onClick={() => handleMarkBillPaid(t)}
+                                  title="Tandai tagihan sudah dibayar"
+                                  className="bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200 font-bold px-2.5 py-1 rounded-lg text-[10px] transition"
+                                >
+                                  ✅ Tagihan Sudah Terbayarkan
+                                </button>
+                              </>
                             )}
                             {(t.status === 'Selesai' || t.status === 'Siap Diambil') && (
                               <button

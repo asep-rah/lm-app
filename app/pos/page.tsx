@@ -17,6 +17,9 @@ import { uploadProofFile } from '@/lib/uploadProof';
 import { cartLineAmount } from '@/lib/kiloanPrice';
 import FileProofInput from '@/components/FileProofInput';
 import { createPaymentVerifyTask, isCsVerifiedPaid, isNonCashVerifyMethod, isPaymentLocked, PENDING_PAY_STATUS } from '@/lib/paymentVerify';
+import { sendInvoiceToLiveChat } from '@/lib/chatInvoice';
+import { simulateMayarAutoPay } from '@/lib/mayar';
+import { toast } from '@/lib/toast';
 import {
   classifyQueueOrder,
   coalesceProsesCards,
@@ -1296,6 +1299,16 @@ const handleApplyLoan = async (e: React.FormEvent) => {
           payment_method: finalPaymentMethodLabel,
           outlet_id: selectedOutlet
         });
+        if (normalizedPhone || customerPhone) {
+          await sendInvoiceToLiveChat(
+            {
+              ...newTx,
+              customer_phone: normalizedPhone || customerPhone,
+              outlet_id: selectedOutlet
+            },
+            employeeName || 'Kasir'
+          ).catch((e) => console.warn('invoice chat:', e));
+        }
       }
       const curOutletPhone = newTx.outlets?.whatsapp_number || outletPhone || '';
       setLastOrderInfo({ 
@@ -1972,8 +1985,33 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
 
     if (isPaymentLocked(order)) {
       return wrap(
-        <div className="w-full bg-amber-50 border border-amber-200 text-amber-800 text-[11px] font-bold py-2.5 px-3 rounded-xl text-center animate-pulse">
-          ⏳ Menunggu Konfirmasi Pembayaran CS
+        <div className="space-y-2">
+          <div className="w-full bg-amber-50 border border-amber-200 text-amber-800 text-[11px] font-bold py-2.5 px-3 rounded-xl text-center animate-pulse">
+            ⏳ Menunggu Konfirmasi Pembayaran CS
+          </div>
+          <button
+            type="button"
+            disabled={isBusy}
+            onClick={async (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              try {
+                await simulateMayarAutoPay({
+                  transactionId: order.id,
+                  receipt: order.receipt_number,
+                  amount: Number(order.amount) || 0,
+                  customerPhone: order.customer_phone || order.phone_number
+                });
+                toast('Simulasi auto-pay Mayar terkirim. Status akan jadi lunas.', 'ok');
+                refreshData();
+              } catch (err: any) {
+                toast(err?.message || 'Simulasi gagal', 'err');
+              }
+            }}
+            className="w-full bg-violet-600 hover:bg-violet-700 text-white text-[11px] font-black py-2.5 rounded-xl"
+          >
+            🧪 Test Auto-Payment Sim
+          </button>
         </div>
       );
     }

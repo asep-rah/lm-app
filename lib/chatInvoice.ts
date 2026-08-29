@@ -1,4 +1,5 @@
 import { insertChatMessage } from '@/lib/csChat';
+import { requestMayarInvoice } from '@/lib/mayar';
 import { supabase } from '@/lib/supabaseClient';
 
 const UUID_RE =
@@ -27,20 +28,27 @@ async function resolvePickupOrderId(tx: { id?: string; pickup_id?: string; recei
   return null;
 }
 
-export const INVOICE_TAG_RE = /\[INVOICE\|([^\]|]*)\|([^\]|]*)\|([^\]|]*)\|([^\]]*)\]/;
+export const INVOICE_TAG_RE = /\[INVOICE\|([^\]|]*)\|([^\]|]*)\|([^\]|]*)\|([^\]|]*)(?:\|([^\]]*))?\]/;
 
 export type ChatInvoice = {
   resi: string;
   amount: string;
   service: string;
   qrisUrl: string;
+  invoiceUrl: string;
 };
 
 export const parseChatInvoice = (message: any): ChatInvoice | null => {
   const text = typeof message === 'string' ? message : String(message?.message || '');
   const m = text.match(INVOICE_TAG_RE);
   if (!m) return null;
-  return { resi: m[1] || '-', amount: m[2] || '0', service: m[3] || '', qrisUrl: m[4] || '' };
+  return {
+    resi: m[1] || '-',
+    amount: m[2] || '0',
+    service: m[3] || '',
+    qrisUrl: m[4] || '',
+    invoiceUrl: m[5] || ''
+  };
 };
 
 export const stripInvoiceTag = (text: string) => String(text || '').replace(INVOICE_TAG_RE, '').trim();
@@ -50,29 +58,35 @@ export const invoiceQrUrl = (resi: string, amount: number) => {
   return `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(payload)}`;
 };
 
-export const buildInvoiceChatBody = (tx: {
-  receipt_number?: string;
-  customer_name?: string;
-  service_type?: string;
-  weight_kg?: number;
-  pcs_count?: number;
-  amount?: number;
-  outlets?: { name?: string };
-}) => {
+export const buildInvoiceChatBody = (
+  tx: {
+    receipt_number?: string;
+    customer_name?: string;
+    service_type?: string;
+    weight_kg?: number;
+    pcs_count?: number;
+    amount?: number;
+    outlets?: { name?: string };
+  },
+  charge?: { qrisUrl?: string; invoiceUrl?: string; mock?: boolean }
+) => {
   const resi = tx.receipt_number || '-';
   const amount = Number(tx.amount) || 0;
   const qty = [tx.weight_kg ? `${tx.weight_kg} Kg` : '', tx.pcs_count ? `${tx.pcs_count} Pcs` : '']
     .filter(Boolean)
     .join(' / ');
-  const qris = invoiceQrUrl(resi, amount);
+  const qris = charge?.qrisUrl || invoiceQrUrl(resi, amount);
+  const invoiceUrl = charge?.invoiceUrl || '';
   return [
     `Halo Kak ${tx.customer_name || ''}! Berikut tagihan cucian Anda.`.trim(),
     '',
-    `[INVOICE|${resi}|${amount}|${tx.service_type || ''}|${qris}]`,
+    `[INVOICE|${resi}|${amount}|${tx.service_type || ''}|${qris}|${invoiceUrl}]`,
     '',
     `Cabang: ${tx.outlets?.name || '-'}`,
     qty ? `Rincian: ${qty}` : '',
-    'Silakan scan QRIS pada kartu di atas, lalu unggah bukti pembayaran di chat ini.'
+    charge?.mock
+      ? 'Mode uji QRIS (Mayar KYC belum aktif). Scan QR atau buka tautan invoice, lalu minta CS menjalankan Test Auto-Payment.'
+      : 'Silakan scan QRIS atau buka tautan invoice, lalu pembayaran akan terkonfirmasi otomatis.'
   ]
     .filter((line) => line !== '')
     .join('\n');
@@ -82,6 +96,7 @@ export async function sendInvoiceToLiveChat(
   tx: {
     id?: string;
     pickup_id?: string;
+    outlet_id?: string;
     receipt_number?: string;
     customer_name?: string;
     customer_phone?: string;
@@ -95,6 +110,20 @@ export async function sendInvoiceToLiveChat(
 ) {
   const phone = String(tx.customer_phone || '').trim();
   if (!phone) return { error: { message: 'Nomor pelanggan tidak ditemukan' } };
+  let charge: { qrisUrl?: string; invoiceUrl?: string; mock?: boolean } | undefined;
+  try {
+    charge = await requestMayarInvoice({
+      amount: Number(tx.amount) || 0,
+      name: `Laundrivery ${tx.receipt_number || ''}`.trim(),
+      description: `Tagihan ${tx.receipt_number || ''} ${tx.service_type || ''}`.trim(),
+      mobile: phone,
+      receipt: tx.receipt_number,
+      transactionId: tx.id,
+      outletId: tx.outlet_id
+    });
+  } catch (e: any) {
+    console.warn('Mayar invoice fallback QR lokal:', e?.message);
+  }
   const pickupOrderId = await resolvePickupOrderId(tx);
   const txRef = tx.id && UUID_RE.test(String(tx.id)) ? String(tx.id) : null;
   return insertChatMessage({
@@ -103,6 +132,6 @@ export async function sendInvoiceToLiveChat(
     transaction_id: txRef,
     sender_type: 'cs',
     sender_name: agentName || 'CS',
-    message: buildInvoiceChatBody(tx)
+    message: buildInvoiceChatBody(tx, charge)
   });
 }
