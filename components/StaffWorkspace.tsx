@@ -5,13 +5,13 @@ import Link from 'next/link';
 import { supabase } from '@/lib/supabaseClient';
 import {
   canAccessSettings,
+  canAccessKpiSettings,
   getStaffSession,
   isHeadManagementRole
 } from '@/lib/staffSession';
 import { inboxRolesFor, isTaskCompleted, isTaskInProgress, isTaskOverdueOpen } from '@/lib/taskRoles';
 import { roleLabelOf } from '@/lib/staffRoles';
 import { completeTaskWithSlaCheck } from '@/utils/taskSlaEvaluator';
-import RequisitionForm from '@/components/RequisitionForm';
 import HeadTaskDelegator from '@/components/HeadTaskDelegator';
 import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
 import { toast } from '@/lib/toast';
@@ -230,14 +230,14 @@ export default function StaffWorkspace() {
           </div>
           <div className="flex gap-2 flex-wrap">
             {canAccessSettings(role) && (
-              <>
-                <Link href="/owner" className="text-[11px] font-semibold px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50">
-                  Analytics
-                </Link>
-                <Link href="/owner/kpi-settings" className="text-[11px] font-semibold px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50">
-                  Settings
-                </Link>
-              </>
+              <Link href="/owner" className="text-[11px] font-semibold px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50">
+                Analytics
+              </Link>
+            )}
+            {canAccessKpiSettings(role) && (
+              <Link href="/owner/kpi-settings" className="text-[11px] font-semibold px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50">
+                KPI Settings
+              </Link>
             )}
             {(role === 'cs' || role === 'head_cs' || role === 'cs_care') && (
               <>
@@ -358,20 +358,12 @@ export default function StaffWorkspace() {
               </div>
             )}
 
-            {(role === 'admin_ops' || role === 'admin') && (
-              <div className="space-y-2">
-                <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">PR & CMS</p>
-                <RequisitionForm employeeName={session.name} role={role} selectedOutlet={session.outletId || undefined} />
-              </div>
-            )}
-
             {(role === 'finance' || role === 'head_finance') && (
               <div className="space-y-3">
                 <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Financial entries</p>
                 <Link href="/expense" className="block text-center text-xs font-semibold py-2 rounded-lg bg-slate-900 text-white">
                   Buka buku pengeluaran
                 </Link>
-                <RequisitionForm employeeName={session.name} role={role} selectedOutlet={session.outletId || undefined} />
               </div>
             )}
 

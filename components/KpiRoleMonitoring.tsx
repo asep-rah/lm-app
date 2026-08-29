@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { fetchRoleKpis, type KpiCard } from '@/lib/kpiMetrics';
 import { currentMonthYear } from '@/lib/kpiCatalog';
-import { getStaffSession, kpiKeysVisibleForRole, canAccessSettings } from '@/lib/staffSession';
+import { getStaffSession, kpiKeysVisibleForRole, canAccessKpiSettings } from '@/lib/staffSession';
 import Skeleton from '@/components/ui/Skeleton';
 import StatusBadge from '@/components/ui/StatusBadge';
 
@@ -14,7 +14,7 @@ const toneOf = (score: number) =>
 export default function KpiRoleMonitoring() {
   const session = useMemo(() => getStaffSession(), []);
   const allowedKeys = kpiKeysVisibleForRole(session.role);
-  const canEditTargets = canAccessSettings(session.role);
+  const canEditTargets = canAccessKpiSettings(session.role);
 
   const [cards, setCards] = useState<KpiCard[]>([]);
   const [healthyCount, setHealthyCount] = useState(0);

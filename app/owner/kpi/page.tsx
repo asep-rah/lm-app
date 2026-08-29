@@ -5,7 +5,7 @@ import Link from 'next/link';
 import OwnerExecNav from '@/components/OwnerExecNav';
 import { fetchRoleKpis, type KpiCard, type KpiMetricLine } from '@/lib/kpiMetrics';
 import { currentMonthYear } from '@/lib/kpiCatalog';
-import { canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
+import { canAccessSettings, canAccessKpiSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
 import StatusBadge from '@/components/ui/StatusBadge';
 
 const fmtHours = (h: number) => {
@@ -53,6 +53,7 @@ const targetDetailOf = (card: KpiCard) => {
 
 export default function OwnerKpiPage() {
   const [ready, setReady] = useState(false);
+  const [canEditTargets, setCanEditTargets] = useState(false);
   const [cards, setCards] = useState<KpiCard[]>([]);
   const [monthYear, setMonthYear] = useState(currentMonthYear());
   const [loading, setLoading] = useState(true);
@@ -72,6 +73,7 @@ export default function OwnerKpiPage() {
       window.location.href = homePathForRole(role);
       return;
     }
+    setCanEditTargets(canAccessKpiSettings(role));
     setReady(true);
   }, []);
 
@@ -113,9 +115,11 @@ export default function OwnerKpiPage() {
                 onChange={(e) => setMonthYear(e.target.value)}
                 className="bg-slate-50 border border-slate-200 text-slate-700 text-xs rounded-lg px-2 py-1.5"
               />
-              <Link href="/owner/kpi-settings" className="text-xs font-bold px-3 py-1.5 rounded-lg bg-sky-500 text-white">
-                Atur Target
-              </Link>
+              {canEditTargets && (
+                <Link href="/owner/kpi-settings" className="text-xs font-bold px-3 py-1.5 rounded-lg bg-sky-500 text-white">
+                  Atur Target
+                </Link>
+              )}
             </div>
           </div>
         </div>

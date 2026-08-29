@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { getStaffSession, homePathForRole, canAccessSettings } from '@/lib/staffSession';
+import { getStaffSession, homePathForRole, canAccessKpiSettings } from '@/lib/staffSession';
+import { queueToast } from '@/lib/toast';
 import {
   currentMonthYear,
   KPI_CATALOG,
@@ -21,7 +22,7 @@ import {
 
 export default function KpiSettingsPage() {
   const session = useMemo(() => getStaffSession(), []);
-  const canEdit = canAccessSettings(session.role);
+  const canEdit = canAccessKpiSettings(session.role);
 
   const [monthYear, setMonthYear] = useState(currentMonthYear());
   const [role, setRole] = useState(KPI_ROLES[0].key);
@@ -51,7 +52,8 @@ export default function KpiSettingsPage() {
     }
     const user = JSON.parse(raw);
     const role = String(user.role || '').toLowerCase();
-    if (!canAccessSettings(role)) {
+    if (!canAccessKpiSettings(role)) {
+      queueToast('Akses ditolak. Hanya Owner yang dapat mengatur target KPI.', 'warn');
       window.location.href = homePathForRole(role);
       return;
     }
@@ -135,7 +137,7 @@ export default function KpiSettingsPage() {
   if (!canEdit) {
     return (
       <div className="min-h-screen bg-slate-50 text-slate-900 flex items-center justify-center p-6">
-        <p className="text-sm">Hanya Owner / Supervisor yang dapat mengatur KPI.</p>
+        <p className="text-sm">Hanya Owner yang dapat mengatur KPI.</p>
       </div>
     );
   }

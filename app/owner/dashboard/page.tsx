@@ -686,7 +686,7 @@ setDeleteRequests(delData);
           <button onClick={() => setActiveTab('history')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'history' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>📦 History 1 Thn</button>
           <button onClick={() => setActiveTab('loans')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'loans' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>💸 Kasbon Crew</button>
 
-          {canAccessSettings(currentUserRole) && (
+          {isOwnerRole(currentUserRole) && (
             <Link href="/owner/kpi-settings" className="whitespace-nowrap bg-amber-50 border border-amber-200 text-amber-800 hover:bg-amber-500 hover:text-white text-xs px-4 py-2 rounded-xl font-bold transition">🎯 KPI Settings</Link>
           )}
           {canAccessSettings(currentUserRole) && (
@@ -694,9 +694,6 @@ setDeleteRequests(delData);
               <button onClick={() => setActiveTab('settings')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'settings' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>⚙️ Settings</button>
               <button onClick={() => setActiveTab('employees')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'employees' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>👥 Karyawan</button>
             </>
-          )}
-          {canAccessSettings(currentUserRole) && (
-            <Link href="/workspace" className="whitespace-nowrap bg-slate-100 text-slate-700 font-bold text-xs px-3 py-2 rounded-xl">Workspace</Link>
           )}
 
           {/* 🔔 ICON LONCENG NOTIFIKASI REQUEST HAPUS (PENGGANTI PORTAL KASIR) */}

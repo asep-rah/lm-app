@@ -830,7 +830,7 @@ export default function Dashboard() {
             <button onClick={() => setActiveTab('pnl')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'pnl' ? 'bg-sky-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>PnL</button>
             <button onClick={() => setActiveTab('history')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'history' ? 'bg-sky-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>History</button>
             <button onClick={() => setActiveTab('loans')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'loans' ? 'bg-amber-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>Kasbon</button>
-            {canAccessSettings(currentUserRole) && (
+            {isOwnerRole(currentUserRole) && (
               <Link href="/owner/kpi-settings" className="whitespace-nowrap bg-amber-50 border border-amber-200 text-amber-700 hover:bg-amber-500 hover:text-white text-xs px-3.5 py-2 rounded-xl font-bold transition-all">KPI Settings</Link>
             )}
             {isManagementAdmin && (
@@ -839,10 +839,6 @@ export default function Dashboard() {
                 <button onClick={() => setActiveTab('employees')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'employees' ? 'bg-sky-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>Karyawan</button>
               </>
             )}
-            {canAccessSettings(currentUserRole) && (
-              <Link href="/workspace" className="whitespace-nowrap bg-slate-50 border border-slate-200 text-slate-600 hover:bg-white text-xs px-3.5 py-2 rounded-xl font-bold">Workspace</Link>
-            )}
-            <Link href="/pos" className="whitespace-nowrap bg-emerald-50 border border-emerald-200 text-emerald-700 hover:bg-emerald-500 hover:text-white text-xs px-3.5 py-2 rounded-xl font-bold transition-all">POS</Link>
             <button onClick={handleLogout} className="whitespace-nowrap bg-rose-50 border border-rose-200 text-rose-600 hover:bg-rose-500 hover:text-white font-bold text-xs px-3 py-2 rounded-xl transition-all">Keluar</button>
           </div>
           </div>

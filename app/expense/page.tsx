@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
-import RequisitionForm from '@/components/RequisitionForm';
 import RoleTaskInbox from '@/components/RoleTaskInbox';
 import { getStaffSession, isAdminOpsRole, isOwnerRole } from '@/lib/staffSession';
 import { toast } from '@/lib/toast';
@@ -82,11 +81,6 @@ export default function ExpensePage() {
         </div>
 
         <RoleTaskInbox role={session.role} />
-        <RequisitionForm
-          selectedOutlet={selectedOutlet || session.outletId}
-          employeeName={session.name}
-          role={session.role}
-        />
 
         {canDirect && (
           <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-sm">

@@ -148,6 +148,10 @@ export default function RequisitionForm({
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canCreate) {
+      toast('Hanya Kasir yang dapat mengajukan Purchase Request.', 'warn');
+      return;
+    }
     if (!outletId) return alert('Pilih outlet terlebih dahulu.');
     if (!title.trim()) return alert('Isi judul pengajuan.');
     const nominal = Number(amount) || 0;

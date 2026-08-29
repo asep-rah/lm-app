@@ -46,11 +46,14 @@ export const isOutletLockedRole = (role: string) =>
 export const isCsRole = (role: string) =>
   ['cs', 'cs_care', 'head_cs'].includes(String(role || '').toLowerCase().trim());
 
-/** Settings / KPI Settings / Pengaturan: Owner & Supervisor saja. */
+/** Settings / Pengaturan outlet & karyawan: Owner & Supervisor. */
 export const canAccessSettings = (role: string) => {
   const r = String(role || '').toLowerCase().trim();
   return r === 'owner' || r === 'supervisor';
 };
+
+/** Target KPI hanya Owner yang boleh melihat dan mengubah. */
+export const canAccessKpiSettings = (role: string) => isOwnerRole(role);
 
 /** Dashboard workspace (bukan POS, bukan Driver, bukan Owner analytics). */
 export const isWorkspaceRole = (role: string) => {
@@ -74,8 +77,9 @@ export const isWorkspaceRole = (role: string) => {
 export const isAdminOpsRole = (role: string) =>
   ['finance', 'admin_ops', 'admin', 'head_finance', 'owner'].includes(role);
 
+/** Purchase Request (CMS) hanya Kasir / POS yang boleh mengajukan. */
 export const canCreateRequisition = (role: string) =>
-  !['investor'].includes(role);
+  ['kasir', 'pos'].includes(String(role || '').toLowerCase().trim());
 
 /** Dashboard tujuan jika role tidak boleh membuka rute Owner / settings. */
 export const homePathForRole = (role: string) => {

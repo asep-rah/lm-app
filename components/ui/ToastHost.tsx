@@ -2,12 +2,13 @@
 
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
-import { subscribeToast, type ToastPayload } from '@/lib/toast';
+import { flushQueuedToast, subscribeToast, type ToastPayload } from '@/lib/toast';
 
 export default function ToastHost() {
   const [items, setItems] = useState<(ToastPayload & { id: number })[]>([]);
 
   useEffect(() => {
+    flushQueuedToast();
     return subscribeToast((msg) => {
       const id = Date.now() + Math.random();
       setItems((prev) => [...prev.slice(-4), { ...msg, id }]);
