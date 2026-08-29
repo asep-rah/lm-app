@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import ToastHost from "@/components/ui/ToastHost";
+import OutletGroupChatDrawer from "@/components/OutletGroupChatDrawer";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -17,6 +18,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body className={`${inter.className} bg-slate-50 text-slate-900 antialiased`}>
         <ToastHost />
         {children}
+        <OutletGroupChatDrawer />
       </body>
     </html>
   );
