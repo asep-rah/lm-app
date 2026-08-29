@@ -1,6 +1,6 @@
 import { supabase } from '@/lib/supabaseClient';
-import { insertChatMessage } from '@/lib/csChat';
 import { updateWithFallback } from '@/lib/safeWrite';
+import { ensureComplaintTicketFromIssue, insertTicketMessage, resolveComplaintTicket } from '@/lib/complaintTicket';
 import { completeTaskWithSlaCheck } from '@/utils/taskSlaEvaluator';
 import { getStaffSession } from '@/lib/staffSession';
 import { patchOrderComplaint } from '@/lib/orderFeedback';
@@ -185,23 +185,21 @@ export const resolveCareComplaint = async (opts: {
   );
   if (error) return { error };
 
-  const phone = issuePhone(issue);
   const resi = issueResi(issue);
-  if (phone) {
-    await insertChatMessage({
-      customer_phone: phone,
-      pickup_order_id: issue.pickup_id || null,
-      transaction_id: issue.transaction_id || null,
-      sender_type: 'cs',
-      sender_name: opts.agentName || 'CS Care',
+  const ticket = await ensureComplaintTicketFromIssue(issue);
+  if (ticket?.id) {
+    await insertTicketMessage({
+      ticketId: ticket.id,
+      senderType: 'cs',
       message: [
         `Halo Kak, komplain${resi && resi !== '—' ? ` untuk resi ${resi}` : ''} telah kami selesaikan.`,
         offer ? `Tawaran ganti rugi: ${offer}.` : '',
-        'Terima kasih atas kesabarannya. Jika masih ada kendala, balas chat ini ya Kak.'
+        'Room chat tiket ini akan dihapus otomatis 24 jam setelah penyelesaian.'
       ]
         .filter(Boolean)
         .join('\n')
     });
+    await resolveComplaintTicket(ticket.id);
   }
 
   const orderRef = issue.transaction_id
@@ -342,20 +340,17 @@ export const forwardDecisionToCustomer = async (opts: { issue: any; agentName?: 
   );
   if (error) return { error };
 
-  const phone = issuePhone(issue);
   const resi = issueResi(issue);
-  if (phone) {
-    await insertChatMessage({
-      customer_phone: phone,
-      pickup_order_id: issue.pickup_id || null,
-      transaction_id: issue.transaction_id || null,
-      sender_type: 'cs',
-      sender_name: opts.agentName || 'CS Care',
+  const ticket = await ensureComplaintTicketFromIssue(issue);
+  if (ticket?.id) {
+    await insertTicketMessage({
+      ticketId: ticket.id,
+      senderType: 'cs',
       message: [
         `Halo Kak, hasil investigasi komplain${resi && resi !== '—' ? ` resi ${resi}` : ''} sudah diputuskan Supervisor.`,
         `Keputusan: ${label}.`,
         note ? `Catatan: ${note}` : '',
-        'Silakan buka detail pesanan lalu pilih Setuju atau Banding.'
+        'Silakan buka Tiket Komplain lalu pilih Setuju atau Banding.'
       ]
         .filter(Boolean)
         .join('\n')
@@ -420,14 +415,11 @@ export const customerRespondComplaint = async (opts: {
   );
   if (error) return { error };
 
-  const phone = issuePhone(issue);
-  if (phone) {
-    await insertChatMessage({
-      customer_phone: phone,
-      pickup_order_id: issue.pickup_id || null,
-      transaction_id: issue.transaction_id || null,
-      sender_type: 'customer',
-      sender_name: issueCustomerName(issue),
+  const ticket = await ensureComplaintTicketFromIssue(issue);
+  if (ticket?.id) {
+    await insertTicketMessage({
+      ticketId: ticket.id,
+      senderType: 'customer',
       message: 'Pelanggan mengajukan banding atas keputusan Supervisor. Mohon investigasi ulang.'
     });
   }

@@ -30,6 +30,7 @@ import { confirmPaymentProof, fileToCompressedDataUrl, uploadChatAttachment } fr
 import { confirmTransactionPayment, isPaymentLocked, markInvoicePaid } from '@/lib/paymentVerify';
 import { sendInvoiceToLiveChat } from '@/lib/chatInvoice';
 import ChatInvoiceCard from '@/components/ChatInvoiceCard';
+import ThirdPartyDeliveryCard from '@/components/ThirdPartyDeliveryCard';
 import { isTaskCompleted } from '@/lib/taskRoles';
 import { toast } from '@/lib/toast';
 import FileProofInput from '@/components/FileProofInput';
@@ -1127,6 +1128,7 @@ export default function CsCommandCenter() {
                         {internal && <p className="text-[9px] font-black uppercase mb-0.5">Catatan internal</p>}
                         {visibleChatText(m) && <p className="whitespace-pre-wrap">{visibleChatText(m)}</p>}
                         <ChatInvoiceCard message={m} />
+                        <ThirdPartyDeliveryCard message={m} />
                         <ChatAttachment message={m} onOpen={setLightboxSrc} />
                         <p className="text-[9px] text-slate-400 mt-1 text-right">
                           {m.sender_name ? `${m.sender_name} · ` : ''}

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { Camera, CheckCircle2, Headphones, MessageSquare, Phone, Store, User } from 'lucide-react';
+import { Camera, CheckCircle2, Headphones, Phone, Store, User } from 'lucide-react';
 import { supabase } from '@/lib/supabaseClient';
 import { getStaffSession, homePathForRole } from '@/lib/staffSession';
 import { toast } from '@/lib/toast';
@@ -10,7 +10,7 @@ import { uploadProofFile } from '@/lib/uploadProof';
 import FileProofInput from '@/components/FileProofInput';
 import PhotoLightbox from '@/components/PhotoLightbox';
 import { notifyOps, unlockOpsAudio } from '@/lib/opsNotify';
-import { isStaffOnlyMessage } from '@/lib/csChat';
+import ComplaintTicketChat from '@/components/ComplaintTicketChat';
 import {
   complaintStepOf,
   decisionLabelOf,
@@ -26,7 +26,12 @@ import {
   loadCareComplaints,
   submitFindingsToSupervisor
 } from '@/lib/csCare';
-import { canonicalPhone } from '@/lib/csChat';
+import {
+  ensureComplaintTicketFromIssue,
+  findComplaintTicket,
+  resolveComplaintInvestigation,
+  ticketTitleOf
+} from '@/lib/complaintTicket';
 
 const canAccessCare = (role: string) =>
   ['cs_care', 'cs', 'head_cs', 'owner', 'supervisor'].includes(String(role || '').toLowerCase());
@@ -55,6 +60,7 @@ export default function CsCarePage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [tab, setTab] = useState<'open' | 'done'>('open');
+  const [tickets, setTickets] = useState<Record<string, any>>({});
 
   const load = async () => {
     const [{ data }, outs] = await Promise.all([
@@ -63,6 +69,16 @@ export default function CsCarePage() {
     ]);
     setIssues(data || []);
     setOutlets(outs.data || []);
+    const next: Record<string, any> = {};
+    await Promise.all(
+      (data || []).map(async (issue: any) => {
+        const ticket = isOpenIssue(issue)
+          ? await ensureComplaintTicketFromIssue(issue)
+          : await findComplaintTicket(issue);
+        if (ticket) next[issue.id] = ticket;
+      })
+    );
+    setTickets(next);
   };
 
   useEffect(() => {
@@ -89,17 +105,11 @@ export default function CsCarePage() {
         }
         load();
       })
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'support_chats' }, (payload) => {
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'complaint_chat_messages' }, (payload) => {
         const row: any = payload.new;
-        if (
-          row &&
-          String(row.sender_type).toLowerCase() === 'customer' &&
-          !isStaffOnlyMessage(row) &&
-          row.id &&
-          !seenChats.has(row.id)
-        ) {
+        if (row && String(row.sender_type).toLowerCase() === 'customer' && row.id && !seenChats.has(row.id)) {
           seenChats.add(row.id);
-          notifyOps('chat', 'Pesan baru dari pelanggan.', true);
+          notifyOps('chat', 'Pesan baru di Tiket Komplain.', true);
         }
       })
       .subscribe();
@@ -148,7 +158,30 @@ export default function CsCarePage() {
         toast('Gagal meneruskan keputusan: ' + error.message, 'err');
         return;
       }
-      toast('Keputusan Supervisor dikirim ke pelanggan via Live Chat.', 'ok');
+      toast('Keputusan Supervisor dikirim ke Room Chat Tiket Komplain.', 'ok');
+      load();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleResolveTicket = async (issue: any) => {
+    if (!confirm('Tutup investigasi dan selesaikan tiket komplain ini? Room chat akan dihapus otomatis 24 jam kemudian.')) {
+      return;
+    }
+    setBusyId(issue.id);
+    try {
+      const { error, ticket } = await resolveComplaintInvestigation({
+        issue,
+        ticket: tickets[issue.id],
+        agentName: agent.name
+      });
+      if (error) {
+        toast('Gagal menyelesaikan tiket: ' + error.message, 'err');
+        return;
+      }
+      if (ticket) setTickets((prev) => ({ ...prev, [issue.id]: ticket }));
+      toast('Tiket diselesaikan. Room chat hangus 24 jam lagi.', 'ok');
       load();
     } finally {
       setBusyId(null);
@@ -221,7 +254,7 @@ export default function CsCarePage() {
           const expanded = openId === issue.id;
           const step = complaintStepOf(issue);
           const canInvestigate = step === 'pending_investigation' || step === 'appealed';
-          const chatHref = phone ? `/cs?phone=${encodeURIComponent(canonicalPhone(phone) || phone)}` : '/cs';
+          const ticket = tickets[issue.id];
           return (
             <article key={issue.id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3">
               <div className="flex flex-wrap justify-between gap-2">
@@ -280,14 +313,20 @@ export default function CsCarePage() {
                 </div>
               )}
 
+              {ticket && (
+                <ComplaintTicketChat ticket={ticket} senderType="cs" senderName={agent.name || 'CS Care'} />
+              )}
+
               {isOpenIssue(issue) && (
                 <div className="flex flex-col sm:flex-row gap-2">
-                  <Link
-                    href={chatHref}
-                    className="flex items-center justify-center gap-2 flex-1 text-xs font-bold py-2.5 rounded-xl bg-sky-50 border border-sky-100 text-sky-800"
+                  <button
+                    type="button"
+                    disabled={busyId === issue.id}
+                    onClick={() => handleResolveTicket(issue)}
+                    className="flex-1 text-xs font-black py-2.5 rounded-xl bg-rose-600 text-white disabled:opacity-50"
                   >
-                    <MessageSquare className="w-4 h-4" /> Live Chat pelanggan
-                  </Link>
+                    {busyId === issue.id ? 'Menyimpan…' : 'Tutup Investigasi / Selesaikan'}
+                  </button>
                   {canInvestigate && (
                     <button
                       type="button"
@@ -299,7 +338,7 @@ export default function CsCarePage() {
                       }}
                       className="flex-1 text-xs font-bold py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50"
                     >
-                      {expanded ? 'Tutup investigasi' : 'Isi temuan → Supervisor'}
+                      {expanded ? 'Tutup form temuan' : 'Isi temuan → Supervisor'}
                     </button>
                   )}
                   {step === 'decision_ready' && (
@@ -322,7 +361,7 @@ export default function CsCarePage() {
               )}
               {step === 'awaiting_customer' && (
                 <p className="text-[11px] font-bold text-sky-800 bg-sky-50 border border-sky-100 rounded-xl px-3 py-2">
-                  Keputusan sudah dikirim via Live Chat. Menunggu pelanggan Setuju atau Banding.
+                  Keputusan sudah dikirim ke {ticket ? ticketTitleOf(ticket) : 'Room Chat Tiket Komplain'}. Menunggu pelanggan Setuju atau Banding.
                 </p>
               )}
 

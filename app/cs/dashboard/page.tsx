@@ -12,7 +12,10 @@ import { isPaymentLocked, markInvoicePaid } from '@/lib/paymentVerify';
 import { simulateMayarAutoPay } from '@/lib/mayar';
 import { toast } from '@/lib/toast';
 import ChatInvoiceCard from '@/components/ChatInvoiceCard';
+import ThirdPartyDeliveryCard from '@/components/ThirdPartyDeliveryCard';
+import ThirdPartyDispatchForm from '@/components/ThirdPartyDispatchForm';
 import { visibleChatText } from '@/components/ChatAttachment';
+import { dispatchThirdPartyDelivery, isThirdPartyDelivery } from '@/lib/thirdPartyDelivery';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -36,7 +39,8 @@ export default function CSDashboard() {
   const [activeChatOrder, setActiveChatOrder] = useState<any | null>(null);
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [inputCsChat, setInputCsChat] = useState<string>('');
-  const [trackingUrlInput, setTrackingUrlInput] = useState<Record<string, string>>({});
+  const [dispatchTarget, setDispatchTarget] = useState<any | null>(null);
+  const [dispatchBusy, setDispatchBusy] = useState(false);
 
   // Load Pesan Chat CS (Mendukung Order ID & Chat Berdasarkan No HP Customer)
   const loadCsChats = async (targetOrder: any) => {
@@ -118,24 +122,29 @@ export default function CSDashboard() {
     }
   };
 
-  // Simpan Link Live Tracking Pihak Ketiga
-  const handleSaveTrackingUrl = async (orderId: string) => {
-    const url = trackingUrlInput[orderId];
-    if (!url || !url.trim()) return alert('Masukkan URL Tracking terlebih dahulu!');
-
-    const { error } = await supabase
-      .from('pickup_orders')
-      .update({ 
-        third_party_tracking_url: url.trim(),
-        status: 'Driver Menuju Lokasi'
-      })
-      .eq('id', orderId);
-
-    if (!error) {
-      alert('✅ Link Live Tracking berhasil dikirim ke customer!');
+  const handleDispatchThirdParty = async (vals: {
+    vendor: string;
+    driverNameAndPlate: string;
+    trackingUrl: string;
+    handoverPhotoUrl: string;
+  }) => {
+    if (!dispatchTarget) return;
+    setDispatchBusy(true);
+    try {
+      const { error } = await dispatchThirdPartyDelivery({
+        order: dispatchTarget,
+        ...vals,
+        agentName: getStaffSession().name || 'CS'
+      });
+      if (error) {
+        toast(error.message, 'err');
+        return;
+      }
+      toast('Kartu tracking pihak ketiga terkirim ke Live Chat.', 'ok');
+      setDispatchTarget(null);
       loadCSData();
-    } else {
-      alert('❌ Gagal menyimpan URL tracking: ' + error.message);
+    } finally {
+      setDispatchBusy(false);
     }
   };
 
@@ -190,7 +199,25 @@ export default function CSDashboard() {
   useEffect(() => {
     loadCSData();
     const interval = setInterval(loadCSData, 10000);
-    return () => clearInterval(interval);
+    const ch = supabase
+      .channel('cs_tp_delivery')
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'transactions' }, (payload) => {
+        const row: any = payload.new;
+        const prev: any = payload.old;
+        if (
+          String(row?.status || '') === 'Selesai' &&
+          String(prev?.status || '') !== 'Selesai' &&
+          (row?.courier_type === 'THIRD_PARTY' || row?.tracking_url)
+        ) {
+          toast(`Pelanggan konfirmasi cucian diterima · ${row.receipt_number || ''}`, 'ok');
+        }
+        loadCSData();
+      })
+      .subscribe();
+    return () => {
+      clearInterval(interval);
+      supabase.removeChannel(ch);
+    };
   }, [selectedOutlet]);
 
   const handleAssignDriver = async (pickupId: string) => {
@@ -524,13 +551,13 @@ export default function CSDashboard() {
                     </div>
 
                     <div className="bg-slate-50 p-2.5 rounded-xl space-y-2 border border-slate-200">
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-2">
                         <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${
-                          p.courier_type === 'THIRD_PARTY'
+                          p.courier_type === 'THIRD_PARTY' || isThirdPartyDelivery(p)
                             ? 'bg-amber-100 text-amber-800 border border-amber-300'
                             : 'bg-cyan-100 text-cyan-800 border border-cyan-300'
                         }`}>
-                          {p.courier_type === 'THIRD_PARTY' ? '📦 Kurir Pihak Ketiga' : '🛵 Driver Internal'}
+                          {p.courier_type === 'THIRD_PARTY' || isThirdPartyDelivery(p) ? '📦 Kurir Pihak Ketiga' : '🛵 Driver Internal'}
                         </span>
 
                         <button
@@ -543,38 +570,19 @@ export default function CSDashboard() {
                         </button>
                       </div>
 
-                      {p.courier_type === 'THIRD_PARTY' && (
-                        <div className="mt-2 bg-amber-50/80 border border-amber-200 p-2 rounded-lg space-y-1">
-                          <label className="text-[9px] font-bold text-amber-900 block">Link Live Track (Grab/Gojek):</label>
-                          {p.third_party_tracking_url ? (
-                            <a
-                              href={p.third_party_tracking_url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-[10px] text-blue-600 underline font-semibold truncate block"
-                            >
-                              {p.third_party_tracking_url}
-                            </a>
-                          ) : (
-                            <div className="flex gap-1">
-                              <input
-                                type="url"
-                                placeholder="https://..."
-                                value={trackingUrlInput[p.id] || ''}
-                                onChange={(e) => setTrackingUrlInput({ ...trackingUrlInput, [p.id]: e.target.value })}
-                                className="flex-1 text-[10px] bg-white border border-amber-300 rounded-lg p-1 focus:outline-none"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => handleSaveTrackingUrl(p.id)}
-                                className="bg-amber-600 hover:bg-amber-700 text-white font-bold text-[9px] px-2 py-1 rounded-lg"
-                              >
-                                Kirim
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      )}
+                      <div className="mt-2 bg-amber-50/80 border border-amber-200 p-2 rounded-lg space-y-2">
+                        {isThirdPartyDelivery(p) && (p.tracking_url || p.third_party_tracking_url) ? (
+                          <ThirdPartyDeliveryCard order={p} />
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setDispatchTarget(p)}
+                            className="w-full bg-amber-500 hover:bg-amber-600 text-white font-black text-[10px] py-2 rounded-lg"
+                          >
+                            Kurir Pihak Ketiga — isi tracking + foto
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     <button
@@ -745,6 +753,20 @@ export default function CSDashboard() {
                                 </button>
                               </>
                             )}
+                            {(t.status === 'Siap Diambil' || t.status === 'Diantar') && !isThirdPartyDelivery(t) && (
+                              <button
+                                type="button"
+                                onClick={() => setDispatchTarget(t)}
+                                className="bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200 font-bold px-2.5 py-1 rounded-lg text-[10px] transition"
+                              >
+                                📦 Kurir Pihak Ketiga
+                              </button>
+                            )}
+                            {isThirdPartyDelivery(t) && t.status !== 'Selesai' && (
+                              <span className="text-[9px] font-black text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded-lg">
+                                Menunggu konfirmasi pelanggan
+                              </span>
+                            )}
                             {(t.status === 'Selesai' || t.status === 'Siap Diambil') && (
                               <button
                                 onClick={() => handleSendFinishNotice(t)}
@@ -761,6 +783,25 @@ export default function CSDashboard() {
                   </tbody>
                 </table>
               </div>
+            </div>
+          </div>
+        )}
+
+        {dispatchTarget && (
+          <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4">
+            <div className="bg-white w-full max-w-sm rounded-2xl p-5 space-y-3 max-h-[92vh] overflow-y-auto">
+              <div className="flex justify-between items-start gap-2">
+                <div>
+                  <p className="text-[10px] font-black uppercase text-amber-600">Kurir Pihak Ketiga</p>
+                  <h3 className="font-black text-sm text-slate-900">
+                    {dispatchTarget.customer_name} · {dispatchTarget.receipt_number || dispatchTarget.order_number}
+                  </h3>
+                </div>
+                <button type="button" onClick={() => setDispatchTarget(null)} className="text-slate-400 font-bold">
+                  ✕
+                </button>
+              </div>
+              <ThirdPartyDispatchForm busy={dispatchBusy} onSubmit={handleDispatchThirdParty} />
             </div>
           </div>
         )}
@@ -797,6 +838,7 @@ export default function CSDashboard() {
                   >
                     <p className="whitespace-pre-wrap">{visibleChatText(msg)}</p>
                     <ChatInvoiceCard message={msg} />
+                    <ThirdPartyDeliveryCard message={msg} />
                     <span className="text-[9px] text-slate-400 mt-1 block text-right">
                       {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </span>

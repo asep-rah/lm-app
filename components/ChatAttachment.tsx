@@ -2,6 +2,7 @@
 
 import { FileText } from 'lucide-react';
 import { stripInvoiceTag } from '@/lib/chatInvoice';
+import { stripTpDeliveryTag } from '@/lib/thirdPartyDelivery';
 
 const IMAGE_RE = /\.(jpe?g|png|gif|webp|heic|bmp)(\?|$)/i;
 const URL_RE = /https?:\/\/[^\s]+/i;
@@ -27,7 +28,7 @@ export function visibleChatText(m: any) {
   const att = attachmentFromMessage(m);
   let text = String(m?.message || '');
   if (att?.url) text = text.replace(att.url, '').trim();
-  return stripInvoiceTag(text);
+  return stripTpDeliveryTag(stripInvoiceTag(text));
 }
 
 export default function ChatAttachment({

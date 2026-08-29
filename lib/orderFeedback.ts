@@ -1,6 +1,6 @@
-import { supabase } from '@/lib/supabaseClient';
 import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
 import { createIssueTasksForRoles } from '@/lib/createOutletIssueTask';
+import { ensureComplaintTicketFromIssue } from '@/lib/complaintTicket';
 
 export const COMPLAINT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -214,6 +214,15 @@ export const submitOrderComplaint = async (opts: {
       },
       ['cs_care']
     );
+    await ensureComplaintTicketFromIssue({
+      id: data[0].id,
+      transaction_id: txId,
+      pickup_id: pickupId,
+      customer_phone: phone,
+      customer_name: reporter,
+      receipt_number: resi,
+      description: body
+    });
   }
 
   if (order?.id) writeLocalFlag('complain', order.id);

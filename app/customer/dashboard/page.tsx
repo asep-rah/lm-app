@@ -13,6 +13,12 @@ import PhotoLightbox from '@/components/PhotoLightbox';
 import DraggableChatFab from '@/components/DraggableChatFab';
 import ChatAttachment, { visibleChatText } from '@/components/ChatAttachment';
 import ChatInvoiceCard from '@/components/ChatInvoiceCard';
+import ThirdPartyDeliveryCard from '@/components/ThirdPartyDeliveryCard';
+import {
+  confirmThirdPartyReceived,
+  isThirdPartyDelivery,
+  thirdPartyFromOrder
+} from '@/lib/thirdPartyDelivery';
 import FileProofInput from '@/components/FileProofInput';
 import { fileToCompressedDataUrl, uploadChatAttachment, uploadProofFile } from '@/lib/uploadProof';
 import { displayItemAmount, kiloanLineTotal } from '@/lib/kiloanPrice';
@@ -25,6 +31,8 @@ import {
   decisionLabelOf,
   loadComplaintForOrder
 } from '@/lib/csCare';
+import ComplaintTicketChat from '@/components/ComplaintTicketChat';
+import { ensureComplaintTicketFromIssue, findComplaintTicket, ticketTitleOf } from '@/lib/complaintTicket';
 import { nearestOpenOutlet } from '@/lib/outletCapacity';
 import { toast } from '@/lib/toast';
 import {
@@ -117,6 +125,7 @@ const isOrderFinished = (order: any) => {
 
 const isDeliveryInProgress = (order: any) => {
   const st = String(order?.status || '').toLowerCase();
+  if (isThirdPartyDelivery(order) && !isOrderFinished(order)) return true;
   return st.includes('diantar') || st.includes('mengantar') || (st.includes('delivery') && !st.includes('delivered'));
 };
 
@@ -324,12 +333,15 @@ export default function CustomerDashboardPage() {
   const [depositLogs, setDepositLogs] = useState<any[]>([]);
   const [readyPopup, setReadyPopup] = useState<any>(null);
   const [requestingDeliveryId, setRequestingDeliveryId] = useState<string | null>(null);
+  const [confirmDeliveryId, setConfirmDeliveryId] = useState<string | null>(null);
   const [complaintOpen, setComplaintOpen] = useState(false);
   const [complaintText, setComplaintText] = useState('');
   const [complaintFile, setComplaintFile] = useState<File | null>(null);
   const [complaintVideo, setComplaintVideo] = useState<File | null>(null);
   const [complaintBusy, setComplaintBusy] = useState(false);
   const [detailComplaint, setDetailComplaint] = useState<any | null>(null);
+  const [complaintTicket, setComplaintTicket] = useState<any | null>(null);
+  const [complaintTicketOpen, setComplaintTicketOpen] = useState(false);
   const [complaintRespondBusy, setComplaintRespondBusy] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewStars, setReviewStars] = useState(0);
@@ -349,13 +361,13 @@ export default function CustomerDashboardPage() {
   }, [activeChatOrderId, activeSupportTab, chatMessages, aiMessages]);
 
   useEffect(() => {
-    if (!activeChatOrderId) return;
+    if (!activeChatOrderId && !complaintTicketOpen) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
       document.body.style.overflow = prev;
     };
-  }, [activeChatOrderId]);
+  }, [activeChatOrderId, complaintTicketOpen]);
 
   useEffect(() => {
     if (!depositCheckout || depositCheckout.paid) return;
@@ -634,6 +646,24 @@ export default function CustomerDashboardPage() {
     }
   };
 
+  const handleConfirmThirdParty = async (order: any, e?: { stopPropagation?: () => void }) => {
+    e?.stopPropagation?.();
+    if (!confirm('Konfirmasi cucian sudah diterima?')) return;
+    setConfirmDeliveryId(order.id);
+    try {
+      const { error } = await confirmThirdPartyReceived(order);
+      if (error) {
+        toast('Gagal konfirmasi: ' + error.message, 'err');
+        return;
+      }
+      toast('Terima kasih. Cucian ditandai selesai.', 'ok');
+      setDetailOrder((prev: any) => (prev && prev.id === order.id ? { ...prev, status: 'Selesai' } : prev));
+      fetchCustomerProfile(customerPhone);
+    } finally {
+      setConfirmDeliveryId(null);
+    }
+  };
+
   useEffect(() => {
     if (!detailOrder?.id || !isOrderFinished(detailOrder)) return;
     let cancelled = false;
@@ -643,8 +673,18 @@ export default function CustomerDashboardPage() {
         setDetailOrder(next);
       }
     });
-    loadComplaintForOrder(detailOrder).then((row) => {
-      if (!cancelled) setDetailComplaint(row);
+    loadComplaintForOrder(detailOrder).then(async (row) => {
+      if (cancelled) return;
+      setDetailComplaint(row);
+      if (!row) {
+        setComplaintTicket(null);
+        return;
+      }
+      const ticket =
+        complaintStepOf(row) === 'resolved'
+          ? await findComplaintTicket(row)
+          : await ensureComplaintTicketFromIssue(row);
+      if (!cancelled) setComplaintTicket(ticket);
     });
     return () => {
       cancelled = true;
@@ -697,7 +737,12 @@ export default function CustomerDashboardPage() {
       setComplaintText('');
       setComplaintFile(null);
       setComplaintVideo(null);
-      toast('Komplain terkirim ke CS Care. Tim akan menindaklanjuti.', 'ok');
+      const issue = await loadComplaintForOrder(order);
+      setDetailComplaint(issue);
+      const ticket = issue ? await ensureComplaintTicketFromIssue(issue) : null;
+      setComplaintTicket(ticket);
+      if (ticket) setComplaintTicketOpen(true);
+      toast('Komplain terkirim. Room chat tiket sudah dibuka.', 'ok');
     } catch (err: any) {
       toast(err?.message || 'Gagal unggah video unboxing.', 'err');
     } finally {
@@ -722,6 +767,13 @@ export default function CustomerDashboardPage() {
       setDetailOrder((prev: any) => (prev ? { ...prev, complaint_status: nextStatus } : prev));
       const refreshed = await loadComplaintForOrder(detailOrder);
       setDetailComplaint(refreshed);
+      const ticket = refreshed
+        ? agree
+          ? await findComplaintTicket(refreshed)
+          : await ensureComplaintTicketFromIssue(refreshed)
+        : null;
+      setComplaintTicket(ticket);
+      if (ticket && !agree) setComplaintTicketOpen(true);
       toast(agree ? 'Terima kasih. Komplain diselesaikan.' : 'Banding terkirim. CS Care akan investigasi ulang.', 'ok');
     } finally {
       setComplaintRespondBusy(false);
@@ -1257,6 +1309,7 @@ export default function CustomerDashboardPage() {
       notes: finalNotes,
       pickup_date: todayDateStr,
       status: 'Menunggu Kurir',
+      courier_type: courierType || 'INTERNAL',
       created_at: nowIso
     };
 
@@ -1552,7 +1605,7 @@ export default function CustomerDashboardPage() {
                 })}
               </div>
 
-              {isSiapDiambil(order) && (
+              {isSiapDiambil(order) && !isThirdPartyDelivery(order) && (
                 <button
                   type="button"
                   onClick={(e) => handleRequestDelivery(order, e)}
@@ -1562,6 +1615,19 @@ export default function CustomerDashboardPage() {
                   <Truck className="w-4 h-4" />
                   {requestingDeliveryId === order.id ? 'Mengirim…' : 'Minta Pengantaran Driver'}
                 </button>
+              )}
+
+              {isThirdPartyDelivery(order) && !isOrderFinished(order) && (
+                <div onClick={(e) => e.stopPropagation()}>
+                  <ThirdPartyDeliveryCard
+                    order={order}
+                    payload={thirdPartyFromOrder(order)}
+                    showConfirm
+                    confirmBusy={confirmDeliveryId === order.id}
+                    onConfirm={() => handleConfirmThirdParty(order)}
+                    onOpenPhoto={setLightboxSrc}
+                  />
+                </div>
               )}
 
               {/* PETA LIVE DRIVER */}
@@ -2438,6 +2504,15 @@ export default function CustomerDashboardPage() {
         </div>
       )}
 
+      {complaintTicketOpen && complaintTicket && (
+        <ComplaintTicketChat
+          ticket={complaintTicket}
+          senderType="customer"
+          senderName={customerName || 'Pelanggan'}
+          variant="fullscreen"
+          onClose={() => setComplaintTicketOpen(false)}
+        />
+      )}
       {/* LIVE CHAT — WhatsApp-style full screen */}
       {activeChatOrderId && (
         <div className="fixed inset-0 z-[60] h-full w-full flex flex-col bg-[#ece5dd]">
@@ -2525,6 +2600,7 @@ export default function CustomerDashboardPage() {
                     >
                       {visibleChatText(msg) && <p className="whitespace-pre-wrap">{visibleChatText(msg)}</p>}
                       <ChatInvoiceCard message={msg} />
+                      <ThirdPartyDeliveryCard message={msg} onOpenPhoto={setLightboxSrc} />
                       <ChatAttachment message={msg} onOpen={setLightboxSrc} />
                       <span className={`text-[10px] block mt-1 ${isCustomer ? 'text-slate-500 text-right' : 'text-slate-400'}`}>
                         {new Date(msg.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -2746,6 +2822,16 @@ export default function CustomerDashboardPage() {
           />
         </div>
 
+        {isThirdPartyDelivery(detailOrder) && !isOrderFinished(detailOrder) && (
+          <ThirdPartyDeliveryCard
+            order={detailOrder}
+            showConfirm
+            confirmBusy={confirmDeliveryId === detailOrder.id}
+            onConfirm={() => handleConfirmThirdParty(detailOrder)}
+            onOpenPhoto={setLightboxSrc}
+          />
+        )}
+
         {/* Bukti Foto: jemput → outlet → sortir → rak → antar */}
         <div className="space-y-2">
           <h4 className="font-extrabold text-slate-800 uppercase text-[10px] inline-flex items-center gap-1">
@@ -2764,6 +2850,15 @@ export default function CustomerDashboardPage() {
                   {detailComplaint?.supervisor_note ? ` — ${detailComplaint.supervisor_note}` : ''}
                 </p>
                 <p className="text-[10px] text-indigo-700">Setuju untuk menyelesaikan, atau Banding agar CS Care investigasi ulang.</p>
+                {complaintTicket && (
+                  <button
+                    type="button"
+                    onClick={() => setComplaintTicketOpen(true)}
+                    className="w-full bg-rose-600 text-white font-black text-[11px] py-2.5 rounded-xl"
+                  >
+                    Buka {ticketTitleOf(complaintTicket)}
+                  </button>
+                )}
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
@@ -2791,13 +2886,22 @@ export default function CustomerDashboardPage() {
               step === 'pending_supervisor'
                 ? 'Temuan CS Care menunggu keputusan Supervisor.'
                 : step === 'decision_ready'
-                ? 'Supervisor sudah memutuskan. CS Care akan meneruskan ke Anda via Live Chat.'
+                ? 'Supervisor sudah memutuskan. CS Care akan meneruskan ke Tiket Komplain Anda.'
                 : step === 'appealed'
                 ? 'Banding diterima. CS Care sedang investigasi ulang.'
                 : 'Komplain Anda sedang diinvestigasi CS Care.';
             return (
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-[11px] font-bold text-amber-800">
-                {msg}
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-2">
+                <p className="text-[11px] font-bold text-amber-800">{msg}</p>
+                {complaintTicket && (
+                  <button
+                    type="button"
+                    onClick={() => setComplaintTicketOpen(true)}
+                    className="w-full bg-rose-600 text-white font-black text-[11px] py-2.5 rounded-xl"
+                  >
+                    Buka {ticketTitleOf(complaintTicket)}
+                  </button>
+                )}
               </div>
             );
           }

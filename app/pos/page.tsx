@@ -21,6 +21,9 @@ import { sendInvoiceToLiveChat } from '@/lib/chatInvoice';
 import { simulateMayarAutoPay } from '@/lib/mayar';
 import { creditCustomerDeposit, decrementCustomerDeposit } from '@/lib/depositTopup';
 import { toast } from '@/lib/toast';
+import { dispatchThirdPartyDelivery, isThirdPartyDelivery } from '@/lib/thirdPartyDelivery';
+import ThirdPartyDispatchForm from '@/components/ThirdPartyDispatchForm';
+import ThirdPartyDeliveryCard from '@/components/ThirdPartyDeliveryCard';
 import {
   classifyQueueOrder,
   coalesceProsesCards,
@@ -605,6 +608,8 @@ const handleApplyLoan = async (e: React.FormEvent) => {
 
   const [activeOrders, setActiveOrders] = useState<any[]>([]);
   const [pickupOrders, setPickupOrders] = useState<any[]>([]);
+  const [thirdPartyOrder, setThirdPartyOrder] = useState<any | null>(null);
+  const [thirdPartyBusy, setThirdPartyBusy] = useState(false);
   const [inventory, setInventory] = useState<any[]>([]);
   const [incomingPickupsCount, setIncomingPickupsCount] = useState(0);
 
@@ -914,7 +919,17 @@ const handleApplyLoan = async (e: React.FormEvent) => {
         alert(`🔔 ORDERAN ONLINE BARU MASUK!\nService: ${row?.service_type || 'Penjemputan Customer'}`);
         refreshData();
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, (payload) => {
+        const row: any = payload.new;
+        const prev: any = payload.old;
+        if (
+          payload.eventType === 'UPDATE' &&
+          String(row?.status || '') === 'Selesai' &&
+          String(prev?.status || '') !== 'Selesai' &&
+          (row?.courier_type === 'THIRD_PARTY' || row?.tracking_url)
+        ) {
+          toast(`Pelanggan konfirmasi cucian diterima · ${row.receipt_number || ''}`, 'ok');
+        }
         refreshData();
       })
       .subscribe();
@@ -1961,6 +1976,34 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
     setSuccessMsg('✅ Diserahkan!'); refreshData(); setTimeout(() => setSuccessMsg(''), 3000); setIsSubmitting(false);
   };
 
+  const handleThirdPartyDispatch = async (vals: {
+    vendor: string;
+    driverNameAndPlate: string;
+    trackingUrl: string;
+    handoverPhotoUrl: string;
+  }) => {
+    const order = thirdPartyOrder;
+    if (!order) return;
+    if (blockUnpaidHandover(order)) return;
+    setThirdPartyBusy(true);
+    try {
+      const { error } = await dispatchThirdPartyDelivery({
+        order,
+        ...vals,
+        agentName: employeeName || 'Kasir'
+      });
+      if (error) {
+        toast(error.message, 'err');
+        return;
+      }
+      toast('Kartu tracking pihak ketiga terkirim ke Live Chat pelanggan.', 'ok');
+      setThirdPartyOrder(null);
+      refreshData();
+    } finally {
+      setThirdPartyBusy(false);
+    }
+  };
+
   const handleRequestDelete = async (order: any) => {
     const reason = prompt(`Alasan hapus resi ${order.receipt_number || order.id}:`);
     if (!reason?.trim()) return alert('⚠️ Mohon tulis alasan!');
@@ -2387,6 +2430,26 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
                 {isSubmitting ? 'Mengunggah…' : 'Lanjut'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {thirdPartyOrder && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-5 w-full max-w-sm shadow-2xl space-y-3 max-h-[92vh] overflow-y-auto">
+            <div className="flex justify-between items-start gap-2">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-wider text-amber-600">Kurir Pihak Ketiga</p>
+                <h3 className="font-black text-slate-900 text-sm">Serah terima ke GoSend / Grab / Lalamove</h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  {thirdPartyOrder.customer_name} · {thirdPartyOrder.receipt_number}
+                </p>
+              </div>
+              <button type="button" onClick={() => setThirdPartyOrder(null)} className="text-slate-400 font-bold">
+                ✕
+              </button>
+            </div>
+            <ThirdPartyDispatchForm busy={thirdPartyBusy} onSubmit={handleThirdPartyDispatch} />
           </div>
         </div>
       )}
@@ -3229,7 +3292,27 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
                     📍 Lokasi: {rack.loc} | 📦 Total: {rack.pkg}
                     {rack.notes ? <p className="text-[10px] font-semibold text-amber-800 mt-0.5">📝 {rack.notes}</p> : null}
                   </div>
-                  <button onClick={() => handlePickupFinish(order)} disabled={isSubmitting} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3.5 rounded-xl text-xs shadow-md transition">✅ Serahkan / Mark Taken</button>
+                  {isThirdPartyDelivery(order) ? (
+                    <div className="space-y-2">
+                      <p className="text-[10px] font-black uppercase text-amber-800">Dalam pengiriman pihak ketiga — menunggu konfirmasi pelanggan</p>
+                      <ThirdPartyDeliveryCard order={order} />
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <button onClick={() => handlePickupFinish(order)} disabled={isSubmitting} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3.5 rounded-xl text-xs shadow-md transition">✅ Serahkan / Mark Taken</button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (blockUnpaidHandover(order)) return;
+                          setThirdPartyOrder(order);
+                        }}
+                        disabled={isSubmitting}
+                        className="w-full bg-amber-500 hover:bg-amber-600 text-white font-bold py-3.5 rounded-xl text-xs shadow-md transition"
+                      >
+                        📦 Kirim Kurir Pihak Ketiga
+                      </button>
+                    </div>
+                  )}
                 </div>
                 );
               })}
