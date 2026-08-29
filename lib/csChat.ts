@@ -79,6 +79,18 @@ export const insertChatMessage = async (input: {
     }
   ];
 
+  const isCustomer =
+    !input.is_internal && ['customer', 'user', 'pelanggan'].includes(String(input.sender_type || '').toLowerCase());
+
+  // Buka ulang dulu supaya refetch realtime pertama sudah melihat antrean Unassigned.
+  if (isCustomer) {
+    await reopenResolvedThread({
+      thread_key,
+      customer_phone: input.customer_phone,
+      preview: input.message
+    });
+  }
+
   let lastErr: any = null;
   for (const row of attempts) {
     const clean = Object.fromEntries(Object.entries(row).filter(([, v]) => v !== undefined));
@@ -89,11 +101,138 @@ export const insertChatMessage = async (input: {
   return { error: lastErr, thread_key };
 };
 
+const CLOSED_STATUSES = new Set(['resolved', 'closed', 'selesai', 'done']);
+
+export const sessionLooksClosed = (session: any) => {
+  if (!session) return false;
+  if (session.is_resolved === true) return true;
+  return CLOSED_STATUSES.has(String(session.status || '').toLowerCase().trim());
+};
+
 export const upsertChatSession = async (patch: Record<string, any>) => {
   if (!patch.thread_key) return;
-  const clean = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
-  const { error } = await supabase.from('support_chat_sessions').upsert(clean, { onConflict: 'thread_key' });
-  if (error) console.warn('support_chat_sessions:', error.message);
+  const attempts = [
+    patch,
+    Object.fromEntries(
+      Object.entries(patch).filter(([k]) => !['status', 'waiting_since', 'updated_at'].includes(k))
+    ),
+    {
+      thread_key: patch.thread_key,
+      customer_phone: patch.customer_phone,
+      assigned_to_agent_id: patch.assigned_to_agent_id,
+      assigned_to_agent_name: patch.assigned_to_agent_name,
+      is_claimed: patch.is_claimed,
+      is_resolved: patch.is_resolved,
+      last_message_at: patch.last_message_at,
+      last_sender_type: patch.last_sender_type,
+      last_preview: patch.last_preview,
+      resolved_at: patch.resolved_at
+    }
+  ];
+  for (const row of attempts) {
+    const clean = Object.fromEntries(Object.entries(row).filter(([, v]) => v !== undefined));
+    if (!clean.thread_key) continue;
+    const { error } = await supabase.from('support_chat_sessions').upsert(clean, { onConflict: 'thread_key' });
+    if (!error) return;
+    lastSessionWarn(error.message);
+  }
+};
+
+let lastSessionWarnAt = 0;
+const lastSessionWarn = (msg: string) => {
+  const now = Date.now();
+  if (now - lastSessionWarnAt < 4000) return;
+  lastSessionWarnAt = now;
+  console.warn('support_chat_sessions:', msg);
+};
+
+/** Thread resolved/closed + pesan customer baru → kembali ke antrean Unassigned. */
+export const reopenResolvedThread = async (opts: {
+  thread_key: string;
+  customer_phone?: string | null;
+  preview?: string;
+}): Promise<{ reopened: boolean }> => {
+  const thread_key = String(opts.thread_key || '');
+  if (!thread_key || thread_key === 'unknown') return { reopened: false };
+
+  const { data: session } = await supabase
+    .from('support_chat_sessions')
+    .select('*')
+    .eq('thread_key', thread_key)
+    .maybeSingle();
+
+  if (!sessionLooksClosed(session)) return { reopened: false };
+
+  const now = new Date().toISOString();
+  const phone = opts.customer_phone || session.customer_phone || phoneFromThread(thread_key) || null;
+
+  await upsertChatSession({
+    thread_key,
+    customer_phone: phone,
+    assigned_to_agent_id: null,
+    assigned_to_agent_name: null,
+    is_claimed: false,
+    is_resolved: false,
+    resolved_at: null,
+    status: 'unassigned',
+    waiting_since: now,
+    updated_at: now,
+    last_message_at: now,
+    last_sender_type: 'customer',
+    last_preview: opts.preview ? String(opts.preview).slice(0, 80) : session.last_preview
+  });
+
+  const variants = phoneVariants(phone || '');
+  const patches = [
+    {
+      assigned_to_agent_id: null,
+      assigned_to_agent_name: null,
+      is_claimed: false,
+      is_resolved: false,
+      status: 'unassigned'
+    },
+    {
+      assigned_to_agent_id: null,
+      assigned_to_agent_name: null,
+      is_claimed: false,
+      is_resolved: false
+    },
+    { assigned_to_agent_name: null, is_claimed: false, is_resolved: false }
+  ];
+  for (const patch of patches) {
+    let ok = false;
+    if (variants.length) {
+      const { error } = await supabase.from('support_chats').update(patch).in('customer_phone', variants);
+      if (!error) ok = true;
+    }
+    if (!ok) {
+      const { error } = await supabase.from('support_chats').update(patch).eq('thread_key', thread_key);
+      if (!error) ok = true;
+    }
+    if (ok) break;
+  }
+
+  return { reopened: true };
+};
+
+/** Dipakai /api/chat: hanya tulis ke CS bila thread customer sedang resolved/closed. */
+export const ingestCustomerMessageIfThreadClosed = async (phone: string, message: string) => {
+  const text = String(message || '').trim();
+  const customer_phone = String(phone || '').trim();
+  if (!text || !customer_phone) return { ingested: false };
+  const thread_key = threadKeyOf({ customer_phone });
+  const { data: session } = await supabase
+    .from('support_chat_sessions')
+    .select('*')
+    .eq('thread_key', thread_key)
+    .maybeSingle();
+  if (!sessionLooksClosed(session)) return { ingested: false };
+  const res = await insertChatMessage({
+    customer_phone,
+    sender_type: 'customer',
+    message: text
+  });
+  return { ingested: !res.error, error: res.error };
 };
 
 export const claimThread = async (
@@ -110,7 +249,10 @@ export const claimThread = async (
     assigned_to_agent_name: agent.name,
     is_claimed: true,
     is_resolved: false,
+    status: 'open',
     last_message_at: now,
+    waiting_since: null,
+    updated_at: now,
     ...extra
   });
 
@@ -134,10 +276,14 @@ export const claimThread = async (
 };
 
 export const resolveThread = async (threadKey: string, csat?: number) => {
+  const now = new Date().toISOString();
   await upsertChatSession({
     thread_key: threadKey,
     is_resolved: true,
-    resolved_at: new Date().toISOString(),
+    status: 'resolved',
+    resolved_at: now,
+    updated_at: now,
+    waiting_since: null,
     csat_score: csat ?? null
   });
 };

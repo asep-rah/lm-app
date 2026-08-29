@@ -1,7 +1,7 @@
 'use client';
 export const dynamic = 'force-dynamic';
 
-import { useEffect, useRef, useState, Suspense } from 'react';
+import { useEffect, useMemo, useRef, useState, Suspense } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
@@ -12,6 +12,18 @@ import OutletIssueForm from '@/components/OutletIssueForm';
 import RoleTaskInbox from '@/components/RoleTaskInbox';
 import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
 import { updatePickupOrder } from '@/lib/pickupUpdates';
+import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
+import {
+  classifyQueueOrder,
+  isExpressDuration,
+  matchesQueueSearch,
+  parseBagCount,
+  parseOrderItems,
+  rackDisplay,
+  slaDueMs,
+  slaRemainingLabel,
+  sortProsesBySla
+} from '@/lib/posQueue';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -535,6 +547,9 @@ const handleApplyLoan = async (e: React.FormEvent) => {
   const [selectedOrderForRack, setSelectedOrderForRack] = useState<any>(null);
   const [rackInput, setRackInput] = useState('');
   const [bagInput, setBagInput] = useState('');
+  const [rackNotes, setRackNotes] = useState('');
+  const [queueSearch, setQueueSearch] = useState('');
+  const [completedPickups, setCompletedPickups] = useState<any[]>([]);
   const [printMode, setPrintMode] = useState<'receipt'|'payslip'>('receipt');
 
   // MODAL DETAIL TRANSAKSI & FORM EDIT KASIR
@@ -924,8 +939,36 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     const { data: attData } = await supabase.from('attendance_logs').select('*').eq('employee_name', employeeName).eq('log_date', todayStr).limit(1);
     setTodayAttendance(attData && attData.length > 0 ? attData[0] : null);
 
-    const { data: orders } = await supabase.from('transactions').select('*, outlets(name, whatsapp_number)').eq('outlet_id', selectedOutlet).neq('status', 'Selesai').order('created_at', { ascending: false });
-    setActiveOrders(orders?.filter((o) => o.status !== 'Siap Diambil') || []); setPickupOrders(orders?.filter((o) => o.status === 'Siap Diambil') || []);
+    const since = new Date();
+    since.setDate(since.getDate() - 30);
+
+    const [{ data: openOrders }, { data: doneOrders }] = await Promise.all([
+      supabase
+        .from('transactions')
+        .select('*, outlets(name, whatsapp_number)')
+        .eq('outlet_id', selectedOutlet)
+        .neq('status', 'Selesai')
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('transactions')
+        .select('*, outlets(name, whatsapp_number)')
+        .eq('outlet_id', selectedOutlet)
+        .in('status', ['Selesai', 'Diambil', 'Diantar', 'Delivered', 'Terkirim'])
+        .gte('created_at', since.toISOString())
+        .order('created_at', { ascending: false })
+    ]);
+
+    const merged = [...(openOrders || []), ...(doneOrders || [])];
+    const seen = new Set<string>();
+    const unique = merged.filter((o) => {
+      if (!o?.id || seen.has(o.id)) return false;
+      seen.add(o.id);
+      return true;
+    });
+
+    setActiveOrders(unique.filter((o) => classifyQueueOrder(o) === 'proses'));
+    setPickupOrders(unique.filter((o) => classifyQueueOrder(o) === 'ambil'));
+    setCompletedPickups(unique.filter((o) => classifyQueueOrder(o) === 'selesai'));
 
     const { data: incomingPkps } = await supabase
     .from('pickup_orders')
@@ -1348,6 +1391,19 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
     return;
   }
 
+  // Packing -> Siap Diambil wajib lewat modal rak (nomor rak + jumlah pack).
+  if (stageKeyOf(targetStatus) === 'siap') {
+    const item = typeof order.item_index === 'number'
+      ? parseOrderItems(order.items)[order.item_index]
+      : null;
+    setSelectedOrderForRack(order);
+    setRackInput(String(item?.rack_location || order.rack_location || order.rack_number || ''));
+    setBagInput(String(item?.package_count || order.package_count || ''));
+    setRackNotes(String(item?.rack_notes || order.rack_notes || ''));
+    setShowRackModal(true);
+    return;
+  }
+
   const key = statusKeyOf(order);
   if (statusUpdatingKey === key) return;
 
@@ -1474,9 +1530,163 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
 };
 
   const handleSubmitRack = async () => {
-    if (!selectedOrderForRack) return; setIsSubmitting(true);
-    await supabase.from('transactions').update({ status: 'Siap Diambil', rack_number: rackInput || '1', bag_count: Number(bagInput) || 1 }).eq('id', selectedOrderForRack.id);
-    setSuccessMsg(`✅ Disimpan di Rak`); setShowRackModal(false); setRackInput(''); setBagInput(''); refreshData(); setTimeout(() => setSuccessMsg(''), 4000); setIsSubmitting(false);
+    const order = selectedOrderForRack;
+    if (!order?.id) return;
+
+    const rack = rackInput.trim();
+    const pkg = bagInput.trim();
+    const notes = rackNotes.trim();
+    if (!rack || !pkg) {
+      alert('⚠️ Nomor/kode rak dan jumlah kantong/pack wajib diisi.');
+      return;
+    }
+
+    const key = statusKeyOf(order);
+    setIsSubmitting(true);
+    setStatusUpdatingKey(key);
+
+    try {
+      const isSubItem = typeof order.item_index === 'number';
+      const currentItems = parseOrderItems(order.items);
+      let nextItems = currentItems;
+      if (isSubItem) {
+        if (!currentItems[order.item_index]) {
+          alert('Gagal menyimpan rak: rincian item tidak ditemukan.');
+          return;
+        }
+        nextItems = currentItems.map((it: any, idx: number) =>
+          idx === order.item_index
+            ? { ...it, status: 'Siap Diambil', rack_location: rack, package_count: pkg, rack_notes: notes || undefined }
+            : it
+        );
+      }
+
+      const allReady = !isSubItem || nextItems.every((it: any) => {
+        const k = stageKeyOf(it?.status);
+        return k === 'siap' || k === 'selesai';
+      });
+
+      const combinedLoc = isSubItem
+        ? Array.from(new Set(nextItems.map((it: any) => it.rack_location).filter(Boolean))).join(', ') || rack
+        : rack;
+      const combinedPkg = isSubItem
+        ? nextItems.map((it: any) => it.package_count).filter(Boolean).join(' + ') || pkg
+        : pkg;
+      const combinedNotes = isSubItem
+        ? nextItems.map((it: any) => it.rack_notes).filter(Boolean).join(' · ') || notes
+        : notes;
+
+      const parentStatus = allReady ? 'Siap Diambil' : (order.status || 'Packing');
+      const bagCount = parseBagCount(pkg);
+      const subItem = isSubItem ? currentItems[order.item_index] : null;
+
+      const txFull: Record<string, unknown> = {
+        status: parentStatus,
+        rack_location: combinedLoc,
+        package_count: combinedPkg,
+        rack_number: combinedLoc,
+        bag_count: bagCount
+      };
+      if (notes || combinedNotes) txFull.rack_notes = combinedNotes || notes;
+      if (isSubItem) txFull.items = nextItems;
+
+      const { error: txErr } = await updateWithFallback('transactions', [
+        txFull,
+        {
+          status: parentStatus,
+          rack_number: combinedLoc,
+          bag_count: bagCount,
+          ...(isSubItem ? { items: nextItems } : {})
+        },
+        {
+          status: parentStatus,
+          ...(isSubItem ? { items: nextItems } : {})
+        }
+      ], { column: 'id', value: order.id });
+
+      if (txErr) {
+        alert('❌ Gagal menyimpan rak: ' + txErr.message);
+        return;
+      }
+
+      if (order.pickup_id && allReady) {
+        await updateWithFallback('pickup_orders', [
+          {
+            status: 'Siap Diambil',
+            rack_location: combinedLoc,
+            package_count: combinedPkg,
+            rack_notes: combinedNotes || undefined
+          },
+          { status: 'Siap Diambil' }
+        ], { column: 'id', value: order.pickup_id });
+      } else if (allReady) {
+        await updateWithFallback('pickup_orders', [
+          { status: 'Siap Diambil', rack_location: combinedLoc, package_count: combinedPkg },
+          { status: 'Siap Diambil' }
+        ], { column: 'transaction_id', value: order.id });
+      }
+
+      const completedStage = String(order.status || 'Packing').trim();
+      if (PAID_STAGE_KEYS.includes(getStageKey(completedStage))) {
+        await insertWithFallback('work_logs', [
+          {
+            transaction_id: order.id,
+            employee_name: employeeName || 'Kasir',
+            stage: completedStage,
+            service_type: subItem?.name || order.service_type || '',
+            weight_kg: Number(subItem?.weight ?? order.weight_kg) || 0,
+            pcs_count: Number(subItem?.qty ?? order.pcs_count) || 0,
+            created_at: new Date().toISOString()
+          },
+          {
+            transaction_id: order.id,
+            employee_name: employeeName || 'Kasir',
+            stage: completedStage,
+            service_type: subItem?.name || order.service_type || '',
+            weight_kg: Number(subItem?.weight ?? order.weight_kg) || 0,
+            pcs_count: Number(subItem?.qty ?? order.pcs_count) || 0
+          }
+        ]);
+      }
+
+      const rackAudit = `Penyimpanan Rak: ${rack} | ${pkg}${notes ? ` | ${notes}` : ''}`;
+      await insertWithFallback('work_logs', [
+        {
+          transaction_id: order.id,
+          employee_name: employeeName || 'Kasir',
+          stage: 'Penyimpanan Rak',
+          service_type: subItem?.name || order.service_type || '',
+          notes: rackAudit,
+          weight_kg: 0,
+          pcs_count: bagCount,
+          created_at: new Date().toISOString()
+        },
+        {
+          transaction_id: order.id,
+          employee_name: employeeName || 'Kasir',
+          stage: rackAudit,
+          service_type: subItem?.name || order.service_type || '',
+          weight_kg: 0,
+          pcs_count: 0
+        }
+      ]);
+
+      setShowRackModal(false);
+      setSelectedOrderForRack(null);
+      setRackInput('');
+      setBagInput('');
+      setRackNotes('');
+      setSuccessMsg(allReady
+        ? '✅ Racking selesai. Pesanan pindah ke tab Ambil.'
+        : '✅ Item disimpan di rak. Selesaikan packing item lain untuk pindah ke Ambil.');
+      await refreshData();
+      setTimeout(() => setSuccessMsg(''), 4000);
+    } catch (err: any) {
+      alert('❌ Gagal menyimpan rak: ' + (err?.message || 'Terjadi kesalahan'));
+    } finally {
+      setIsSubmitting(false);
+      setStatusUpdatingKey(null);
+    }
   };
 
   const handlePickupFinish = async (order: any) => {
@@ -1515,6 +1725,8 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
       await supabase.from('pickup_orders').update({ status: 'Selesai' }).eq('transaction_id', order.id);
     }
 
+    setPickupOrders((prev) => prev.filter((o) => o.id !== order.id));
+    setCompletedPickups((prev) => [{ ...order, status: 'Selesai' }, ...prev.filter((o) => o.id !== order.id)]);
     setSuccessMsg('✅ Diserahkan!'); refreshData(); setTimeout(() => setSuccessMsg(''), 3000); setIsSubmitting(false);
   };
 
@@ -1620,11 +1832,9 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
       return stepButton('🎁 Mulai Packing', 'Packing', 'bg-violet-500 hover:bg-violet-600');
     }
 
-    // 7. TAHAP 6: Packing / Kemas -> Lanjut ke SIAP DIAMBIL.
-    // Nilai status harus tepat 'Siap Diambil' agar cocok dengan filter tab "Siap Diambil"
-    // di refreshData dan dengan handleSubmitRack.
+    // 7. TAHAP 6: Packing / Kemas -> modal rak wajib, lalu SIAP DIAMBIL (pindah ke tab Ambil).
     if (isPackingStatus(s)) {
-      return stepButton('📦 Siap Diambil / Diantar', 'Siap Diambil', 'bg-emerald-600 hover:bg-emerald-700');
+      return stepButton('📦 Simpan ke Rak / Siap Diambil', 'Siap Diambil', 'bg-emerald-600 hover:bg-emerald-700');
     }
 
     // 8. TAHAP AKHIR: sudah siap diambil. Tanpa cabang ini status 'Siap Ambil'/'Siap Diambil'
@@ -1673,6 +1883,19 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
     setPrintMode('receipt');
     setTimeout(() => window.print(), 100);
   };
+
+  const visibleProses = useMemo(
+    () => sortProsesBySla(activeOrders.filter((o) => matchesQueueSearch(o, queueSearch))),
+    [activeOrders, queueSearch]
+  );
+  const visibleAmbil = useMemo(
+    () => pickupOrders.filter((o) => matchesQueueSearch(o, queueSearch)),
+    [pickupOrders, queueSearch]
+  );
+  const visibleAmbilDone = useMemo(
+    () => completedPickups.filter((o) => matchesQueueSearch(o, queueSearch)),
+    [completedPickups, queueSearch]
+  );
 
   const totalPayNum = Number(amount) || 0;
   const split1Num = Number(splitAmount1) || 0;
@@ -1786,15 +2009,48 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
       {showRackModal && (
         <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl">
-            <h3 className="text-lg font-bold mb-1 text-slate-800">Simpan ke Rak</h3>
-            <p className="text-xs text-slate-500 mb-4">Milik: <span className="font-bold text-emerald-600">{selectedOrderForRack?.customer_name}</span></p>
+            <h3 className="text-lg font-black mb-1 text-slate-800">📦 Penyimpanan Rak</h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Milik: <span className="font-bold text-emerald-600">{selectedOrderForRack?.customer_name}</span>
+              {selectedOrderForRack?.receipt_number && (
+                <span className="font-mono text-slate-600"> · {selectedOrderForRack.receipt_number}</span>
+              )}
+            </p>
             <div className="space-y-3 mb-6">
-              <div><label className="block text-xs font-bold text-slate-700 mb-1">Total Kantong</label><input type="number" value={bagInput} onChange={(e) => setBagInput(e.target.value)} className="w-full bg-slate-50 border rounded-xl px-4 py-3 text-sm" required /></div>
-              <div><label className="block text-xs font-bold text-slate-700 mb-1">Nomor Rak</label><input type="text" value={rackInput} onChange={(e) => setRackInput(e.target.value)} className="w-full bg-slate-50 border rounded-xl px-4 py-3 text-sm" required /></div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Nomor / Kode Rak <span className="text-rose-500">*</span></label>
+                <input
+                  type="text"
+                  value={rackInput}
+                  onChange={(e) => setRackInput(e.target.value)}
+                  placeholder='Contoh: Rak A-02'
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-sm font-bold text-slate-800 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Jumlah Kantong / Pack <span className="text-rose-500">*</span></label>
+                <input
+                  type="text"
+                  value={bagInput}
+                  onChange={(e) => setBagInput(e.target.value)}
+                  placeholder="Contoh: 2 Pack  atau  1 Plastik + 1 Hanger"
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-sm font-bold text-slate-800 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Catatan Penyimpanan <span className="text-slate-400 font-semibold">(opsional)</span></label>
+                <input
+                  type="text"
+                  value={rackNotes}
+                  onChange={(e) => setRackNotes(e.target.value)}
+                  placeholder="Contoh: Gantung di Hanger C-01"
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-sm text-slate-800 focus:outline-none"
+                />
+              </div>
             </div>
             <div className="flex gap-2">
-              <button onClick={() => setShowRackModal(false)} className="flex-1 bg-slate-100 font-bold py-3 rounded-xl text-slate-600 text-sm">Batal</button>
-              <button onClick={handleSubmitRack} disabled={isSubmitting || !rackInput || !bagInput} className="flex-1 bg-blue-600 text-white font-bold py-3 rounded-xl text-sm">Simpan</button>
+              <button type="button" onClick={() => { setShowRackModal(false); setSelectedOrderForRack(null); }} className="flex-1 bg-slate-100 font-bold py-3 rounded-xl text-slate-600 text-sm">Batal</button>
+              <button type="button" onClick={handleSubmitRack} disabled={isSubmitting || !rackInput.trim() || !bagInput.trim()} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl text-sm disabled:opacity-50">Simpan ke Rak</button>
             </div>
           </div>
         </div>
@@ -2498,8 +2754,18 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
                 <h3 className="text-[10px] md:text-xs font-black text-slate-800 uppercase tracking-wider">📋 Sedang Diproses ({activeOrders.length})</h3>
                 <span className="text-[10px] text-slate-400">Klik kartu untuk detail & edit</span>
               </div>
-              {activeOrders.map((order) => (
-                <div key={order.id} className="border rounded-xl p-4 space-y-3 bg-white shadow-sm hover:border-indigo-300 transition">
+              <input
+                type="search"
+                value={queueSearch}
+                onChange={(e) => setQueueSearch(e.target.value)}
+                placeholder="Cari nama, WA, resi (TRX-...), atau layanan..."
+                className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-xs font-semibold text-slate-800 focus:outline-none focus:border-amber-500"
+              />
+              {visibleProses.map((order) => {
+                const sla = slaRemainingLabel(slaDueMs(order));
+                const express = isExpressDuration(order.duration);
+                return (
+                <div key={order.id} className={`rounded-xl p-4 space-y-3 shadow-sm hover:border-indigo-300 transition border ${sla.overdue ? 'border-rose-400 bg-rose-50/30' : 'border-slate-200 bg-white'}`}>
                   <div onClick={() => handleOpenDetailModal(order)} className="flex justify-between items-start pb-2.5 cursor-pointer group">
                     <div>
                       <div className="flex items-center gap-2 flex-wrap">
@@ -2507,6 +2773,8 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
                           {(order.customer_name && order.customer_name !== 'Pelanggan') ? order.customer_name : (order.customer_phone || order.phone_number || 'Pelanggan Online')}
                         </h4>
                         <span className="text-[10px] font-mono font-bold bg-slate-100 border border-slate-200 text-slate-700 px-2 py-0.5 rounded-md">{order.receipt_number || 'TRX-POS'}</span>
+                        {express && <span className="text-[9px] font-black uppercase bg-violet-100 text-violet-800 border border-violet-200 px-2 py-0.5 rounded-md">Express</span>}
+                        <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-md border ${sla.overdue ? 'bg-rose-100 text-rose-800 border-rose-300 animate-pulse' : 'bg-sky-50 text-sky-800 border-sky-200'}`}>{sla.label}</span>
                       </div>
                       <p className="text-[10px] text-slate-500 mt-1">{order.service_type} • <b className="text-emerald-600">{order.weight_kg || 0} Kg</b> / <b className="text-amber-600">{order.pcs_count || 0} Pcs</b></p>
                       {order.delivery_fee > 0 && <p className="text-[10px] font-bold text-indigo-600 mt-0.5">🚚 Ongkir: Rp {Number(order.delivery_fee).toLocaleString('id-ID')}</p>}
@@ -2599,28 +2867,69 @@ const handleStatusChange = async (order: any, targetStatus: string) => {
               );
             })()}
                 </div>
-              ))}
+              );
+              })}
               {activeOrders.length === 0 && <p className="text-xs text-slate-400 text-center py-8">Tidak ada antrean cucian saat ini.</p>}
+              {activeOrders.length > 0 && visibleProses.length === 0 && <p className="text-xs text-slate-400 text-center py-8">Tidak ada pesanan yang cocok dengan pencarian.</p>}
             </div>
           )}
 
           {activeTab === 'pickup' && (
             <div className="space-y-3">
               <h3 className="text-[10px] md:text-xs font-bold text-slate-500 uppercase">🛍️ Siap Diambil ({pickupOrders.length})</h3>
+              <input
+                type="search"
+                value={queueSearch}
+                onChange={(e) => setQueueSearch(e.target.value)}
+                placeholder="Cari nama, WA, resi (TRX-...), atau layanan..."
+                className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-xs font-semibold text-slate-800 focus:outline-none focus:border-blue-500"
+              />
               <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl text-amber-900 text-[10px] md:text-xs"><p className="font-bold mb-1">⚠️ Komplain 1x24 Jam dengan nota resmi.</p></div>
-              {pickupOrders.map((order) => (
-                <div key={order.id} className="bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-3">
-                  <div className="flex justify-between items-start">
+              {visibleAmbil.map((order) => {
+                const rack = rackDisplay(order);
+                return (
+                <div key={order.id} className="bg-amber-100 text-amber-800 border border-amber-300 rounded-xl p-4 space-y-3">
+                  <div className="flex justify-between items-start gap-2">
                     <div>
-                      <div className="flex items-center gap-2 flex-wrap"><h4 className="font-bold text-blue-900 text-sm">{order.customer_name}</h4><span className="text-[10px] font-mono font-bold bg-blue-100 border border-blue-200 text-blue-800 px-2 py-0.5 rounded-md">{order.receipt_number}</span></div>
-                      <p className="text-[10px] text-blue-700 mt-1">{order.service_type}</p>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className="font-bold text-amber-950 text-sm">{order.customer_name}</h4>
+                        <span className="text-[10px] font-mono font-bold bg-amber-50 border border-amber-300 text-amber-900 px-2 py-0.5 rounded-md">{order.receipt_number}</span>
+                      </div>
+                      <p className="text-[10px] text-amber-800 mt-1">{order.service_type}</p>
+                      <p className="text-[10px] font-black uppercase tracking-wide text-amber-900 mt-1.5">Siap Diambil - Belum Diambil Customer</p>
                     </div>
-                    <span className="text-[10px] font-bold bg-blue-600 text-white px-2 py-1 rounded shadow-sm">Rak: {order.rack_number}</span>
                   </div>
-                  <button onClick={() => handlePickupFinish(order)} disabled={isSubmitting} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3.5 rounded-xl text-xs shadow-md transition">✅ SERAHKAN</button>
+                  <div className="bg-white/80 border border-amber-300 rounded-xl px-3 py-2 text-[11px] font-black text-amber-950">
+                    📍 Lokasi: {rack.loc} | 📦 Total: {rack.pkg}
+                    {rack.notes ? <p className="text-[10px] font-semibold text-amber-800 mt-0.5">📝 {rack.notes}</p> : null}
+                  </div>
+                  <button onClick={() => handlePickupFinish(order)} disabled={isSubmitting} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3.5 rounded-xl text-xs shadow-md transition">✅ Serahkan / Mark Taken</button>
                 </div>
-              ))}
-              {pickupOrders.length === 0 && <p className="text-xs text-slate-400 text-center py-8">Tidak ada cucian di rak pengambilan.</p>}
+                );
+              })}
+              {visibleAmbilDone.map((order) => {
+                const rack = rackDisplay(order);
+                return (
+                <div key={order.id} className="bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-xl p-4 space-y-3">
+                  <div className="flex justify-between items-start gap-2">
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className="font-bold text-emerald-950 text-sm">{order.customer_name}</h4>
+                        <span className="text-[10px] font-mono font-bold bg-emerald-50 border border-emerald-300 text-emerald-900 px-2 py-0.5 rounded-md">{order.receipt_number}</span>
+                      </div>
+                      <p className="text-[10px] text-emerald-800 mt-1">{order.service_type}</p>
+                      <p className="text-[10px] font-black uppercase tracking-wide text-emerald-900 mt-1.5">Selesai - Sudah Diambil / Diantar</p>
+                    </div>
+                  </div>
+                  <div className="bg-white/80 border border-emerald-300 rounded-xl px-3 py-2 text-[11px] font-black text-emerald-950">
+                    📍 Lokasi: {rack.loc} | 📦 Total: {rack.pkg}
+                    {rack.notes ? <p className="text-[10px] font-semibold text-emerald-800 mt-0.5">📝 {rack.notes}</p> : null}
+                  </div>
+                </div>
+                );
+              })}
+              {pickupOrders.length === 0 && completedPickups.length === 0 && <p className="text-xs text-slate-400 text-center py-8">Tidak ada cucian di rak pengambilan.</p>}
+              {(pickupOrders.length > 0 || completedPickups.length > 0) && visibleAmbil.length === 0 && visibleAmbilDone.length === 0 && <p className="text-xs text-slate-400 text-center py-8">Tidak ada pesanan yang cocok dengan pencarian.</p>}
             </div>
           )}
 

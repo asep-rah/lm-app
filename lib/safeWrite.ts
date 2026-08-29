@@ -34,3 +34,27 @@ export async function insertWithFallback<T = Record<string, unknown>>(
   }
   return { data: null, error: lastErr || { message: `Gagal insert ${table}` } };
 }
+
+/**
+ * Update dengan urutan payload dari lengkap ke minimal.
+ * Kolom opsional yang belum ada di schema live tidak boleh menolak seluruh baris.
+ */
+export async function updateWithFallback(
+  table: string,
+  attempts: Record<string, unknown>[],
+  match: { column: string; value: unknown }
+): Promise<{ error: { message: string } | null }> {
+  let lastErr: { message: string } | null = null;
+  for (const row of attempts) {
+    const clean = cleanRow(row);
+    if (Object.keys(clean).length === 0) continue;
+    try {
+      const { error } = await supabase.from(table).update(clean).eq(match.column, match.value);
+      if (!error) return { error: null };
+      lastErr = { message: error.message };
+    } catch (e) {
+      lastErr = toErr(e);
+    }
+  }
+  return { error: lastErr || { message: `Gagal update ${table}` } };
+}

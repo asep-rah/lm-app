@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { laundryFallbackReply } from '@/lib/laundryFaq';
+import { ingestCustomerMessageIfThreadClosed } from '@/lib/csChat';
 
 export const dynamic = 'force-dynamic';
 
@@ -55,6 +56,12 @@ export async function POST(req: Request) {
     }
 
     lastUserText = history.filter((t) => t.role === 'user').pop()?.parts[0]?.text || '';
+
+    if (customerPhone && lastUserText) {
+      ingestCustomerMessageIfThreadClosed(String(customerPhone), lastUserText).catch((err) =>
+        console.warn('CS reopen dari /api/chat dilewati:', err?.message || err)
+      );
+    }
 
     if (!apiKey) {
       return Response.json({ reply: laundryFallbackReply(lastUserText) });

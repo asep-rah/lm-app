@@ -8,6 +8,7 @@ import {
   claimThread,
   insertChatMessage,
   isStaffOnlyMessage,
+  sessionLooksClosed,
   phoneFromThread,
   phoneVariants,
   resolveThread,
@@ -95,6 +96,7 @@ export default function CsCommandCenter() {
   const [audioReady, setAudioReady] = useState(false);
   const [nowTick, setNowTick] = useState(Date.now());
   const seenIds = useRef(new Set<string>());
+  const selectedKeyRef = useRef('');
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -135,10 +137,12 @@ export default function CsCommandCenter() {
             (m) =>
               ['cs', 'admin', 'owner'].includes(String(m.sender_type).toLowerCase()) && !isStaffOnlyMessage(m)
           );
-        const waitingFrom = lastCust && (!lastCs || new Date(lastCust.created_at) > new Date(lastCs.created_at))
+        const waitingFromLastCust = lastCust && (!lastCs || new Date(lastCust.created_at) > new Date(lastCs.created_at))
           ? new Date(lastCust.created_at).getTime()
           : 0;
         const s = sessMap[key] || {};
+        const waitingSince = s.waiting_since ? new Date(s.waiting_since).getTime() : 0;
+        const waitingFrom = waitingSince || waitingFromLastCust;
         return {
           key,
           phone: phoneFromThread(key) || String(last?.customer_phone || ''),
@@ -149,7 +153,7 @@ export default function CsCommandCenter() {
           assignedId: String(s.assigned_to_agent_id || last?.assigned_to_agent_id || ''),
           assignedName: String(s.assigned_to_agent_name || last?.assigned_to_agent_name || ''),
           claimed: !!(s.is_claimed || last?.is_claimed),
-          resolved: !!s.is_resolved
+          resolved: sessionLooksClosed(s)
         };
       })
       .sort((a, b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime());
@@ -229,6 +233,12 @@ export default function CsCommandCenter() {
     } else setLogs([]);
   }, []);
 
+  const loadThreadsRef = useRef(loadThreads);
+  const loadMessagesRef = useRef(loadMessages);
+  loadThreadsRef.current = loadThreads;
+  loadMessagesRef.current = loadMessages;
+  selectedKeyRef.current = selectedKey;
+
   useEffect(() => {
     if (!agent.role || !['cs', 'supervisor', 'owner', 'head_cs'].includes(agent.role)) {
       if (typeof window !== 'undefined' && !localStorage.getItem('laundry_user') && !localStorage.getItem('laundry_owner_user')) {
@@ -276,18 +286,32 @@ export default function CsCommandCenter() {
         }
       });
 
+    let lastChimeAt = 0;
+    const chimeOnce = () => {
+      const n = Date.now();
+      if (n - lastChimeAt < 900) return;
+      lastChimeAt = n;
+      playChime();
+    };
+
     const ch = supabase
       .channel('cs_command_chats')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'support_chats' }, (payload) => {
         const row: any = payload.new;
         if (row && String(row.sender_type).toLowerCase() === 'customer' && !isStaffOnlyMessage(row) && row.id && !seenIds.current.has(row.id)) {
           seenIds.current.add(row.id);
-          if (audioReady) playChime();
+          chimeOnce();
         }
-        loadThreads();
-        if (selectedKey && threadKeyOf(row) === selectedKey) loadMessages(selectedKey);
+        loadThreadsRef.current();
+        const openKey = selectedKeyRef.current;
+        if (openKey && row && threadKeyOf(row) === openKey) loadMessagesRef.current(openKey);
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'support_chat_sessions' }, () => loadThreads())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'support_chat_sessions' }, (payload) => {
+        const wasClosed = sessionLooksClosed(payload.old);
+        const nowOpen = !sessionLooksClosed(payload.new);
+        if (wasClosed && nowOpen) chimeOnce();
+        loadThreadsRef.current();
+      })
       .subscribe();
 
     return () => {
@@ -295,7 +319,7 @@ export default function CsCommandCenter() {
       supabase.removeChannel(lobby);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [audioReady, selectedKey]);
+  }, []);
 
   useEffect(() => {
     if (!selectedKey) return;
