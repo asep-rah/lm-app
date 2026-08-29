@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { AlertTriangle, CheckCircle2, Loader2, Phone, Truck } from 'lucide-react';
 
 export default function CustomerLogin() {
   const router = useRouter();
@@ -20,7 +21,7 @@ export default function CustomerLogin() {
   const handleGenerateWA = (e: React.FormEvent) => {
     e.preventDefault();
     const normalizedPhone = cleanPhone(phone);
-    if (normalizedPhone.length < 9) return alert('⚠️ Nomor WhatsApp tidak valid!');
+    if (normalizedPhone.length < 9) return alert('Nomor WhatsApp tidak valid!');
 
     const code = 'LDRV-' + Math.floor(1000 + Math.random() * 9000);
     setLoginCode(code);
@@ -28,7 +29,7 @@ export default function CustomerLogin() {
 
     // Ganti dengan Nomor WA Admin/CS Resmi Outlet Anda
     const adminWA = '6285172141494'; 
-    const message = `Halo Admin Laundrivery! 🛵💨%0A%0ASaya ingin masuk ke Aplikasi Pelanggan.%0A%0A*Nomor WA:* ${normalizedPhone}%0A*Kode Akses:* ${code}%0A%0ATerima kasih!`;
+    const message = `Halo Admin Laundrivery!%0A%0ASaya ingin masuk ke Aplikasi Pelanggan.%0A%0A*Nomor WA:* ${normalizedPhone}%0A*Kode Akses:* ${code}%0A%0ATerima kasih!`;
     
     window.open(`https://wa.me/${adminWA}?text=${message}`, '_blank');
   };
@@ -57,8 +58,8 @@ export default function CustomerLogin() {
         <div className="absolute -bottom-16 -left-16 w-32 h-32 bg-indigo-100 rounded-full blur-2xl opacity-60"></div>
 
         <div className="relative z-10 text-center mt-4 mb-8">
-          <div className="bg-blue-900 text-white w-16 h-16 rounded-2xl flex items-center justify-center text-3xl mx-auto mb-4 shadow-lg shadow-blue-950/40 rotate-3">
-            🛵
+          <div className="bg-blue-900 text-white w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-950/40 rotate-3">
+            <Truck className="w-8 h-8" strokeWidth={2} />
           </div>
           <h1 className="text-2xl font-black text-slate-800 tracking-tight">Laundrivery.</h1>
           <p className="text-xs text-slate-500 mt-1 font-medium">Cuci baju tanpa keluar rumah.</p>
@@ -80,8 +81,8 @@ export default function CustomerLogin() {
               />
             </div>
             
-            <button type="submit" className="w-full bg-blue-900 hover:bg-blue-950 text-white font-black py-4 rounded-2xl text-sm shadow-xl shadow-blue-900/30 transition-all active:scale-[0.98]">
-              📱 MASUK DENGAN WHATSAPP
+            <button type="submit" className="w-full bg-blue-900 hover:bg-blue-950 text-white font-black py-4 rounded-2xl text-sm shadow-xl shadow-blue-900/30 transition-all active:scale-[0.98] inline-flex items-center justify-center gap-2">
+              <Phone className="w-4 h-4" /> Masuk dengan WhatsApp
             </button>
             <p className="text-[10px] text-center text-slate-400 mt-4 leading-relaxed px-4">
               Kami akan membuka WhatsApp Anda untuk mengirim kode keamanan (Tanpa biaya OTP / SMS).
@@ -100,17 +101,25 @@ export default function CustomerLogin() {
               <p className="text-xs font-semibold text-slate-600">
                 Silakan kirim pesan WhatsApp yang baru saja terbuka ke nomor kami.
               </p>
-              <p className="text-[10px] text-amber-800 font-bold bg-amber-50 p-2 rounded-lg border border-amber-200">
-                ⚠️ Jangan tutup halaman ini sebelum Anda mengirim pesan WA!
+              <p className="text-[10px] text-amber-800 font-bold bg-amber-50 p-2 rounded-lg border border-amber-200 inline-flex items-center justify-center gap-1">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> Jangan tutup halaman ini sebelum Anda mengirim pesan WA!
               </p>
             </div>
 
             <button
               onClick={handleConfirmLogin}
               disabled={isSubmitting}
-              className="w-full bg-blue-900 hover:bg-blue-950 text-white font-black py-4 rounded-2xl text-sm shadow-xl shadow-blue-900/30 transition-all active:scale-[0.98]"
+              className="w-full bg-blue-900 hover:bg-blue-950 text-white font-black py-4 rounded-2xl text-sm shadow-xl shadow-blue-900/30 transition-all active:scale-[0.98] inline-flex items-center justify-center gap-2"
             >
-              {isSubmitting ? '🔄 MENGALIHKAN...' : '✅ SAYA SUDAH KIRIM PESAN WA'}
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" /> Mengalihkan...
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="w-4 h-4" /> Saya sudah kirim pesan WA
+                </>
+              )}
             </button>
             
             <button onClick={() => setStep(1)} className="w-full text-xs font-bold text-slate-400 hover:text-slate-600 pt-2">

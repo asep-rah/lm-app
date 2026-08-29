@@ -23,6 +23,37 @@ import {
   maybeAutoConfirmOrder,
   readLocalFlag
 } from '@/lib/orderFeedback';
+import { IconBadge, SlaBadge, StarRating, StatusPill, StepperBtn, TRACKER_STAGES } from '@/components/customer/ui';
+import {
+  AlertTriangle,
+  Box,
+  CheckCircle2,
+  ChevronRight,
+  ClipboardList,
+  Gift,
+  Headphones,
+  History,
+  Home,
+  Image as ImageIcon,
+  Info,
+  MapPin,
+  MessageSquare,
+  Package,
+  Paperclip,
+  Pencil,
+  Phone,
+  Receipt,
+  Save,
+  Search,
+  Shirt,
+  Sparkles,
+  Store,
+  Truck,
+  User,
+  Wallet,
+  Bot,
+  X
+} from 'lucide-react';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -120,8 +151,8 @@ function ProofPhotoGrid({
               <img src={s.src} alt={s.label} className={`w-full ${h} object-cover rounded-lg border border-slate-200`} />
             </button>
           ) : (
-            <div className={`w-full ${h} bg-slate-100 rounded-lg flex items-center justify-center text-[8px] text-slate-400`}>
-              Belum
+            <div className={`w-full ${h} bg-slate-100 rounded-lg flex items-center justify-center text-slate-300`}>
+              <ImageIcon className="w-4 h-4" />
             </div>
           )}
         </div>
@@ -281,7 +312,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
   ]);
 
   const handleSendChat = async (file?: File) => {
-    const messageText = inputChat.trim() || (file ? (file.type.includes('pdf') ? '📄 Invoice / file terlampir' : '📷 Bukti pembayaran terlampir') : '');
+    const messageText = inputChat.trim() || (file ? (file.type.includes('pdf') ? 'Invoice / file terlampir' : 'Bukti pembayaran terlampir') : '');
     if (!messageText && !file) return;
     setInputChat('');
 
@@ -502,10 +533,10 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
         selectedOutlet
       });
       if (error) throw error;
-      alert('✅ Permintaan pengantaran terkirim ke Portal Driver. Kurir outlet akan mengantar cucian ke alamat Anda.');
+      alert('Permintaan pengantaran terkirim ke Portal Driver. Kurir outlet akan mengantar cucian ke alamat Anda.');
       fetchCustomerProfile(customerPhone);
     } catch (err: any) {
-      alert('❌ Gagal minta pengantaran: ' + (err.message || 'Coba lagi'));
+      alert('Gagal minta pengantaran: ' + (err.message || 'Coba lagi'));
     } finally {
       setRequestingDeliveryId(null);
     }
@@ -879,23 +910,23 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
   const handleSaveAddress = () => {
     localStorage.setItem('laundry_customer_address', customerAddress);
     setIsEditingAddress(false);
-    alert('✅ Alamat penjemputan berhasil disimpan!');
+    alert('Alamat penjemputan berhasil disimpan!');
   };
 
   const handleGetCurrentLocation = () => {
     if (!navigator.geolocation) {
-      return alert('⚠️ Browser/HP Anda tidak mendukung deteksi lokasi otomatis.');
+      return alert('Browser/HP Anda tidak mendukung deteksi lokasi otomatis.');
     }
 
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const { latitude, longitude } = pos.coords;
         setUserCoords({ lat: latitude, lon: longitude });
-        alert(`📍 Lokasi GPS berhasil didapatkan! (${latitude.toFixed(5)}, ${longitude.toFixed(5)})`);
+        alert(`Lokasi GPS berhasil didapatkan! (${latitude.toFixed(5)}, ${longitude.toFixed(5)})`);
       },
       (err) => {
         console.error('Gagal ambil GPS:', err);
-        alert('⚠️ Gagal mengambil lokasi GPS. Pastikan izin lokasi/GPS di HP Anda aktif.');
+        alert('Gagal mengambil lokasi GPS. Pastikan izin lokasi/GPS di HP Anda aktif.');
       },
       { enableHighAccuracy: true }
     );
@@ -959,7 +990,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
     : isKiloanChecked
     ? [{ name: selectedKiloanSvc, kg: Math.max(3, Number(kiloanEstKg) || 3), qty: Math.max(1, Number(kiloanQty) || 1), duration: kiloanDuration, price: kiloanActiveUnitPrice }]
     : [];
-  const kiloanSubtotal = kiloanLines.reduce((sum, line) => sum + Math.round(line.price * line.kg * line.qty), 0);
+  const kiloanSubtotal = kiloanLines.reduce((sum, line) => sum + Math.round(line.price * line.kg), 0);
 
   let satuanSubtotal = 0;
   if (isSatuanChecked) {
@@ -980,9 +1011,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
     const basket = rawSubtotal + rawOngkir;
     if (!promoIsClaimable(promo, basket)) {
       if (promo.max_quota > 0 && promo.used_count >= promo.max_quota) {
-        return alert('⚠️ Kuota voucher ini sudah habis.');
+        return alert('Kuota voucher ini sudah habis.');
       }
-      return alert(`⚠️ Minimal transaksi untuk promo ini adalah Rp ${Number(promo.minTx || 0).toLocaleString('id-ID')}`);
+      return alert(`Minimal transaksi untuk promo ini adalah Rp ${Number(promo.minTx || 0).toLocaleString('id-ID')}`);
     }
     setClaimedPromo(promo);
     setShowPromoModal(false);
@@ -992,14 +1023,14 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
     e.preventDefault();
     if (!customerPhone) return alert('Login terlebih dahulu!');
     if (!customerAddress || customerAddress.trim().length < 5) {
-      return alert('⚠️ Isi Alamat Penjemputan terlebih dahulu!');
+      return alert('Isi Alamat Penjemputan terlebih dahulu!');
     }
     if (!isKiloanChecked && !kiloanLines.length && (!isSatuanChecked || cartSatuan.length === 0)) {
-      return alert('⚠️ Pilih minimal 1 paket Kiloan atau Satuan!');
+      return alert('Pilih minimal 1 paket Kiloan atau Satuan!');
     }
     // PENGAMAN: Blokir total pembayaran COD
     if ((typeof paymentMethod !== 'undefined' && paymentMethod === 'COD') || (typeof paymentMethod !== 'undefined' && paymentMethod === 'Cash on Delivery')) {
-      alert('⚠️ Mohon maaf, Laundrivery saat ini hanya melayani pembayaran cashless / transfer online. Pembayaran COD tidak tersedia.');
+      alert('Mohon maaf, Laundrivery saat ini hanya melayani pembayaran cashless / transfer online. Pembayaran COD tidak tersedia.');
       setIsSubmitting(false);
       return;
     }
@@ -1010,7 +1041,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
     const detailLines: string[] = [];
     if (kiloanLines.length) {
       detailLines.push(
-        `Kiloan: ${kiloanLines.map((k) => `${k.name} ${k.kg}Kg x${k.qty} (${k.duration})`).join(', ')}`
+        `Kiloan: ${kiloanLines.map((k) => `${k.name} ${k.kg}Kg · ${k.qty} Pcs (${k.duration})`).join(', ')}`
       );
     }
     if (isSatuanChecked && cartSatuan.length > 0) {
@@ -1061,7 +1092,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       customer_phone: normPhone,
       phone_number: normPhone,
       service_type: mainServiceLabel,
-      estimated_weight: kiloanLines.reduce((s, k) => s + k.kg * k.qty, 0) || 0,
+      estimated_weight: kiloanLines.reduce((s, k) => s + k.kg, 0) || 0,
       address: customerAddress || '',
       duration: kiloanDuration || 'Reguler (3 Hari)',
       bag_count: Number(bagCount) || 1,
@@ -1108,7 +1139,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       setActiveTab('home');
       fetchCustomerProfile(normPhone);
     } else {
-      alert('❌ Gagal membuat pesanan: ' + (error?.message || 'Koneksi bermasalah'));
+      alert('Gagal membuat pesanan: ' + (error?.message || 'Koneksi bermasalah'));
     }
     setIsSubmitting(false);
   };
@@ -1124,7 +1155,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       {readyPopup && (
         <div className="fixed inset-x-0 bottom-20 z-40 pointer-events-none flex justify-center px-4">
           <div className="pointer-events-auto bg-white rounded-2xl p-4 w-full max-w-sm shadow-xl border border-slate-200 space-y-2">
-            <p className="text-sm font-black text-slate-900">Cucian siap diambil</p>
+            <p className="text-sm font-black text-slate-900 inline-flex items-center gap-1.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" /> Cucian siap diambil
+            </p>
             <p className="text-xs text-slate-600 leading-relaxed">
               Cucian Anda sudah selesai dan siap diambil! Silakan ambil ke outlet atau pesan Kurir Internal.
             </p>
@@ -1139,9 +1172,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                   handleRequestDelivery(readyPopup, e);
                   dismissReadyPopup();
                 }}
-                className="flex-1 bg-sky-500 text-white font-bold text-xs py-2.5 rounded-xl"
+                className="flex-1 bg-sky-500 text-white font-bold text-xs py-2.5 rounded-xl inline-flex items-center justify-center gap-1"
               >
-                Minta Driver
+                <Truck className="w-3.5 h-3.5" /> Minta Driver
               </button>
             </div>
           </div>
@@ -1151,8 +1184,8 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       {/* HEADER TOP BAR */}
       <div className="bg-white rounded-2xl p-3.5 shadow-sm border border-slate-200/80 flex justify-between items-center mb-4">
         <div className="flex items-center gap-2.5">
-          <div className="w-10 h-10 bg-blue-600 text-white rounded-xl flex items-center justify-center font-black text-xl shadow-md shadow-blue-200">
-            🧺
+          <div className="w-10 h-10 bg-blue-600 text-white rounded-xl flex items-center justify-center shadow-md shadow-blue-200">
+            <Sparkles className="w-5 h-5" strokeWidth={2.2} />
           </div>
           <div>
             <h1 className="text-base font-extrabold text-slate-900 tracking-tight leading-none">Laundrivery</h1>
@@ -1160,8 +1193,8 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => setShowPromoModal(true)} className="bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-extrabold px-2.5 py-1.5 rounded-xl hover:bg-amber-100 transition shadow-sm">
-            🎁 Promo & Vouchers
+          <button onClick={() => setShowPromoModal(true)} className="bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-extrabold px-2.5 py-1.5 rounded-xl hover:bg-amber-100 transition shadow-sm inline-flex items-center gap-1">
+            <Gift className="w-3.5 h-3.5" /> Promo & Vouchers
           </button>
           {customerData && (
             <button onClick={handleLogout} className="bg-rose-50 border border-rose-200 text-rose-600 text-[10px] font-bold px-2.5 py-1.5 rounded-xl hover:bg-rose-100 transition">
@@ -1173,8 +1206,8 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
       {!customerData ? (
         <form onSubmit={handleLogin} className="bg-white border border-slate-200 p-6 rounded-3xl space-y-4 shadow-sm my-6">
-          <div className="w-14 h-14 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center text-2xl mx-auto font-black shadow-inner">
-            📲
+          <div className="w-14 h-14 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
+            <Phone className="w-6 h-6" />
           </div>
           <div className="text-center">
             <h3 className="text-base font-extrabold text-slate-900">Masuk Aplikasi</h3>
@@ -1225,7 +1258,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
               <div className="grid grid-cols-2 gap-3">
                 <button onClick={() => setActiveTab('order')} className="bg-white border border-slate-200 p-4 rounded-3xl flex items-center gap-3 hover:border-blue-500 transition shadow-sm text-left">
-                  <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center text-2xl font-black">🛵</div>
+                  <IconBadge icon={Truck} tone="blue" size="lg" />
                   <div>
                     <span className="text-xs font-extrabold text-slate-900 block">Pesan Express</span>
                     <span className="text-[10px] text-slate-500 font-medium">Jemput ke Rumah</span>
@@ -1233,7 +1266,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                 </button>
 
                 <button onClick={() => setActiveTab('deposit')} className="bg-white border border-slate-200 p-4 rounded-3xl flex items-center gap-3 hover:border-indigo-500 transition shadow-sm text-left">
-                  <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center text-2xl font-black">💳</div>
+                  <IconBadge icon={Wallet} tone="indigo" size="lg" />
                   <div>
                     <span className="text-xs font-extrabold text-slate-900 block">Paket Deposit</span>
                     <span className="text-[10px] text-slate-500 font-medium">Bonus Saldo Extra</span>
@@ -1278,14 +1311,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
         return displayOrders.map((order: any) => {
           const currentStatus = (order.status || '').toLowerCase();
-          const stages = [
-            { label: 'Jemput', icon: '🛺', match: ['baru', 'menunggu', 'request', 'jemput', 'menuju', 'dibawa'] },
-            { label: 'Diterima', icon: '🏠', match: ['diterima', 'tiba', 'kasir'] },
-            { label: 'Proses', icon: '🧼', match: ['cuci', 'mencuci', 'sortir', 'ering'] },
-            { label: 'Setrika', icon: '👔', match: ['setrika', 'gosok', 'pack', 'emas'] },
-            { label: 'Siap', icon: '📦', match: ['siap'] },
-            { label: 'Selesai', icon: '✅', match: ['selesai', 'terkirim', 'delivered', 'diambil'] }
-          ];
+          const stages = TRACKER_STAGES;
 
           let activeIndex = stages.findIndex(s => s.match.some(m => currentStatus.includes(m)));
           if (activeIndex === -1) activeIndex = 0;
@@ -1306,13 +1332,14 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
               className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 flex flex-col gap-3 transition-all hover:shadow-md cursor-pointer active:scale-[0.98] mb-3"
             >
               {/* Header Kartu */}
-              <div className="flex justify-between items-center border-b border-slate-50 pb-2">
+              <div className="flex justify-between items-center border-b border-slate-50 pb-2 gap-2">
                 <span className="text-[10px] font-extrabold tracking-wider text-slate-400 uppercase">
                   {order.receipt_number || order.order_type || 'Laundry Express'} • {formattedDate}
                 </span>
-                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-600 border border-amber-200/50">
-                  {order.status || 'Menunggu Kurir'}
-                </span>
+                <div className="flex items-center gap-1 shrink-0">
+                  <SlaBadge duration={order.duration || order.service_type} createdAt={order.created_at} />
+                  <StatusPill status={order.status || 'Menunggu Kurir'} />
+                </div>
               </div>
 
               {/* Body Kartu */}
@@ -1322,15 +1349,16 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                     {order.service_type || 'Layanan Laundry'}
                   </h4>
                   <button
-  type="button"
-  onClick={(e) => {
-    e.stopPropagation();
-    setDetailOrder(order);
-  }}
-  className="text-[11px] text-indigo-600 font-semibold line-clamp-1 mt-0.5 flex items-center gap-1 hover:underline cursor-pointer focus:outline-none"
->
-  <span>🔍</span> Klik untuk detail item & status lengkap
-</button>
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDetailOrder(order);
+                    }}
+                    className="text-[11px] text-indigo-600 font-semibold line-clamp-1 mt-0.5 flex items-center gap-1 hover:underline cursor-pointer focus:outline-none"
+                  >
+                    <Search className="w-3 h-3" /> Detail item & status
+                    <ChevronRight className="w-3 h-3" />
+                  </button>
                 </div>
                 <div className="text-right whitespace-nowrap">
                   <span className="text-[10px] text-slate-400 block font-normal">Total Estimasi</span>
@@ -1345,10 +1373,11 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                 {stages.map((step, idx) => {
                   const isPassedOrActive = idx <= activeIndex;
                   const isActiveNow = idx === activeIndex;
+                  const StageIcon = step.icon;
                   return (
                     <div key={idx} className="flex flex-col items-center">
                       <div
-                        className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold transition-all ${
+                        className={`w-7 h-7 rounded-full flex items-center justify-center transition-all ${
                           isActiveNow
                             ? 'bg-indigo-600 text-white ring-2 ring-indigo-200 scale-110 animate-pulse'
                             : isPassedOrActive
@@ -1356,7 +1385,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                             : 'bg-slate-100 text-slate-400'
                         }`}
                       >
-                        {step.icon}
+                        <StageIcon className="w-3.5 h-3.5" strokeWidth={2.3} />
                       </div>
                       <span
                         className={`text-[8px] mt-1 font-semibold ${
@@ -1379,9 +1408,10 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                   type="button"
                   onClick={(e) => handleRequestDelivery(order, e)}
                   disabled={requestingDeliveryId === order.id}
-                  className="w-full bg-sky-500 hover:bg-sky-600 text-white font-black text-xs py-3 rounded-xl shadow-sm"
+                  className="w-full bg-sky-500 hover:bg-sky-600 text-white font-black text-xs py-3 rounded-xl shadow-sm inline-flex items-center justify-center gap-1.5"
                 >
-                  {requestingDeliveryId === order.id ? 'Mengirim…' : '🛵 Minta Pengantaran Driver'}
+                  <Truck className="w-4 h-4" />
+                  {requestingDeliveryId === order.id ? 'Mengirim…' : 'Minta Pengantaran Driver'}
                 </button>
               )}
 
@@ -1393,15 +1423,15 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                 >
                   <div className="flex justify-between items-center">
                     <span className="font-bold text-blue-900 flex items-center gap-1 text-[11px]">
-                      📍 Driver Sedang Menuju Lokasi
+                      <MapPin className="w-3.5 h-3.5" /> Driver Sedang Menuju Lokasi
                     </span>
                     <a
                       href={`https://maps.google.com/?q=${order.driver_lat},${order.driver_lon}`}
                       target="_blank"
                       rel="noreferrer"
-                      className="bg-blue-600 text-white font-bold text-[10px] px-2.5 py-1 rounded-lg shadow-sm"
+                      className="bg-blue-600 text-white font-bold text-[10px] px-2.5 py-1 rounded-lg shadow-sm inline-flex items-center gap-1"
                     >
-                      Buka Peta Live 🗺️
+                      Buka Peta Live <ChevronRight className="w-3 h-3" />
                     </a>
                   </div>
                   <p className="text-[10px] text-blue-600">Posisi driver diperbarui secara otomatis.</p>
@@ -1410,8 +1440,8 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
               {/* BUKTI FOTO: jemput → outlet → sortir → rak → antar */}
               <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 space-y-2 mt-2" onClick={(e) => e.stopPropagation()}>
-                <p className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider">
-                  📸 Bukti Foto
+                <p className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider inline-flex items-center gap-1">
+                  <ImageIcon className="w-3 h-3" /> Bukti Foto
                 </p>
                 <ProofPhotoGrid order={order} onOpen={setLightboxSrc} compact />
               </div>
@@ -1439,7 +1469,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                     className="w-full bg-slate-50 border border-slate-300 rounded-2xl px-3.5 py-3 text-xs font-bold text-slate-800"
                   >
                     {filteredOutlets.map((o) => (
-                      <option key={o.id} value={o.id}>📍 {o.name}</option>
+                      <option key={o.id} value={o.id}>{o.name}</option>
                     ))}
                   </select>
                 </div>
@@ -1450,10 +1480,10 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                     <button
                       type="button"
                       onClick={handleGetCurrentLocation}
-                      className="text-[10px] font-bold text-indigo-600 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-lg hover:bg-indigo-100 flex items-center gap-1 transition"
+                      className="text-[10px] font-bold text-indigo-600 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-lg hover:bg-indigo-100 inline-flex items-center gap-1 transition"
                     >
-                      <span>📍</span>
-                      <span>{userCoords ? 'GPS Terdeteksi ✓' : 'Ambil Lokasi GPS Presisi'}</span>
+                      <MapPin className="w-3 h-3" />
+                      <span>{userCoords ? 'GPS Terdeteksi' : 'Ambil Lokasi GPS Presisi'}</span>
                     </button>
                   </div>
                   <textarea
@@ -1465,7 +1495,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                   />
                   {userCoords && (
                     <p className="text-[9px] text-emerald-600 font-bold flex items-center gap-1">
-                      <span>✓</span> Lat: {userCoords.lat.toFixed(5)}, Lon: {userCoords.lon.toFixed(5)} (Pinpoint tersimpan)
+                      <CheckCircle2 className="w-3 h-3" /> Lat: {userCoords.lat.toFixed(5)}, Lon: {userCoords.lon.toFixed(5)} (Pinpoint tersimpan)
                     </p>
                   )}
                 </div>
@@ -1484,8 +1514,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
                 <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200/80 p-3.5 rounded-2xl flex justify-between items-center text-xs">
                   <div>
-                    <p className="font-extrabold text-amber-900 text-[11px]">
-                      {claimedPromo ? `🎉 ${claimedPromo.title}` : '🎁 Gunakan Voucher Promo'}
+                    <p className="font-extrabold text-amber-900 text-[11px] inline-flex items-center gap-1">
+                      <Gift className="w-3.5 h-3.5" />
+                      {claimedPromo ? claimedPromo.title : 'Gunakan Voucher Promo'}
                     </p>
                     <p className="text-[9px] text-amber-700">
                       {claimedPromo ? `Diskon Terpasang: -Rp ${promoDiscountVal.toLocaleString('id-ID')}` : 'Hemat ongkir dan cuci kiloan'}
@@ -1508,7 +1539,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                       onChange={(e) => setIsKiloanChecked(e.target.checked)}
                       className="w-4 h-4 accent-blue-600 rounded"
                     />
-                    <span className="text-xs font-extrabold text-blue-900">📦 Paket Laundry Kiloan</span>
+                    <span className="text-xs font-extrabold text-blue-900 inline-flex items-center gap-1.5">
+                      <Package className="w-4 h-4" /> Paket Laundry Kiloan
+                    </span>
                   </label>
 
                   {isKiloanChecked && (
@@ -1528,7 +1561,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
                       <div className="grid grid-cols-2 gap-2">
                         <div>
-                          <label className="block text-[10px] text-slate-500 font-bold mb-1">Durasi Kiloan</label>
+                          <label className="text-[10px] text-slate-500 font-bold mb-1 inline-flex items-center gap-1">
+                            Durasi Kiloan <SlaBadge duration={kiloanDuration} />
+                          </label>
                           <select
                             value={kiloanDuration}
                             onChange={(e) => setKiloanDuration(e.target.value)}
@@ -1541,14 +1576,13 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                           </select>
                         </div>
                         <div>
-                          <label className="block text-[10px] text-slate-500 font-bold mb-1">Est. Berat (Kg)</label>
+                          <label className="block text-[10px] text-slate-500 font-bold mb-1">Estimasi (Kg)</label>
                           <div className="flex items-center gap-1">
-                            <button
-                              type="button"
+                            <StepperBtn
+                              variant="minus"
                               disabled={Number(kiloanEstKg) <= 3}
                               onClick={() => setKiloanEstKg(String(Math.max(3, (Number(kiloanEstKg) || 3) - 1)))}
-                              className="w-8 h-8 rounded-lg bg-slate-200 text-slate-800 font-black disabled:opacity-40"
-                            >−</button>
+                            />
                             <input
                               type="number"
                               min="3"
@@ -1556,40 +1590,48 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                               onChange={(e) => setKiloanEstKg(String(Math.max(3, Number(e.target.value) || 3)))}
                               className="w-full bg-white border border-blue-200 rounded-xl p-2 text-xs font-extrabold text-blue-700 text-center"
                             />
-                            <button
-                              type="button"
+                            <StepperBtn
+                              variant="plus"
                               onClick={() => setKiloanEstKg(String((Number(kiloanEstKg) || 3) + 1))}
-                              className="w-8 h-8 rounded-lg bg-blue-600 text-white font-black"
-                            >+</button>
+                            />
                           </div>
                         </div>
                       </div>
                       <div>
-                        <label className="block text-[10px] text-slate-500 font-bold mb-1">Jumlah Paket / Pcs</label>
+                        <label className="block text-[10px] text-slate-500 font-bold mb-1">Jumlah Pcs</label>
                         <div className="flex items-center gap-1">
-                          <button type="button" disabled={Number(kiloanQty) <= 1} onClick={() => setKiloanQty(String(Math.max(1, (Number(kiloanQty) || 1) - 1)))} className="w-8 h-8 rounded-lg bg-slate-200 font-black disabled:opacity-40">−</button>
+                          <StepperBtn variant="minus" disabled={Number(kiloanQty) <= 1} onClick={() => setKiloanQty(String(Math.max(1, (Number(kiloanQty) || 1) - 1)))} />
                           <input type="number" min="1" value={kiloanQty} onChange={(e) => setKiloanQty(String(Math.max(1, Number(e.target.value) || 1)))} className="w-full bg-white border border-blue-200 rounded-xl p-2 text-xs font-extrabold text-center" />
-                          <button type="button" onClick={() => setKiloanQty(String((Number(kiloanQty) || 1) + 1))} className="w-8 h-8 rounded-lg bg-blue-600 text-white font-black">+</button>
+                          <StepperBtn variant="plus" onClick={() => setKiloanQty(String((Number(kiloanQty) || 1) + 1))} />
                         </div>
                       </div>
+                      <p className="text-[10px] text-slate-400 font-medium">
+                        Jumlah Pcs hanya catatan kasir (contoh: 4 Kg berisi 10 Pcs), tidak mengubah harga.
+                      </p>
                       <p className="text-[10px] bg-blue-50 border border-blue-100 text-blue-800 rounded-xl px-2.5 py-1.5 font-semibold">
                         Info: Minimal 3kg per order (1 Mesin Cuci = 1 Customer, pakaian tidak dicampur)
                       </p>
                       <p className="text-[10px] text-blue-600 font-bold text-right">
-                        Harga: Rp {kiloanActiveUnitPrice.toLocaleString('id-ID')}/Kg
+                        Harga: Rp {kiloanActiveUnitPrice.toLocaleString('id-ID')}/Kg · Total Rp {(kiloanActiveUnitPrice * Math.max(3, Number(kiloanEstKg) || 3)).toLocaleString('id-ID')}
                       </p>
-                      <button type="button" onClick={handleAddKiloanToCart} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-sm">
-                        + Tambah Paket Kiloan Ini
+                      <button type="button" onClick={handleAddKiloanToCart} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-sm inline-flex items-center justify-center gap-1.5">
+                        Tambah Paket Kiloan Ini
                       </button>
                       {cartKiloan.length > 0 && (
                         <div className="space-y-1.5">
                           {cartKiloan.map((item, idx) => (
                             <div key={idx} className="bg-white p-2.5 rounded-xl flex justify-between items-center text-xs border border-blue-100">
                               <div>
-                                <span className="font-bold text-slate-800 block">{item.name} · {item.kg} Kg × {item.qty}</span>
-                                <span className="text-[9px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-bold">{item.duration}</span>
+                                <span className="font-bold text-slate-800 block">{item.name} · {item.kg} Kg</span>
+                                <span className="text-[9px] text-slate-500 font-semibold">{item.qty} Pcs (catatan)</span>
+                                <span className="text-[9px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-bold ml-1">{item.duration}</span>
                               </div>
-                              <button type="button" onClick={() => handleRemoveKiloan(idx)} className="text-rose-500 font-bold px-1">✕</button>
+                              <div className="flex items-center gap-2">
+                                <span className="font-extrabold text-blue-600">Rp {(item.price * item.kg).toLocaleString('id-ID')}</span>
+                                <button type="button" onClick={() => handleRemoveKiloan(idx)} className="text-rose-500 p-1 rounded-full hover:bg-rose-50" aria-label="Hapus">
+                                  <X className="w-4 h-4" />
+                                </button>
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -1606,7 +1648,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                       onChange={(e) => setIsSatuanChecked(e.target.checked)}
                       className="w-4 h-4 accent-indigo-600 rounded"
                     />
-                    <span className="text-xs font-extrabold text-slate-800">👔 Items Satuan (Bedcover/Sepatu/dll)</span>
+                    <span className="text-xs font-extrabold text-slate-800 inline-flex items-center gap-1.5">
+                      <Shirt className="w-4 h-4" /> Items Satuan (Bedcover/Sepatu/dll)
+                    </span>
                   </label>
 
                   {isSatuanChecked && (
@@ -1629,7 +1673,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
                       <div className="grid grid-cols-2 gap-2">
                         <div>
-                          <label className="block text-[10px] text-slate-500 font-bold mb-1">Durasi Item Ini</label>
+                          <label className="text-[10px] text-slate-500 font-bold mb-1 inline-flex items-center gap-1">
+                            Durasi Item Ini <SlaBadge duration={satuanInputDuration} />
+                          </label>
                           <select
                             value={satuanInputDuration}
                             onChange={(e) => setSatuanInputDuration(e.target.value)}
@@ -1644,7 +1690,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                         <div>
                           <label className="block text-[10px] text-slate-500 font-bold mb-1">Jumlah (Pcs)</label>
                           <div className="flex items-center gap-1">
-                            <button type="button" disabled={Number(inputSatuanQty) <= 1} onClick={() => setInputSatuanQty(String(Math.max(1, (Number(inputSatuanQty) || 1) - 1)))} className="w-8 h-8 rounded-lg bg-slate-200 font-black disabled:opacity-40">−</button>
+                            <StepperBtn variant="minus" tone="indigo" disabled={Number(inputSatuanQty) <= 1} onClick={() => setInputSatuanQty(String(Math.max(1, (Number(inputSatuanQty) || 1) - 1)))} />
                             <input
                               type="number"
                               min="1"
@@ -1653,7 +1699,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                               onChange={(e) => setInputSatuanQty(e.target.value)}
                               className="w-full bg-white border border-slate-300 rounded-xl p-2 text-xs font-bold text-slate-800 text-center"
                             />
-                            <button type="button" onClick={() => setInputSatuanQty(String((Number(inputSatuanQty) || 1) + 1))} className="w-8 h-8 rounded-lg bg-indigo-600 text-white font-black">+</button>
+                            <StepperBtn variant="plus" tone="indigo" onClick={() => setInputSatuanQty(String((Number(inputSatuanQty) || 1) + 1))} />
                           </div>
                         </div>
                       </div>
@@ -1663,7 +1709,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                         onClick={handleAddSatuanToCart}
                         className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-sm"
                       >
-                        <span className="text-white">+ Tambah Item Satuan Ini</span>
+                        Tambah Item Satuan Ini
                       </button>
 
                       {cartSatuan.length > 0 && (
@@ -1676,7 +1722,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                               </div>
                               <div className="flex items-center gap-2">
                                 <span className="font-extrabold text-blue-600">Rp {(item.price * item.qty).toLocaleString('id-ID')}</span>
-                                <button type="button" onClick={() => handleRemoveSatuan(idx)} className="text-rose-500 font-bold px-1">✕</button>
+                                <button type="button" onClick={() => handleRemoveSatuan(idx)} className="text-rose-500 p-1 rounded-full hover:bg-rose-50" aria-label="Hapus">
+                                  <X className="w-4 h-4" />
+                                </button>
                               </div>
                             </div>
                           ))}
@@ -1688,7 +1736,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
                 <div className="bg-slate-800/80 border border-slate-700/80 p-4 rounded-2xl space-y-3.5 my-4">
                   <h3 className="text-xs font-black tracking-wider uppercase text-cyan-400 flex items-center gap-2">
-                    📋 INFORMASI DETAIL CUCIAN
+                    <ClipboardList className="w-4 h-4" /> Informasi Detail Cucian
                   </h3>
 
                   <div className="space-y-3 text-xs text-slate-200">
@@ -1796,10 +1844,10 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                       <button
                         type="button"
                         onClick={() => setShowEstimateInfoModal(true)}
-                        className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 hover:bg-blue-200 font-bold text-[10px] flex items-center justify-center border border-blue-200"
+                        className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 hover:bg-blue-200 flex items-center justify-center border border-blue-200"
                         title="Informasi Estimasi Harga"
                       >
-                        ℹ️
+                        <Info className="w-3 h-3" />
                       </button>
                     </div>
                     <span>Rp {grandTotalEstimate.toLocaleString('id-ID')}</span>
@@ -1818,9 +1866,11 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                           : 'bg-slate-800/50 border-slate-700 text-slate-400'
                       }`}
                     >
-                      <div className="text-xs font-bold mb-1">🛵 Driver Internal</div>
+                      <div className="text-xs font-bold mb-1 inline-flex items-center gap-1">
+                        <Truck className="w-3.5 h-3.5" /> Driver Internal
+                      </div>
                       <div className="text-[10px] text-cyan-400 font-semibold">
-                        {queueCount === 0 ? '🟢 Tanpa Antrian' : `🔴 ${queueCount} Antrian`}
+                        {queueCount === 0 ? 'Tanpa Antrian' : `${queueCount} Antrian`}
                       </div>
                       <div className="text-[9px] text-slate-400 mt-1">
                         Est. Penjemputan ~{estimatedPickupMinutes} Menit
@@ -1835,7 +1885,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                           : 'bg-slate-800/50 border-slate-700 text-slate-400'
                       }`}
                     >
-                      <div className="text-xs font-bold mb-1">📦 Pihak Ketiga</div>
+                      <div className="text-xs font-bold mb-1 inline-flex items-center gap-1">
+                        <Package className="w-3.5 h-3.5" /> Pihak Ketiga
+                      </div>
                       <div className="text-[10px] text-amber-400 font-semibold">Gojek / Grab / Lalamove</div>
                       <div className="text-[9px] text-slate-400 mt-1">
                         Dipesankan manual oleh CS + Link Live Track
@@ -1847,9 +1899,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-4 rounded-2xl text-xs uppercase shadow-lg shadow-blue-200 transition"
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-4 rounded-2xl text-xs uppercase shadow-lg shadow-blue-200 transition inline-flex items-center justify-center gap-2"
                 >
-                  🚀 Pesan Penjemputan Sekarang
+                  <Truck className="w-4 h-4" /> Pesan Penjemputan Sekarang
                 </button>
               </div>
             </form>
@@ -1858,7 +1910,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
           {activeTab === 'deposit' && (
             <div className="space-y-4">
               <div className="bg-white border border-slate-200 p-6 rounded-3xl space-y-4 text-center shadow-sm">
-                <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center text-3xl mx-auto font-black">💳</div>
+                <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto">
+                  <Wallet className="w-7 h-7" />
+                </div>
                 <div>
                   <h3 className="text-base font-extrabold text-slate-900">Top Up Saldo Deposit</h3>
                   <p className="text-xs text-slate-500 mt-1">Dapatkan bonus saldo ekstra & bayar cucian instan tanpa uang pas.</p>
@@ -1894,15 +1948,17 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                 href={`https://wa.me/${(currentOutletObj?.phonee || '6281234567890').replace(/[^0-9]/g, '').replace(/^0/, '62')}?text=${encodeURIComponent(`Halo Admin ${currentOutletObj?.name || ''}, saya ingin konfirmasi Top Up Saldo Deposit.`)}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-2xl text-xs shadow flex items-center justify-center gap-2"
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-2xl text-xs shadow inline-flex items-center justify-center gap-2"
               >
-                <span>💬</span>
-                <span>HUBUNGI ADMIN VIA WHATSAPP ({currentOutletObj?.name || 'OUTLET'})</span>
+                <MessageSquare className="w-4 h-4" />
+                <span>Hubungi Admin via WhatsApp ({currentOutletObj?.name || 'OUTLET'})</span>
               </a>
               </div>
 
               <div className="space-y-2">
-                <h4 className="text-xs font-extrabold text-slate-700 uppercase tracking-wider">📜 Riwayat Top Up Saldo</h4>
+                <h4 className="text-xs font-extrabold text-slate-700 uppercase tracking-wider inline-flex items-center gap-1.5">
+                  <History className="w-3.5 h-3.5" /> Riwayat Top Up Saldo
+                </h4>
                 {depositLogs.map((log, i) => (
                   <div key={i} className="bg-white border border-slate-200 p-3.5 rounded-2xl text-xs flex justify-between items-center shadow-sm">
                     <div>
@@ -1918,7 +1974,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
           {activeTab === 'history' && (
             <div className="space-y-3">
-              <h3 className="text-xs font-extrabold text-slate-700 uppercase tracking-wider">📜 Riwayat Pesanan Selesai</h3>
+              <h3 className="text-xs font-extrabold text-slate-700 uppercase tracking-wider inline-flex items-center gap-1.5">
+                <Receipt className="w-3.5 h-3.5" /> Riwayat Pesanan Selesai
+              </h3>
               {completedOrders.map((item: any) => (
                 <button
                   type="button"
@@ -1936,9 +1994,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                       <span className="font-extrabold text-slate-900 block">{item.title}</span>
                       <span className="text-[10px] text-slate-500 font-medium line-clamp-2">{item.detail}</span>
                     </div>
-                    <span className="bg-blue-50 text-blue-700 border border-blue-200 text-[9px] font-extrabold px-2.5 py-0.5 rounded-full">
-                      {item.status}
-                    </span>
+                    <StatusPill status={item.status} />
                   </div>
                   <div className="flex justify-between items-center pt-2 border-t border-slate-100 text-[10px]">
                     <span className="text-slate-400 font-medium">{new Date(item.date).toLocaleDateString('id-ID')}</span>
@@ -1946,7 +2002,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                       {item.receipt_number ? 'Total' : 'Ongkir'}: Rp {Number(item.price || item.amount || 0).toLocaleString('id-ID')}
                     </span>
                   </div>
-                  <p className="text-[10px] font-bold text-indigo-600">🔍 Lihat timeline, foto & rincian</p>
+                  <p className="text-[10px] font-bold text-indigo-600 inline-flex items-center gap-1">
+                    <Search className="w-3 h-3" /> Lihat timeline, foto & rincian
+                  </p>
                 </button>
               ))}
 
@@ -1960,7 +2018,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
           {activeTab === 'profile' && (
             <div className="bg-white border border-slate-200 p-6 rounded-3xl space-y-4 shadow-sm text-xs">
-              <h3 className="text-sm font-extrabold text-slate-900 border-b border-slate-100 pb-2">👤 Profil Akun</h3>
+              <h3 className="text-sm font-extrabold text-slate-900 border-b border-slate-100 pb-2 inline-flex items-center gap-2">
+                <IconBadge icon={User} tone="slate" size="sm" /> Profil Akun
+              </h3>
               <div>
                 <span className="text-[10px] text-slate-400 uppercase font-extrabold block">Nama Lengkap</span>
                 <p className="font-extrabold text-slate-900 text-sm mt-0.5">{customerData.name || '-'}</p>
@@ -1974,8 +2034,8 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                 <div className="flex justify-between items-center mb-1">
                   <span className="text-[10px] text-slate-400 uppercase font-extrabold">Alamat Penjemputan Utama</span>
                   {!isEditingAddress && (
-                    <button onClick={() => setIsEditingAddress(true)} className="text-[10px] font-extrabold text-blue-600 hover:underline">
-                      ✏️ Edit Alamat
+                    <button onClick={() => setIsEditingAddress(true)} className="text-[10px] font-extrabold text-blue-600 hover:underline inline-flex items-center gap-1">
+                      <Pencil className="w-3 h-3" /> Edit Alamat
                     </button>
                   )}
                 </div>
@@ -1996,9 +2056,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                     <div className="flex gap-2">
                       <button
                         onClick={handleSaveAddress}
-                        className="flex-1 bg-blue-600 text-white font-extrabold py-2.5 rounded-xl text-xs shadow-sm hover:bg-blue-700 transition"
+                        className="flex-1 bg-blue-600 text-white font-extrabold py-2.5 rounded-xl text-xs shadow-sm hover:bg-blue-700 transition inline-flex items-center justify-center gap-1.5"
                       >
-                        💾 Simpan Alamat
+                        <Save className="w-3.5 h-3.5" /> Simpan Alamat
                       </button>
                       <button
                         onClick={() => setIsEditingAddress(false)}
@@ -2020,8 +2080,12 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[90] flex items-center justify-center p-4" onClick={() => setShowPromoModal(false)}>
           <div className="bg-white rounded-3xl p-5 max-w-sm w-full space-y-4 shadow-2xl max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex justify-between items-center border-b pb-2">
-              <h3 className="text-sm font-extrabold text-slate-900">🎁 Klaim Voucher Promo Active</h3>
-              <button onClick={() => setShowPromoModal(false)} className="text-slate-400 hover:text-slate-600 font-bold">✕</button>
+              <h3 className="text-sm font-extrabold text-slate-900 inline-flex items-center gap-1.5">
+                <Gift className="w-4 h-4 text-amber-600" /> Klaim Voucher Promo
+              </h3>
+              <button onClick={() => setShowPromoModal(false)} className="text-slate-400 hover:text-slate-600" aria-label="Tutup">
+                <X className="w-4 h-4" />
+              </button>
             </div>
             <div className="space-y-2.5">
               <p className="text-[10px] font-extrabold text-slate-400 uppercase">Pilih Promo Untuk Pesanan Ini:</p>
@@ -2040,7 +2104,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                           onClick={() => handleClaimPromo(promo)}
                           className={`text-[10px] font-extrabold px-3 py-1.5 rounded-xl shadow-sm transition ${isClaimed ? 'bg-emerald-600 text-white' : 'bg-amber-500 hover:bg-amber-600 text-white'}`}
                         >
-                          {isClaimed ? 'Terpasang ✓' : 'Klaim Promo'}
+                          {isClaimed ? 'Terpasang' : 'Klaim Promo'}
                         </button>
                       </div>
                     </div>
@@ -2055,7 +2119,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
               <p className="text-[10px] font-extrabold text-slate-400 uppercase">Daftar Cabang Outlet Resmi ({outletsList.length}):</p>
               {outletsList.map((o, idx) => (
                 <div key={idx} className="bg-slate-50 border border-slate-200 p-3 rounded-2xl text-xs space-y-1">
-                  <p className="font-extrabold text-slate-900">📍 {o.name}</p>
+                  <p className="font-extrabold text-slate-900 inline-flex items-center gap-1">
+                    <Store className="w-3.5 h-3.5 text-slate-500" /> {o.name}
+                  </p>
                   <p className="text-[10px] text-slate-500">{o.address || 'Alamat cabang resmi'}</p>
                 </div>
               ))}
@@ -2072,8 +2138,8 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       {showEstimateInfoModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[90] flex items-center justify-center p-4" onClick={() => setShowEstimateInfoModal(false)}>
           <div className="bg-white rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl text-center" onClick={(e) => e.stopPropagation()}>
-            <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center text-2xl mx-auto font-black shadow-inner">
-              ℹ️
+            <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
+              <Info className="w-6 h-6" />
             </div>
             <div>
               <h3 className="text-base font-extrabold text-slate-900">Informasi Estimasi Tagihan</h3>
@@ -2098,29 +2164,33 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
             {/* Header Modal Chat & Switcher AI/CS */}
             <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900">
               <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-white">💬 Bantuan Laundrivery</span>
+                <span className="text-xs font-bold text-white inline-flex items-center gap-1.5">
+                  <MessageSquare className="w-4 h-4" /> Bantuan Laundrivery
+                </span>
                 <div className="flex bg-slate-800 p-0.5 rounded-lg border border-slate-700">
                   <button
                     type="button"
                     onClick={() => setActiveSupportTab('cs')}
-                    className={`px-2 py-0.5 text-[10px] font-bold rounded-md transition ${
+                    className={`px-2 py-0.5 text-[10px] font-bold rounded-md transition inline-flex items-center gap-1 ${
                       activeSupportTab === 'cs' ? 'bg-cyan-600 text-white' : 'text-slate-400 hover:text-white'
                     }`}
                   >
-                    🎧 Live CS
+                    <Headphones className="w-3 h-3" /> Live CS
                   </button>
                   <button
                     type="button"
                     onClick={() => setActiveSupportTab('ai')}
-                    className={`px-2 py-0.5 text-[10px] font-bold rounded-md transition ${
+                    className={`px-2 py-0.5 text-[10px] font-bold rounded-md transition inline-flex items-center gap-1 ${
                       activeSupportTab === 'ai' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
                     }`}
                   >
-                    🤖 Tanya CS
+                    <Bot className="w-3 h-3" /> Tanya CS
                   </button>
                 </div>
               </div>
-              <button onClick={() => setActiveChatOrderId(null)} className="text-slate-400 hover:text-white text-xs font-bold">✕</button>
+              <button onClick={() => setActiveChatOrderId(null)} className="text-slate-400 hover:text-white" aria-label="Tutup">
+                <X className="w-4 h-4" />
+              </button>
             </div>
 
             {/* Bubble Chat Area */}
@@ -2179,9 +2249,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                   <label
                     htmlFor="cust-chat-attach"
                     title="Kirim bukti transfer / foto"
-                    className="shrink-0 w-9 h-9 rounded-xl bg-slate-800 border border-slate-700 text-white flex items-center justify-center text-sm cursor-pointer"
+                    className="shrink-0 w-9 h-9 rounded-xl bg-slate-800 border border-slate-700 text-white flex items-center justify-center cursor-pointer"
                   >
-                    📎
+                    <Paperclip className="w-4 h-4" />
                   </label>
                 </>
               )}
@@ -2210,8 +2280,8 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 {showOrderSuccessModal && latestCreatedOrder && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[90] flex items-center justify-center p-4" onClick={() => setShowOrderSuccessModal(false)}>
           <div className="bg-white rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl text-center" onClick={(e) => e.stopPropagation()}>
-            <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center text-3xl mx-auto font-black shadow-inner">
-              ✓
+            <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-inner">
+              <CheckCircle2 className="w-8 h-8" />
             </div>
             <div>
               <h3 className="text-base font-extrabold text-slate-900">Pesanan Terkirim ke Kasir!</h3>
@@ -2222,9 +2292,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
             </div>
             <button
               onClick={() => setShowOrderSuccessModal(false)}
-              className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold py-3.5 rounded-2xl text-xs uppercase shadow-md transition"
+              className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold py-3.5 rounded-2xl text-xs uppercase shadow-md transition inline-flex items-center justify-center gap-1.5"
             >
-              Lihat Status Live Tracking 🚀
+              Lihat Status Live Tracking <ChevronRight className="w-4 h-4" />
             </button>
           </div>
         </div>
@@ -2232,23 +2302,23 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       {/* BOTTOM NAVIGATION BAR */}
       <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/95 backdrop-blur-md border-t border-slate-200 flex justify-around p-2.5 z-50 shadow-lg">
         <button onClick={() => setActiveTab('home')} className={`flex flex-col items-center flex-1 ${activeTab === 'home' ? 'text-blue-600' : 'text-slate-400'}`}>
-          <span className="text-lg">🏠</span>
+          <Home className="w-5 h-5" />
           <span className="text-[9px] font-extrabold mt-0.5">Beranda</span>
         </button>
         <button onClick={() => setActiveTab('order')} className={`flex flex-col items-center flex-1 ${activeTab === 'order' ? 'text-blue-600' : 'text-slate-400'}`}>
-          <span className="text-lg">🛵</span>
+          <Truck className="w-5 h-5" />
           <span className="text-[9px] font-extrabold mt-0.5">Order</span>
         </button>
         <button onClick={() => setActiveTab('deposit')} className={`flex flex-col items-center flex-1 ${activeTab === 'deposit' ? 'text-blue-600' : 'text-slate-400'}`}>
-          <span className="text-lg">💳</span>
+          <Wallet className="w-5 h-5" />
           <span className="text-[9px] font-extrabold mt-0.5">Deposit</span>
         </button>
         <button onClick={() => setActiveTab('history')} className={`flex flex-col items-center flex-1 ${activeTab === 'history' ? 'text-blue-600' : 'text-slate-400'}`}>
-          <span className="text-lg">📜</span>
+          <History className="w-5 h-5" />
           <span className="text-[9px] font-extrabold mt-0.5">Riwayat</span>
         </button>
         <button onClick={() => setActiveTab('profile')} className={`flex flex-col items-center flex-1 ${activeTab === 'profile' ? 'text-blue-600' : 'text-slate-400'}`}>
-          <span className="text-lg">👤</span>
+          <User className="w-5 h-5" />
           <span className="text-[9px] font-extrabold mt-0.5">Profil</span>
         </button>
       </div>
@@ -2273,9 +2343,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
             setComplaintOpen(false);
             setReviewOpen(false);
           }}
-          className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 text-white font-bold flex items-center justify-center cursor-pointer"
+          className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center cursor-pointer"
         >
-          ✕
+          <X className="w-4 h-4" />
         </button>
       </div>
 
@@ -2295,7 +2365,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
         {/* Rincian Items + harga */}
         <div className="space-y-2">
-          <h4 className="font-extrabold text-slate-800 uppercase text-[10px]">📦 Rincian Item & Harga</h4>
+          <h4 className="font-extrabold text-slate-800 uppercase text-[10px] inline-flex items-center gap-1">
+            <Package className="w-3.5 h-3.5" /> Rincian Item & Harga
+          </h4>
           {(() => {
             const items = Array.isArray(detailOrder.items)
               ? detailOrder.items
@@ -2351,7 +2423,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
         {(detailOrder.rack_location || detailOrder.rack_number || detailOrder.package_count || detailOrder.bag_count || detailOrder.rack_notes) && (
           <div className="bg-amber-50 border border-amber-100 rounded-xl p-3 space-y-1">
-            <h4 className="font-extrabold text-amber-800 uppercase text-[10px]">🗄️ Rak Penyimpanan</h4>
+            <h4 className="font-extrabold text-amber-800 uppercase text-[10px] inline-flex items-center gap-1">
+              <Box className="w-3.5 h-3.5" /> Rak Penyimpanan
+            </h4>
             <p className="font-bold text-slate-800">
               Rak {detailOrder.rack_location || detailOrder.rack_number || '-'}
               {(detailOrder.package_count || detailOrder.bag_count) ? ` · ${detailOrder.package_count || detailOrder.bag_count} pack` : ''}
@@ -2374,7 +2448,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
         {/* Bukti Foto: jemput → outlet → sortir → rak → antar */}
         <div className="space-y-2">
-          <h4 className="font-extrabold text-slate-800 uppercase text-[10px]">📸 Bukti Foto Cucian</h4>
+          <h4 className="font-extrabold text-slate-800 uppercase text-[10px] inline-flex items-center gap-1">
+            <ImageIcon className="w-3.5 h-3.5" /> Bukti Foto Cucian
+          </h4>
           <ProofPhotoGrid order={detailOrder} logs={detailWorkLogs} onOpen={setLightboxSrc} />
         </div>
 
@@ -2410,16 +2486,16 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                 <button
                   type="button"
                   onClick={handleSudahSesuai}
-                  className="bg-emerald-600 text-white font-black text-[11px] py-2.5 rounded-xl"
+                  className="bg-emerald-600 text-white font-black text-[11px] py-2.5 rounded-xl inline-flex items-center justify-center gap-1"
                 >
-                  ✅ Sudah Sesuai
+                  <CheckCircle2 className="w-3.5 h-3.5" /> Sudah Sesuai
                 </button>
                 <button
                   type="button"
                   onClick={() => setComplaintOpen(true)}
-                  className="bg-rose-50 text-rose-700 border border-rose-200 font-black text-[11px] py-2.5 rounded-xl"
+                  className="bg-rose-50 text-rose-700 border border-rose-200 font-black text-[11px] py-2.5 rounded-xl inline-flex items-center justify-center gap-1"
                 >
-                  ⚠️ Komplain / Ada Kendala
+                  <AlertTriangle className="w-3.5 h-3.5" /> Komplain / Ada Kendala
                 </button>
               </div>
             </div>
@@ -2448,7 +2524,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       {complaintOpen && detailOrder && (
         <div className="fixed inset-0 z-[70] bg-black/60 flex items-center justify-center p-4" onClick={() => setComplaintOpen(false)}>
           <div className="bg-white w-full max-w-sm rounded-2xl p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
-            <h3 className="font-black text-sm text-slate-900">⚠️ Komplain / Ada Kendala</h3>
+            <h3 className="font-black text-sm text-slate-900 inline-flex items-center gap-1.5">
+              <AlertTriangle className="w-4 h-4 text-rose-500" /> Komplain / Ada Kendala
+            </h3>
             <textarea
               value={complaintText}
               onChange={(e) => setComplaintText(e.target.value)}
@@ -2481,20 +2559,9 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       {reviewOpen && detailOrder && (
         <div className="fixed inset-0 z-[70] bg-black/60 flex items-center justify-center p-4" onClick={() => setReviewOpen(false)}>
           <div className="bg-white w-full max-w-sm rounded-2xl p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
-            <h3 className="font-black text-sm text-slate-900">⭐ Rating & Ulasan</h3>
+            <h3 className="font-black text-sm text-slate-900">Rating & Ulasan</h3>
             <p className="text-[11px] text-slate-500">Opsional — bantu kami meningkatkan layanan outlet.</p>
-            <div className="flex justify-center gap-1">
-              {[1, 2, 3, 4, 5].map((n) => (
-                <button
-                  key={n}
-                  type="button"
-                  onClick={() => setReviewStars(n)}
-                  className={`text-2xl ${reviewStars >= n ? 'text-amber-400' : 'text-slate-300'}`}
-                >
-                  ★
-                </button>
-              ))}
-            </div>
+            <StarRating value={reviewStars} onChange={setReviewStars} />
             <textarea
               value={reviewText}
               onChange={(e) => setReviewText(e.target.value)}

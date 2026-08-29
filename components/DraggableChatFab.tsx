@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { MessageSquare } from 'lucide-react';
 
 const FAB_SIZE = 48;
 const FAB_MARGIN = 12;
@@ -100,14 +101,7 @@ export default function DraggableChatFab({
       style={{ left: pos.x, top: pos.y }}
       className="fixed z-[60] w-12 h-12 rounded-full bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg shadow-indigo-600/35 border border-white/25 flex items-center justify-center touch-none select-none"
     >
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path
-          d="M20 12c0 3.9-3.6 7-8 7-.9 0-1.8-.1-2.6-.4L4 20l1.5-3.4C4.6 15.4 4 13.8 4 12c0-3.9 3.6-7 8-7s8 3.1 8 7Z"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinejoin="round"
-        />
-      </svg>
+      <MessageSquare className="w-5 h-5 text-white" strokeWidth={2.2} />
       <span className="sr-only">Mulai Chat</span>
     </button>
   );

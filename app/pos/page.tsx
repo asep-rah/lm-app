@@ -226,14 +226,18 @@ export function POSContent() {
           const isKg = (it.type || it.unit || '').toLowerCase() === 'kg';
           const itemPrice = Number(it.price || it.unit_price || 0);
           const itemBase = Number(it.basePrice || it.base_price || itemPrice);
+          const kgVal = Number(it.weight || it.kg) || 0;
+          const pcsVal = Number(it.qty || it.quantity) || 0;
+          const existingNote = String(it.notes || it.note || '').trim();
+          const pcsNote = isKg && kgVal > 0 && pcsVal > 0 ? `${pcsVal} Pcs` : '';
           return {
             id: it.id || `pickup-${idx}-${Date.now()}`,
             name: String(it.name || it.service_name),
             type: isKg ? ('kg' as const) : ('pcs' as const),
             basePrice: itemBase,
             price: itemPrice,
-            qty: Number(it.qty || it.quantity) || 1,
-            note: it.notes || it.note || ''
+            qty: isKg ? (kgVal || pcsVal || 1) : (pcsVal || 1),
+            note: [existingNote, pcsNote].filter(Boolean).join(' · ')
           };
         })
         .filter((it) => it.price > 0);
@@ -634,10 +638,15 @@ const handleApplyLoan = async (e: React.FormEvent) => {
 
     const finalUnitPrice = Math.round(basePrice * durationMultiplier);
 
-    const isPcs = activeSvc ? activeSvc.type === 'pcs' : (Number(inputQtyPcs) > 0 || Number(pcsCount) > 0);
+    const isPcs = activeSvc
+      ? activeSvc.type === 'pcs'
+      : !(Number(inputQtyKg) || Number(weightKg)) && (Number(inputQtyPcs) > 0 || Number(pcsCount) > 0);
     const qty = isPcs
       ? (Number(inputQtyPcs) || Number(pcsCount) || 1)
       : (Number(inputQtyKg) || Number(weightKg) || 0);
+    const pcsNote = !isPcs && (Number(inputQtyPcs) || Number(pcsCount))
+      ? `${Number(inputQtyPcs) || Number(pcsCount)} Pcs`
+      : '';
 
     // Tanpa penjaga ini, berat kosong diam-diam dihitung sebagai 1 Kg sehingga
     // harga baris nota salah.
@@ -652,7 +661,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       basePrice: basePrice,
       price: finalUnitPrice,
       qty: qty,
-      note: inputItemNote
+      note: [inputItemNote, pcsNote].filter(Boolean).join(' · ')
     };
 
     setCartItems(prev => [...prev, newItem]);
@@ -1496,9 +1505,18 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
         return;
       }
 
-      const updatedItems = currentItems.map((it: any, idx: number) =>
-        idx === order.item_index ? { ...it, status: targetStatus } : it
-      );
+      const updatedItems = currentItems.map((it: any, idx: number) => {
+        if (idx !== order.item_index) return it;
+        const next = { ...it, status: targetStatus };
+        if (proof?.photoUrl && targetKey === 'sortir') {
+          next.sortir_photo_url = proof.photoUrl;
+          next.photo_url = proof.photoUrl;
+        }
+        if (proof?.photoUrl && targetKey === 'packing') {
+          next.packing_photo_url = proof.photoUrl;
+        }
+        return next;
+      });
 
       const { error } = await supabase
         .from('transactions')
@@ -1624,9 +1642,18 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
         if (!Array.isArray(parsed)) return o;
         return {
           ...o,
-          items: parsed.map((it: any, idx: number) =>
-            idx === order.item_index ? { ...it, status: targetStatus } : it
-          )
+          items: parsed.map((it: any, idx: number) => {
+            if (idx !== order.item_index) return it;
+            const next = { ...it, status: targetStatus };
+            if (proof?.photoUrl && targetKey === 'sortir') {
+              next.sortir_photo_url = proof.photoUrl;
+              next.photo_url = proof.photoUrl;
+            }
+            if (proof?.photoUrl && targetKey === 'packing') {
+              next.packing_photo_url = proof.photoUrl;
+            }
+            return next;
+          })
         };
       })
     );
@@ -1698,7 +1725,7 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
         ? nextItems.map((it: any) => it.rack_notes).filter(Boolean).join(' · ') || notes
         : notes;
 
-      const parentStatus = allReady ? 'Siap Diambil' : (order.status || 'Packing');
+      const parentStatus = allReady ? 'Siap Diambil' : (order.status || 'Dikemas');
       const bagCount = parseBagCount(pkg);
       const subItem = isSubItem ? currentItems[order.item_index] : null;
       const rackPhotoUrl = await uploadProofFile(photoFile, `rack_${order.id}`);
@@ -1750,7 +1777,7 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
         ], { column: 'transaction_id', value: order.id });
       }
 
-      const completedStage = String(order.status || 'Packing').trim();
+      const completedStage = String(order.status || 'Dikemas').trim();
       if (PAID_STAGE_KEYS.includes(getStageKey(completedStage))) {
         await insertWithFallback('work_logs', [
           {
@@ -1804,7 +1831,7 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
       setRackPhotoFile(null);
       setSuccessMsg(allReady
         ? '✅ Racking selesai. Pesanan pindah ke tab Ambil.'
-        : '✅ Item disimpan di rak. Selesaikan packing item lain untuk pindah ke Ambil.');
+        : '✅ Item disimpan di rak. Selesaikan dikemas item lain untuk pindah ke Ambil.');
       await refreshData();
       setTimeout(() => setSuccessMsg(''), 4000);
     } catch (err: any) {
@@ -1818,7 +1845,7 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
   const handleSubmitStageProof = async () => {
     if (!stageProof) return;
     if (!stageProofFile) {
-      alert('⚠️ Foto tahap Sortir/Packing wajib diunggah.');
+      alert('⚠️ Foto tahap Sortir/Dikemas wajib diunggah.');
       return;
     }
     setIsSubmitting(true);
@@ -2012,7 +2039,7 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
 
     // 6. TAHAP 5: Setrika / Gosok -> Lanjut ke PACKING
     if (s.includes('setrika') || s.includes('gosok')) {
-      return stepButton('🎁 Mulai Packing', 'Packing', 'bg-violet-500 hover:bg-violet-600');
+      return stepButton('🎁 Mulai Dikemas', 'Dikemas', 'bg-violet-500 hover:bg-violet-600');
     }
 
     // 7. TAHAP 6: Packing / Kemas -> modal rak wajib, lalu SIAP DIAMBIL (pindah ke tab Ambil).
@@ -2114,7 +2141,7 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
                   <div key={idx} className="flex justify-between items-start">
                     <div>
                       <span className="font-bold block">{item.name}</span>
-                      <span className="text-[8px]">{item.qty} {item.type.toUpperCase()} x Rp {Number(item.price).toLocaleString('id-ID')}</span>
+                      <span className="text-[8px]">{item.type === 'kg' ? `${item.qty} Kg` : `${item.qty} Pcs`} x Rp {Number(item.price).toLocaleString('id-ID')}</span>
                       {item.note && <span className="block text-[8px] italic">({item.note})</span>}
                     </div>
                     <span className="font-bold">Rp {(item.price * item.qty).toLocaleString('id-ID')}</span>
@@ -2253,7 +2280,7 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
         <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl">
             <h3 className="text-lg font-black mb-1 text-slate-800">
-              📸 Foto {stageKeyOf(stageProof.targetStatus) === 'sortir' ? 'Sortir' : 'Packing'}
+              📸 Foto {stageKeyOf(stageProof.targetStatus) === 'sortir' ? 'Sortir' : 'Dikemas'}
             </h3>
             <p className="text-xs text-slate-500 mb-4">
               Milik: <span className="font-bold text-emerald-600">{stageProof.order?.customer_name}</span>
@@ -2870,7 +2897,9 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
                     <div>
                       <p className="font-bold text-slate-900">{item.name}</p>
                       <p className="text-[10px] text-slate-400">
-                        {item.qty} x Rp {activeUnitPrice.toLocaleString('id-ID')}
+                        {item.type === 'kg'
+                          ? `${item.qty} Kg x Rp ${activeUnitPrice.toLocaleString('id-ID')}`
+                          : `${item.qty} Pcs x Rp ${activeUnitPrice.toLocaleString('id-ID')}`}
                         {item.note && <span className="italic text-emerald-600 ml-1">({item.note})</span>}
                       </p>
                     </div>
@@ -3474,7 +3503,7 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
                     <span className="font-bold text-xs">{todayBreakdown.setrika?.kg || 0} Kg / {todayBreakdown.setrika?.pcs || 0} Pcs</span>
                   </div>
                   <div className="bg-white/10 rounded-lg p-2 backdrop-blur-sm border border-white/10 col-span-2 md:col-span-1">
-                    <span className="opacity-80 block font-semibold">📦 Packing</span>
+                    <span className="opacity-80 block font-semibold">📦 Dikemas</span>
                     <span className="font-bold text-xs">{todayBreakdown.packing?.kg || 0} Kg / {todayBreakdown.packing?.pcs || 0} Pcs</span>
                   </div>
                 </div>

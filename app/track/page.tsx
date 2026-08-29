@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import StageTimeline from '@/components/StageTimeline';
+import { displayStatusLabel, stageKeyOf } from '@/lib/stageTimeline';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -57,7 +58,7 @@ export default function TrackingPage() {
     if (status === 'Mencuci') return 'bg-cyan-100 text-cyan-700';
     if (status === 'Pengeringan' || status === 'Mengeringkan') return 'bg-amber-100 text-amber-700';
     if (status === 'Setrika') return 'bg-orange-100 text-orange-700';
-    if (status === 'Packing') return 'bg-purple-100 text-purple-700';
+    if (status === 'Packing' || status === 'Dikemas' || stageKeyOf(status) === 'packing') return 'bg-purple-100 text-purple-700';
     if (status === 'Siap Diambil') return 'bg-blue-600 text-white shadow-lg animate-pulse';
     if (status === 'Selesai') return 'bg-emerald-500 text-white';
     return 'bg-slate-100 text-slate-600';
@@ -139,7 +140,7 @@ export default function TrackingPage() {
             <div className="bg-slate-50 rounded-2xl p-4 border border-slate-100">
               <p className="text-[10px] font-bold text-slate-500 uppercase text-center mb-2">Status Terkini</p>
               <div className={`py-3 px-4 rounded-xl text-center font-black text-sm transition-all duration-300 ${getStatusColor(orderData.status)}`}>
-                {orderData.status.toUpperCase()}
+                {displayStatusLabel(orderData.status).toUpperCase()}
               </div>
             </div>
 
@@ -148,7 +149,7 @@ export default function TrackingPage() {
               <StageTimeline logs={workLogs} transaction={orderData} showCrew={false} variant="customer" />
             </div>
 
-            {(orderData.status === 'Siap Diambil' || orderData.status === 'Selesai' || orderData.status === 'Packing') && (
+            {(orderData.status === 'Siap Diambil' || orderData.status === 'Selesai' || orderData.status === 'Packing' || orderData.status === 'Dikemas') && (
               <div className="bg-rose-50 border border-rose-200 rounded-xl p-4">
                 <h4 className="font-black text-rose-700 text-xs flex items-center gap-1.5 mb-1">
                   <span>⚠️</span> PENTING! PERATURAN KOMPLAIN

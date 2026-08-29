@@ -1,5 +1,6 @@
 'use client';
 
+import { FileText } from 'lucide-react';
 import { stripInvoiceTag } from '@/lib/chatInvoice';
 
 const IMAGE_RE = /\.(jpe?g|png|gif|webp|heic|bmp)(\?|$)/i;
@@ -57,7 +58,7 @@ export default function ChatAttachment({
       rel="noreferrer"
       className="mt-1.5 inline-flex items-center gap-1.5 text-[10px] font-bold underline"
     >
-      📄 Buka file / invoice
+      <FileText className="w-3.5 h-3.5" /> Buka file / invoice
     </a>
   );
 }

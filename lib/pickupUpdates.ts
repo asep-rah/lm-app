@@ -28,12 +28,31 @@ export const updatePickupOrder = async (id: string, payload: Record<string, any>
 
   const statusOnly: Record<string, any> = { status: payload.status };
   if (payload.photo_url) statusOnly.photo_url = payload.photo_url;
+  if (payload.photo_pickup_url) statusOnly.photo_pickup_url = payload.photo_pickup_url;
   if (payload.photo_outlet_url) statusOnly.photo_outlet_url = payload.photo_outlet_url;
+  if (payload.photo_outlet_pickup_url) statusOnly.photo_outlet_pickup_url = payload.photo_outlet_pickup_url;
   if (payload.photo_delivery_url) statusOnly.photo_delivery_url = payload.photo_delivery_url;
   const third = await supabase.from('pickup_orders').update(statusOnly).eq('id', id);
-  if (third.error) return { error: third.error };
-  console.warn('pickup_orders: payload dipangkas ke status/foto:', second.error.message);
-  return { error: null, stripped: true };
+  if (!third.error) {
+    console.warn('pickup_orders: payload dipangkas ke status/foto:', second.error.message);
+    return { error: null, stripped: true };
+  }
+
+  // Kolom foto tahap 3 (ambil dari outlet) mungkin belum ada di schema.
+  if (statusOnly.photo_outlet_pickup_url) {
+    const withoutNewCol = { ...statusOnly };
+    if (!withoutNewCol.photo_outlet_url) {
+      withoutNewCol.photo_outlet_url = withoutNewCol.photo_outlet_pickup_url;
+    }
+    delete withoutNewCol.photo_outlet_pickup_url;
+    const fourth = await supabase.from('pickup_orders').update(withoutNewCol).eq('id', id);
+    if (!fourth.error) {
+      console.warn('pickup_orders: photo_outlet_pickup_url diabaikan:', third.error.message);
+      return { error: null, stripped: true };
+    }
+  }
+
+  return { error: third.error };
 };
 
 /** Pickup sudah jadi nota POS — hilang dari kolom Antrean Masuk POS. */

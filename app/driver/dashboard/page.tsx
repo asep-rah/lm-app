@@ -9,6 +9,8 @@ import SwipeToAction from '@/components/ui/SwipeToAction';
 import StatusBadge from '@/components/ui/StatusBadge';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 import { toast } from '@/lib/toast';
+import { uploadProofFile } from '@/lib/uploadProof';
+import { Camera, Check } from 'lucide-react';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -172,6 +174,77 @@ export default function DriverDashboard() {
     window.open(`tel:+${clean}`, '_self');
   };
 
+  const waitingAccept = (status: string) => {
+    const s = String(status || '').toLowerCase();
+    return (
+      status === 'Baru Masuk' ||
+      s.includes('menunggu kurir') ||
+      s.includes('pickup request') ||
+      s.includes('menunggu driver') ||
+      s.includes('menunggu penjemputan')
+    );
+  };
+
+  type DriverPhotoStep = 'customer_pickup' | 'outlet_handover' | 'outlet_pickup' | 'customer_delivery';
+
+  const DRIVER_PHOTO_STEPS: Array<{
+    id: DriverPhotoStep;
+    label: string;
+    confirm: string;
+    success: string;
+  }> = [
+    {
+      id: 'customer_pickup',
+      label: 'Foto Penjemputan di Customer',
+      confirm: 'Ambil foto live saat tiba di alamat pelanggan.',
+      success: 'Foto jemput tersimpan. Lanjutkan perjalanan ke outlet.'
+    },
+    {
+      id: 'outlet_handover',
+      label: 'Foto Serah Terima ke Outlet',
+      confirm: 'Ambil foto live saat menyerahkan cucian ke kasir outlet.',
+      success: 'Foto serah terima outlet tersimpan. Tugas jemput selesai.'
+    },
+    {
+      id: 'outlet_pickup',
+      label: 'Foto Penjemputan dari Outlet',
+      confirm: 'Ambil foto live saat mengambil cucian jadi dari rak/outlet.',
+      success: 'Foto ambil di outlet tersimpan. Lanjut antar ke pelanggan.'
+    },
+    {
+      id: 'customer_delivery',
+      label: 'Foto Serah Terima ke Customer',
+      confirm: 'Ambil foto live saat menyerahkan cucian ke pelanggan.',
+      success: 'Foto serah terima pelanggan tersimpan. Tugas antar selesai.'
+    }
+  ];
+
+  const currentDriverPhotoStep = (order: any): DriverPhotoStep | null => {
+    if (waitingAccept(order?.status)) return null;
+    const status = String(order?.status || '');
+    const s = status.toLowerCase();
+    if (s.includes('siap') || status === 'Ready for Delivery' || s.includes('delivery_requested')) {
+      return 'outlet_pickup';
+    }
+    if (status === 'Driver Mengantar') return 'customer_delivery';
+    if (status === 'Driver Menuju Lokasi') return 'customer_pickup';
+    return 'outlet_handover';
+  };
+
+  const isDriverPhotoStepDone = (order: any, id: DriverPhotoStep) => {
+    const delivery = isDeliveryJob(order?.status);
+    if (id === 'customer_pickup') {
+      return Boolean(order?.photo_url || order?.photo_pickup_url) || delivery;
+    }
+    if (id === 'outlet_handover') {
+      return delivery || Boolean(order?.photo_outlet_url);
+    }
+    if (id === 'outlet_pickup') {
+      return Boolean(order?.photo_outlet_pickup_url || (delivery && order?.photo_outlet_url));
+    }
+    return Boolean(order?.photo_delivery_url);
+  };
+
   const handleOpenWA = (phone: string, delivery = false) => {
     let cleanPhone = (phone || '').trim().replace(/\D/g, '');
     if (cleanPhone.startsWith('0')) cleanPhone = '62' + cleanPhone.slice(1);
@@ -183,75 +256,46 @@ export default function DriverDashboard() {
     window.open(`https://wa.me/${cleanPhone}?text=${msg}`, '_blank');
   };
 
-  const photoLabel = (status: string) => {
-    const s = String(status || '').toLowerCase();
-    if (s.includes('siap') || status === 'Ready for Delivery') return 'WAJIB: FOTO AMBIL CUCIAN DI OUTLET';
-    if (status === 'Driver Mengantar') return 'WAJIB: FOTO SERAH TERIMA PELANGGAN';
-    if (status === 'Driver Menuju Lokasi' || waitingAccept(status)) return 'WAJIB: FOTO JEMPUT DI LOKASI CUSTOMER';
-    return 'WAJIB: FOTO SERAH TERIMA DI OUTLET';
-  };
-
   const handleFileUploadAndFinish = async (
     e: React.ChangeEvent<HTMLInputElement>,
-    order: any
+    order: any,
+    stepId: DriverPhotoStep
   ) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    e.target.value = '';
 
-    const currentStatus = String(order.status || '');
-    const st = currentStatus.toLowerCase();
-    const isOutletPickup = st.includes('siap') || currentStatus === 'Ready for Delivery';
-    const isPickupStep = currentStatus === 'Driver Menuju Lokasi' || waitingAccept(currentStatus);
-    const isDeliveryStep = currentStatus === 'Driver Mengantar';
-    const confirmMsg = isOutletPickup
-      ? 'Foto live wajib: ambil cucian di outlet sebelum berangkat ke pelanggan.'
-      : isPickupStep
-      ? 'Foto live wajib: bukti pengambilan pakaian di lokasi customer.'
-      : isDeliveryStep
-      ? 'Foto live wajib: bukti penyerahan cucian ke pelanggan.'
-      : 'Foto live wajib: bukti penyerahan pakaian di outlet.';
-
-    if (!confirm(confirmMsg)) return;
+    const step = DRIVER_PHOTO_STEPS.find((s) => s.id === stepId);
+    if (!step) return;
+    if (!confirm(step.confirm)) return;
 
     setUploadingId(order.id);
 
     try {
-      const photoType = isOutletPickup ? 'outlet-pickup' : isPickupStep ? 'pickup' : isDeliveryStep ? 'delivery' : 'outlet';
-      const cleanFileName = `${photoType}-${order.id}-${Date.now()}.jpg`;
-
-      const { error: uploadError } = await supabase.storage
-        .from('pickup-photos')
-        .upload(cleanFileName, file, {
-          cacheControl: '3600',
-          upsert: true
-        });
-
-      if (uploadError) {
-        throw new Error('Storage Error: ' + uploadError.message);
-      }
-
-      const { data: publicUrlData } = supabase.storage
-        .from('pickup-photos')
-        .getPublicUrl(cleanFileName);
-
-      const photoUrl = publicUrlData.publicUrl;
+      const photoUrl = await uploadProofFile(file, `driver_${stepId}_${order.id}`);
       const now = new Date().toISOString();
 
       let updateData: Record<string, any>;
       let stageLabel = 'Tiba di Outlet';
-      if (isOutletPickup) {
+      if (stepId === 'outlet_pickup') {
         updateData = {
-          photo_outlet_url: photoUrl,
+          photo_outlet_pickup_url: photoUrl,
+          photo_outlet_url: order.photo_outlet_url || photoUrl,
           status: 'Driver Mengantar',
           picked_up_at: now,
           arrived_outlet_at: now,
           driver_name: driverName
         };
         stageLabel = 'Ambil di Outlet';
-      } else if (isPickupStep) {
-        updateData = { photo_url: photoUrl, status: 'Barang Dibawa ke Outlet', picked_up_at: now, driver_name: driverName };
+      } else if (stepId === 'customer_pickup') {
+        updateData = {
+          photo_url: photoUrl,
+          status: 'Barang Dibawa ke Outlet',
+          picked_up_at: now,
+          driver_name: driverName
+        };
         stageLabel = 'Jemput Driver';
-      } else if (isDeliveryStep) {
+      } else if (stepId === 'customer_delivery') {
         updateData = {
           photo_delivery_url: photoUrl,
           photo_outlet_url: order.photo_outlet_url || photoUrl,
@@ -261,7 +305,12 @@ export default function DriverDashboard() {
         };
         stageLabel = 'Selesai';
       } else {
-        updateData = { photo_outlet_url: photoUrl, status: 'Telah Tiba di Outlet', arrived_outlet_at: now, driver_name: driverName };
+        updateData = {
+          photo_outlet_url: photoUrl,
+          status: 'Telah Tiba di Outlet',
+          arrived_outlet_at: now,
+          driver_name: driverName
+        };
         stageLabel = 'Tiba di Outlet';
       }
 
@@ -271,33 +320,13 @@ export default function DriverDashboard() {
       }
 
       await logCourierStage({ ...order, _proofUrl: photoUrl }, stageLabel, driverName);
-
-      alert(
-        isOutletPickup
-          ? '📷 Foto ambil di outlet tersimpan. Lanjut antar ke pelanggan.'
-          : isPickupStep
-          ? '📷 Foto jemput berhasil! Lanjutkan perjalanan ke Outlet.'
-          : isDeliveryStep
-          ? '📦 Foto serah terima pelanggan tersimpan. Tugas antar selesai.'
-          : '🏪 Foto serah terima outlet berhasil! Tugas jemput selesai.'
-      );
+      toast(step.success, 'ok');
       loadDriverTasks();
     } catch (err: any) {
-      alert('⚠️ Gagal mengirim foto: ' + (err.message || 'Terjadi kesalahan jaringan'));
+      alert('Gagal mengirim foto: ' + (err.message || 'Terjadi kesalahan jaringan'));
     } finally {
       setUploadingId(null);
     }
-  };
-
-  const waitingAccept = (status: string) => {
-    const s = String(status || '').toLowerCase();
-    return (
-      status === 'Baru Masuk' ||
-      s.includes('menunggu kurir') ||
-      s.includes('pickup request') ||
-      s.includes('menunggu driver') ||
-      s.includes('menunggu penjemputan')
-    );
   };
 
   const phoneOf = (p: any) => p.customer_phone || p.phone_number || '';
@@ -409,19 +438,54 @@ export default function DriverDashboard() {
                     onComplete={() => handleAcceptTask(p)}
                   />
                 ) : (
-                  <label className="block w-full">
-                    <span className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-black py-3.5 rounded-xl text-xs shadow-sm transition flex items-center justify-center cursor-pointer">
-                      {uploadingId === p.id ? 'Mengunggah…' : photoLabel(p.status)}
-                    </span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      capture="environment"
-                      className="hidden"
-                      onChange={(e) => handleFileUploadAndFinish(e, p)}
-                      disabled={uploadingId === p.id}
-                    />
-                  </label>
+                  <div className="space-y-1.5">
+                    {DRIVER_PHOTO_STEPS.map((step) => {
+                      const current = currentDriverPhotoStep(p);
+                      const done = isDriverPhotoStepDone(p, step.id);
+                      const active = current === step.id;
+                      const busy = uploadingId === p.id;
+                      return (
+                        <label
+                          key={step.id}
+                          className={`block w-full ${active && !busy ? 'cursor-pointer' : 'cursor-default'}`}
+                        >
+                          <span
+                            className={`w-full py-2.5 px-3 rounded-xl text-[11px] font-black transition flex items-center justify-center gap-1.5 text-center leading-tight ${
+                              active
+                                ? 'bg-emerald-500 hover:bg-emerald-600 text-white shadow-sm'
+                                : done
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-100'
+                                : 'bg-slate-50 text-slate-400 border border-slate-100'
+                            }`}
+                          >
+                            {busy && active ? (
+                              'Mengunggah…'
+                            ) : done ? (
+                              <>
+                                <Check className="w-3.5 h-3.5 shrink-0" strokeWidth={2.6} />
+                                {step.label}
+                              </>
+                            ) : (
+                              <>
+                                <Camera className="w-3.5 h-3.5 shrink-0" strokeWidth={2.4} />
+                                {step.label}
+                              </>
+                            )}
+                          </span>
+                          {active && (
+                            <input
+                              type="file"
+                              accept="image/*"
+                              capture="environment"
+                              className="hidden"
+                              onChange={(e) => handleFileUploadAndFinish(e, p, step.id)}
+                              disabled={busy}
+                            />
+                          )}
+                        </label>
+                      );
+                    })}
+                  </div>
                 )}
               </div>
             ))}

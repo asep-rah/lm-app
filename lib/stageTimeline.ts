@@ -19,6 +19,8 @@ export interface StageTimelineEntry {
   done: boolean;
   notes: string | null;
   photoUrl: string | null;
+  /** Semua bukti foto tahap (multi-item Sortir/Dikemas). photoUrl = foto pertama. */
+  photoUrls: string[];
 }
 
 /**
@@ -68,7 +70,7 @@ export const STAGE_SEQUENCE: { key: string; label: string; icon: string }[] = [
   { key: 'cuci', label: 'Cuci', icon: '🧼' },
   { key: 'kering', label: 'Kering', icon: '🌀' },
   { key: 'setrika', label: 'Setrika', icon: '👔' },
-  { key: 'packing', label: 'Packing', icon: '🎁' },
+  { key: 'packing', label: 'Dikemas', icon: '🎁' },
   { key: 'siap', label: 'Siap Diantar', icon: '🚚' },
   { key: 'selesai', label: 'Selesai', icon: '✅' }
 ];
@@ -81,7 +83,7 @@ export const CUSTOMER_STAGE_SEQUENCE: { key: string; label: string; icon: string
   { key: 'cuci', label: 'Cuci', icon: '🧼' },
   { key: 'kering', label: 'Kering', icon: '🌀' },
   { key: 'setrika', label: 'Setrika', icon: '👔' },
-  { key: 'packing', label: 'Packing', icon: '🎁' },
+  { key: 'packing', label: 'Dikemas', icon: '🎁' },
   { key: 'siap', label: 'Siap Diambil / Diantar', icon: '📦' },
   { key: 'selesai', label: 'Selesai', icon: '✅' }
 ];
@@ -100,6 +102,52 @@ export const formatStageTime = (iso: any): string => {
   const jam = String(d.getHours()).padStart(2, '0');
   const menit = String(d.getMinutes()).padStart(2, '0');
   return `${tanggal}, ${jam}:${menit}`;
+};
+
+/** Label tampilan: status DB `Packing` ditampilkan sebagai Dikemas. */
+export const displayStatusLabel = (status: any): string => {
+  const raw = String(status || '').trim();
+  if (!raw) return '';
+  if (stageKeyOf(raw) === 'packing') return 'Dikemas';
+  return raw;
+};
+
+const uniqPhotoUrls = (urls: Array<string | null | undefined>): string[] => {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of urls) {
+    const s = String(raw || '').trim();
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+};
+
+const itemsOf = (transaction: any): any[] => {
+  const raw = transaction?.items;
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
+
+const itemPhotosForStage = (transaction: any, stageKey: string): string[] => {
+  return itemsOf(transaction).flatMap((it) => {
+    if (stageKey === 'sortir') {
+      return [it?.sortir_photo_url, it?.photo_url].filter(Boolean);
+    }
+    if (stageKey === 'packing') {
+      return [it?.packing_photo_url, it?.dikemas_photo_url].filter(Boolean);
+    }
+    return [];
+  });
 };
 
 /**
@@ -128,7 +176,7 @@ export const buildStageTimeline = (
   const statusIndex = sequence.findIndex((s) => s.key === currentStageKey);
 
   return sequence.map((stage, idx) => {
-    // Log terakhir untuk tahap ini dianggap paling sahih (bila ada pengulangan).
+    // Semua log tahap ini dipertahankan agar foto multi-item Sortir/Dikemas tidak hilang.
     const matches = safeLogs.filter((l) => stageKeyOf(l?.stage) === stage.key);
     const last = matches.length > 0 ? matches[matches.length - 1] : null;
 
@@ -149,9 +197,13 @@ export const buildStageTimeline = (
       at = transaction.pickup_created_at || (!transaction?.receipt_number ? transaction.created_at : null);
     }
 
-    const rackPhoto = stage.key === 'packing' || stage.key === 'siap'
-      ? transaction?.rack_photo_url || null
-      : null;
+    const rackPhoto = stage.key === 'siap' ? transaction?.rack_photo_url || null : null;
+    const photoUrls = uniqPhotoUrls([
+      ...matches.map((l) => l?.photo_url),
+      ...(stage.key === 'sortir' ? [transaction?.sortir_photo_url] : []),
+      ...itemPhotosForStage(transaction, stage.key),
+      rackPhoto
+    ]);
 
     return {
       key: stage.key,
@@ -161,10 +213,8 @@ export const buildStageTimeline = (
       at,
       done,
       notes: last?.notes || (stage.key === 'siap' ? transaction?.rack_notes || null : null),
-      photoUrl:
-        last?.photo_url ||
-        (stage.key === 'sortir' ? transaction?.sortir_photo_url || null : null) ||
-        rackPhoto
+      photoUrl: photoUrls[0] || null,
+      photoUrls
     };
   });
 };

@@ -1,6 +1,8 @@
 'use client';
 
 import { buildStageTimeline, formatStageTime, stageKeyOf } from '@/lib/stageTimeline';
+import { TIMELINE_ICONS } from '@/components/customer/ui';
+import { Clock, FileText } from 'lucide-react';
 
 interface StageTimelineProps {
   /** Baris work_logs milik transaksi ini. */
@@ -42,7 +44,7 @@ export default function StageTimeline({
   return (
     <div>
       <h4 className="font-bold text-xs text-slate-800 mb-4 uppercase tracking-wider flex items-center gap-1.5">
-        <span>⏱️</span> {title}
+        {variant === 'customer' ? <Clock className="w-3.5 h-3.5 text-slate-500" /> : <span>⏱️</span>} {title}
       </h4>
 
       <div className="relative border-l-2 border-slate-200 ml-3 space-y-4 pl-4 text-xs">
@@ -57,6 +59,8 @@ export default function StageTimeline({
         {timeline.map((stage, idx) => {
           const waitingPickup = stage.key === 'selesai' && !stage.done && isReadyForPickup;
           const inProgress = !stage.done && (waitingPickup || idx === firstOpen);
+          const StageIcon = TIMELINE_ICONS[stage.key] || Clock;
+          const photos = stage.photoUrls?.length ? stage.photoUrls : stage.photoUrl ? [stage.photoUrl] : [];
 
           return (
             <div key={stage.key} className="relative">
@@ -69,8 +73,8 @@ export default function StageTimeline({
                     : 'bg-slate-300'
                 }`}
               />
-              <p className={`font-bold ${stage.done ? 'text-slate-800' : inProgress ? 'text-blue-700' : 'text-slate-400'}`}>
-                {stage.icon} {stage.label}
+              <p className={`font-bold flex items-center gap-1.5 ${stage.done ? 'text-slate-800' : inProgress ? 'text-blue-700' : 'text-slate-400'}`}>
+                {variant === 'customer' ? <StageIcon className="w-3.5 h-3.5 shrink-0" strokeWidth={2.3} /> : stage.icon} {stage.label}
               </p>
 
               {stage.done ? (
@@ -82,18 +86,36 @@ export default function StageTimeline({
                     <p className="text-[9px] text-slate-400 italic">Petugas: {stage.crew}</p>
                   )}
                   {stage.notes && (
-                    <p className="text-[10px] text-slate-600 mt-0.5 bg-slate-50 border border-slate-100 rounded-lg px-2 py-1">
-                      📝 {stage.notes}
+                    <p className="text-[10px] text-slate-600 mt-0.5 bg-slate-50 border border-slate-100 rounded-lg px-2 py-1 inline-flex items-start gap-1">
+                      {variant === 'customer' ? <FileText className="w-3 h-3 mt-0.5 shrink-0 text-slate-400" /> : <span>📝</span>} {stage.notes}
                     </p>
                   )}
-                  {stage.photoUrl && (
+                  {photos.length === 1 && (
                     <button
                       type="button"
-                      onClick={() => onOpenPhoto ? onOpenPhoto(stage.photoUrl!) : window.open(stage.photoUrl!, '_blank')}
-                      className="mt-1 block"
+                      onClick={() => onOpenPhoto ? onOpenPhoto(photos[0]) : window.open(photos[0], '_blank')}
+                      className="mt-1 block w-full"
                     >
-                      <img src={stage.photoUrl} alt={stage.label} className="w-full h-16 object-cover rounded-lg border border-slate-200 hover:opacity-90" />
+                      <img src={photos[0]} alt={stage.label} className="w-full h-16 object-cover rounded-lg border border-slate-200 hover:opacity-90" />
                     </button>
+                  )}
+                  {photos.length > 1 && (
+                    <div className="mt-1 flex gap-1.5 overflow-x-auto pb-1 snap-x snap-mandatory">
+                      {photos.map((url, photoIdx) => (
+                        <button
+                          type="button"
+                          key={`${stage.key}-${photoIdx}`}
+                          onClick={() => onOpenPhoto ? onOpenPhoto(url) : window.open(url, '_blank')}
+                          className="shrink-0 snap-start"
+                        >
+                          <img
+                            src={url}
+                            alt={`${stage.label} ${photoIdx + 1}`}
+                            className="h-16 w-20 object-cover rounded-lg border border-slate-200 hover:opacity-90"
+                          />
+                        </button>
+                      ))}
+                    </div>
                   )}
                 </>
               ) : (
