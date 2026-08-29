@@ -9,25 +9,38 @@ import { toast } from '@/lib/toast';
 import { uploadProofFile } from '@/lib/uploadProof';
 import FileProofInput from '@/components/FileProofInput';
 import PhotoLightbox from '@/components/PhotoLightbox';
+import { notifyOps, unlockOpsAudio } from '@/lib/opsNotify';
+import { isStaffOnlyMessage } from '@/lib/csChat';
 import {
-  COMPENSATION_OPTIONS,
+  complaintStepOf,
+  decisionLabelOf,
+  forwardDecisionToCustomer,
+  isComplaintIssue,
   issueCustomerName,
   issueDescriptionPlain,
   issueOutletName,
   issuePhone,
   issuePhotos,
   issueResi,
+  issueVideo,
   loadCareComplaints,
-  resolveCareComplaint
+  submitFindingsToSupervisor
 } from '@/lib/csCare';
 import { canonicalPhone } from '@/lib/csChat';
 
 const canAccessCare = (role: string) =>
   ['cs_care', 'cs', 'head_cs', 'owner', 'supervisor'].includes(String(role || '').toLowerCase());
 
-const isOpenIssue = (row: any) => {
-  const s = String(row?.status || '').toLowerCase();
-  return !s.includes('selesai') && !s.includes('resolved') && !s.includes('done');
+const isOpenIssue = (row: any) => complaintStepOf(row) !== 'resolved';
+
+const stepLabel = (issue: any) => {
+  const step = complaintStepOf(issue);
+  if (step === 'pending_supervisor') return 'Menunggu Supervisor';
+  if (step === 'decision_ready') return 'Siap diteruskan';
+  if (step === 'awaiting_customer') return 'Menunggu pelanggan';
+  if (step === 'appealed') return 'Banding — investigasi ulang';
+  if (step === 'resolved') return 'Selesai';
+  return 'Investigasi CS Care';
 };
 
 export default function CsCarePage() {
@@ -36,8 +49,8 @@ export default function CsCarePage() {
   const [issues, setIssues] = useState<any[]>([]);
   const [outlets, setOutlets] = useState<any[]>([]);
   const [openId, setOpenId] = useState<string | null>(null);
-  const [offerType, setOfferType] = useState('voucher');
-  const [offerDetail, setOfferDetail] = useState('');
+  const [findings, setFindings] = useState('');
+  const [cctvNotes, setCctvNotes] = useState('');
   const [evidenceFile, setEvidenceFile] = useState<File | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [lightbox, setLightbox] = useState<string | null>(null);
@@ -64,9 +77,31 @@ export default function CsCarePage() {
     }
     setReady(true);
     load();
+    const seenIssues = new Set<string>();
+    const seenChats = new Set<string>();
     const ch = supabase
       .channel('cs_care_issues')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'outlet_issues' }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'outlet_issues' }, (payload) => {
+        const row: any = payload.new;
+        if (payload.eventType === 'INSERT' && isComplaintIssue(row) && row?.id && !seenIssues.has(row.id)) {
+          seenIssues.add(row.id);
+          notifyOps('complaint', 'Komplain baru dari pelanggan. Mulai investigasi CS Care.', true);
+        }
+        load();
+      })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'support_chats' }, (payload) => {
+        const row: any = payload.new;
+        if (
+          row &&
+          String(row.sender_type).toLowerCase() === 'customer' &&
+          !isStaffOnlyMessage(row) &&
+          row.id &&
+          !seenChats.has(row.id)
+        ) {
+          seenChats.add(row.id);
+          notifyOps('chat', 'Pesan baru dari pelanggan.', true);
+        }
+      })
       .subscribe();
     return () => {
       supabase.removeChannel(ch);
@@ -75,29 +110,45 @@ export default function CsCarePage() {
 
   const visible = issues.filter((i) => (tab === 'open' ? isOpenIssue(i) : !isOpenIssue(i)));
 
-  const handleResolve = async (issue: any) => {
-    if (!offerType) return toast('Pilih tawaran ganti rugi.', 'warn');
+  const handleSubmitSupervisor = async (issue: any) => {
+    if (!findings.trim()) return toast('Isi temuan investigasi & analisis CCTV.', 'warn');
     setBusyId(issue.id);
     try {
       let evidenceUrl = '';
       if (evidenceFile) {
         evidenceUrl = await uploadProofFile(evidenceFile, `care_${issue.id}`);
       }
-      const { error } = await resolveCareComplaint({
+      const { error } = await submitFindingsToSupervisor({
         issue,
-        compensationType: offerType,
-        compensationDetail: offerDetail,
+        findings,
+        cctvNotes,
         evidenceUrl,
         agentName: agent.name
       });
       if (error) {
-        toast('Gagal menyelesaikan: ' + error.message, 'err');
+        toast('Gagal kirim ke Supervisor: ' + error.message, 'err');
         return;
       }
-      toast('Komplain diselesaikan. Pelanggan sudah diberi tahu.', 'ok');
+      toast('Temuan dikirim ke Supervisor untuk persetujuan.', 'ok');
       setOpenId(null);
-      setOfferDetail('');
+      setFindings('');
+      setCctvNotes('');
       setEvidenceFile(null);
+      load();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleForward = async (issue: any) => {
+    setBusyId(issue.id);
+    try {
+      const { error } = await forwardDecisionToCustomer({ issue, agentName: agent.name });
+      if (error) {
+        toast('Gagal meneruskan keputusan: ' + error.message, 'err');
+        return;
+      }
+      toast('Keputusan Supervisor dikirim ke pelanggan via Live Chat.', 'ok');
       load();
     } finally {
       setBusyId(null);
@@ -107,7 +158,7 @@ export default function CsCarePage() {
   if (!ready) return <div className="min-h-screen bg-[#f7f7f5]" />;
 
   return (
-    <div className="min-h-screen bg-[#f7f7f5] text-slate-800">
+    <div className="min-h-screen bg-[#f7f7f5] text-slate-800" onPointerDown={() => unlockOpsAudio()}>
       <header className="bg-white border-b border-slate-200/80">
         <div className="max-w-5xl mx-auto px-4 py-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -164,9 +215,12 @@ export default function CsCarePage() {
 
         {visible.map((issue) => {
           const photos = issuePhotos(issue);
+          const video = issueVideo(issue);
           const phone = issuePhone(issue);
           const resi = issueResi(issue);
           const expanded = openId === issue.id;
+          const step = complaintStepOf(issue);
+          const canInvestigate = step === 'pending_investigation' || step === 'appealed';
           const chatHref = phone ? `/cs?phone=${encodeURIComponent(canonicalPhone(phone) || phone)}` : '/cs';
           return (
             <article key={issue.id} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3">
@@ -176,7 +230,7 @@ export default function CsCarePage() {
                   <p className="font-black text-slate-900 text-sm font-mono">{resi}</p>
                 </div>
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 h-fit">
-                  {issue.status || 'pending'}
+                  {stepLabel(issue)}
                 </span>
               </div>
 
@@ -196,6 +250,10 @@ export default function CsCarePage() {
                 {issueDescriptionPlain(issue)}
               </p>
 
+              {video && (
+                <video src={video} controls className="w-full max-h-48 rounded-xl border border-slate-200 bg-black" />
+              )}
+
               {photos.length > 0 && (
                 <div className="flex gap-1.5 overflow-x-auto">
                   {photos.map((src, i) => (
@@ -206,64 +264,107 @@ export default function CsCarePage() {
                 </div>
               )}
 
-              {isOpenIssue(issue) && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOpenId(expanded ? null : issue.id);
-                    setOfferType('voucher');
-                    setOfferDetail('');
-                    setEvidenceFile(null);
-                  }}
-                  className="w-full text-xs font-bold py-2 rounded-xl border border-slate-200 hover:bg-slate-50"
-                >
-                  {expanded ? 'Tutup panel resolusi' : 'Buka panel resolusi'}
-                </button>
+              {issue.findings && (
+                <div className="bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-2 text-[11px] text-indigo-800">
+                  <p className="font-black uppercase text-[9px] tracking-wider mb-0.5">Temuan CS Care</p>
+                  {issue.findings}
+                  {issue.cctv_notes && <p className="mt-1">CCTV / log: {issue.cctv_notes}</p>}
+                </div>
               )}
 
-              {expanded && isOpenIssue(issue) && (
-                <div className="border-t border-slate-100 pt-3 space-y-3">
+              {issue.supervisor_decision && (
+                <div className="bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 text-[11px] text-amber-900">
+                  <p className="font-black uppercase text-[9px] tracking-wider mb-0.5">Keputusan Supervisor</p>
+                  {decisionLabelOf(issue.supervisor_decision)}
+                  {issue.supervisor_note ? ` — ${issue.supervisor_note}` : ''}
+                </div>
+              )}
+
+              {isOpenIssue(issue) && (
+                <div className="flex flex-col sm:flex-row gap-2">
                   <Link
                     href={chatHref}
-                    className="flex items-center justify-center gap-2 w-full text-xs font-bold py-2.5 rounded-xl bg-sky-50 border border-sky-100 text-sky-800"
+                    className="flex items-center justify-center gap-2 flex-1 text-xs font-bold py-2.5 rounded-xl bg-sky-50 border border-sky-100 text-sky-800"
                   >
-                    <MessageSquare className="w-4 h-4" /> Chat langsung dengan pelanggan
+                    <MessageSquare className="w-4 h-4" /> Live Chat pelanggan
                   </Link>
-
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-500 mb-1">Tawaran Ganti Rugi</label>
-                    <select
-                      value={offerType}
-                      onChange={(e) => setOfferType(e.target.value)}
-                      className="w-full border border-slate-200 rounded-xl p-2.5 text-xs font-bold"
+                  {canInvestigate && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOpenId(expanded ? null : issue.id);
+                        setFindings(issue.findings || '');
+                        setCctvNotes(issue.cctv_notes || '');
+                        setEvidenceFile(null);
+                      }}
+                      className="flex-1 text-xs font-bold py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50"
                     >
-                      {COMPENSATION_OPTIONS.map((o) => (
-                        <option key={o.value} value={o.value}>{o.label}</option>
-                      ))}
-                    </select>
-                    <input
-                      value={offerDetail}
-                      onChange={(e) => setOfferDetail(e.target.value)}
-                      placeholder="Contoh: Voucher 1x cuci 3 Kg / Refund Rp 25.000"
-                      className="mt-1.5 w-full border border-slate-200 rounded-xl p-2.5 text-xs"
+                      {expanded ? 'Tutup investigasi' : 'Isi temuan → Supervisor'}
+                    </button>
+                  )}
+                  {step === 'decision_ready' && (
+                    <button
+                      type="button"
+                      disabled={busyId === issue.id}
+                      onClick={() => handleForward(issue)}
+                      className="flex-1 bg-emerald-600 text-white font-black text-xs py-2.5 rounded-xl"
+                    >
+                      {busyId === issue.id ? 'Mengirim…' : 'Teruskan keputusan ke pelanggan'}
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {step === 'pending_supervisor' && (
+                <p className="text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
+                  Temuan sudah dikirim. Menunggu Supervisor memilih Ganti Rugi Cash, Voucher, atau Tolak.
+                </p>
+              )}
+              {step === 'awaiting_customer' && (
+                <p className="text-[11px] font-bold text-sky-800 bg-sky-50 border border-sky-100 rounded-xl px-3 py-2">
+                  Keputusan sudah dikirim via Live Chat. Menunggu pelanggan Setuju atau Banding.
+                </p>
+              )}
+
+              {expanded && canInvestigate && (
+                <div className="border-t border-slate-100 pt-3 space-y-3">
+                  <p className="text-[10px] text-slate-500 font-medium">
+                    Kumpulkan bukti foto, cek CCTV / work log, lalu kirim temuan ke Supervisor. Jangan menutup tiket di tahap ini.
+                  </p>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-1">Temuan investigasi</label>
+                    <textarea
+                      value={findings}
+                      onChange={(e) => setFindings(e.target.value)}
+                      rows={3}
+                      placeholder="Hasil cek fisik, foto, dan komunikasi dengan pelanggan"
+                      className="w-full border border-slate-200 rounded-xl p-2.5 text-xs"
                     />
                   </div>
-
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-1">Analisis CCTV / work log</label>
+                    <textarea
+                      value={cctvNotes}
+                      onChange={(e) => setCctvNotes(e.target.value)}
+                      rows={2}
+                      placeholder="Cuplikan CCTV, jam sortir/packing, nama kru"
+                      className="w-full border border-slate-200 rounded-xl p-2.5 text-xs"
+                    />
+                  </div>
                   <div>
                     <label className="block text-[10px] font-bold text-slate-500 mb-1 inline-flex items-center gap-1">
-                      <Camera className="w-3 h-3" /> Media / bukti resolusi
+                      <Camera className="w-3 h-3" /> Foto bukti investigasi
                     </label>
                     <FileProofInput file={evidenceFile} onFile={setEvidenceFile} icon="upload" />
                   </div>
-
                   <button
                     type="button"
                     disabled={busyId === issue.id}
-                    onClick={() => handleResolve(issue)}
-                    className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs py-3 rounded-xl inline-flex items-center justify-center gap-1.5"
+                    onClick={() => handleSubmitSupervisor(issue)}
+                    className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs py-3 rounded-xl inline-flex items-center justify-center gap-1.5"
                   >
                     <CheckCircle2 className="w-4 h-4" />
-                    {busyId === issue.id ? 'Menyimpan…' : 'Setujui & Selesaikan Komplain'}
+                    {busyId === issue.id ? 'Mengirim…' : 'Kirim temuan ke Supervisor'}
                   </button>
                 </div>
               )}

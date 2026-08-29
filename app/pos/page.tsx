@@ -19,6 +19,7 @@ import FileProofInput from '@/components/FileProofInput';
 import { createPaymentVerifyTask, isCsVerifiedPaid, isNonCashVerifyMethod, isPaymentLocked, PENDING_PAY_STATUS } from '@/lib/paymentVerify';
 import {
   classifyQueueOrder,
+  coalesceProsesCards,
   isExpressDuration,
   matchesQueueSearch,
   parseBagCount,
@@ -2095,7 +2096,8 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
   };
 
   const visibleProses = useMemo(
-    () => sortProsesBySla(activeOrders.filter((o) => matchesQueueSearch(o, queueSearch))),
+    () =>
+      coalesceProsesCards(sortProsesBySla(activeOrders.filter((o) => matchesQueueSearch(o, queueSearch)))),
     [activeOrders, queueSearch]
   );
   const visibleAmbil = useMemo(
@@ -3028,7 +3030,7 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
                 const sla = slaRemainingLabel(slaDueMs(order));
                 const express = isExpressDuration(order.duration);
                 return (
-                <div key={order.id} className={`rounded-xl p-4 space-y-3 shadow-sm hover:border-indigo-300 transition border ${sla.overdue ? 'border-rose-400 bg-rose-50/30' : 'border-slate-200 bg-white'}`}>
+                <div key={order.receipt_number || order.id} className={`rounded-xl p-4 space-y-3 shadow-sm hover:border-indigo-300 transition border ${sla.overdue ? 'border-rose-400 bg-rose-50/30' : 'border-slate-200 bg-white'}`}>
                   <div onClick={() => handleOpenDetailModal(order)} className="flex justify-between items-start pb-2.5 cursor-pointer group">
                     <div>
                       <div className="flex items-center gap-2 flex-wrap">
@@ -3070,65 +3072,51 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
                     </div>
                   )}
 
-                  {/* TAMPILAN ITEM MULTI-SERVICES DENGAN TOMBOL PENGERJAAN TERPISAH PER ITEM */}
-            {(() => {
-              // Kolom `items` bisa terkirim sebagai array maupun string JSON dari Supabase.
-              const orderItems = safeParse(order.items, []);
-              const hasItems = Array.isArray(orderItems) && orderItems.length > 0;
-
-              return !hasItems ? (
-              /* Pengerjaan Pesanan Single-Item Biasa */
-              <div className="pt-2 border-t border-slate-100">
-                {renderNextStepButton(order)}
-              </div>
-            ) : (
-              <div className="space-y-3 mt-2">
-                {orderItems.map((item: any, idx: number) => {
-                  // Membuat sub-task item tiruan agar tombol status bekerja per-item
-                  const itemTask = {
-                    ...order,
-                    id: order.id,
-                    items: orderItems,
-                    item_index: idx,
-                    service_type: item.name || item.service_type || 'Item Cucian',
-                    status: item.status || order.status || 'Diterima'
-                  };
-
-                  return (
-                    <div key={idx} className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-2 relative z-10">
-                      <div 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (typeof (window as any).setSelectedOrderForDetail === 'function') {
-                            (window as any).setSelectedOrderForDetail(order);
-                          }
-                        }}
-                        className="flex justify-between items-center cursor-pointer"
-                      >
-                        <div>
-                          <span className="font-extrabold text-slate-800 text-xs block">
-                            {item.name || item.service_type}
-                          </span>
-                          <span className="text-[10px] text-slate-500 font-medium">
-                            {item.weight ? `${item.weight} Kg` : ''} {item.qty ? `${item.qty} Pcs` : ''}
+                  {(() => {
+              const orderItems = parseOrderItems(order.items);
+              const hasItems = orderItems.length > 1;
+              if (!hasItems) {
+                return (
+                  <div className="pt-2 border-t border-slate-100">
+                    {renderNextStepButton(order)}
+                  </div>
+                );
+              }
+              return (
+                <div className="space-y-2 mt-2 pt-2 border-t border-slate-100">
+                  <p className="text-[10px] font-black uppercase tracking-wider text-slate-400">Item dalam transaksi</p>
+                  {orderItems.map((item: any, idx: number) => {
+                    const itemTask = {
+                      ...order,
+                      id: order.id,
+                      items: orderItems,
+                      item_index: idx,
+                      service_type: item.name || item.service_type || 'Item Cucian',
+                      status: item.status || order.status || 'Diterima'
+                    };
+                    return (
+                      <div key={`${order.id}-item-${idx}`} className="bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
+                        <div className="flex justify-between items-center gap-2">
+                          <div className="min-w-0">
+                            <span className="font-bold text-slate-800 text-xs block truncate">
+                              {item.name || item.service_type}
+                            </span>
+                            <span className="text-[10px] text-slate-500">
+                              {item.weight || item.kg ? `${item.weight || item.kg} Kg` : ''}
+                              {item.qty ? ` · ${item.qty} Pcs` : ''}
+                            </span>
+                          </div>
+                          <span className="shrink-0 px-2 py-0.5 bg-indigo-50 text-indigo-600 font-bold text-[10px] rounded-md border border-indigo-100">
+                            {item.status || order.status || 'Diterima'}
                           </span>
                         </div>
-                        <span className="px-2 py-0.5 bg-indigo-50 text-indigo-600 font-bold text-[10px] rounded-md border border-indigo-100">
-                          {item.status || order.status || 'Diterima'}
-                        </span>
+                        <div onClick={(e) => e.stopPropagation()} className="mt-1.5">
+                          {renderNextStepButton(itemTask)}
+                        </div>
                       </div>
-    
-                      {/* Isolasi Tombol Pengerjaan dari Klik Modal Parent */}
-                      <div
-                        onClick={(e) => e.stopPropagation()}
-                        className="pt-1 border-t border-slate-200 relative z-30 pointer-events-auto"
-                      >
-                        {renderNextStepButton(itemTask)}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
               );
             })()}
                 </div>

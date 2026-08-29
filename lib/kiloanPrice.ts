@@ -21,3 +21,17 @@ export const cartLineAmount = (item: any, durationMultiplier = 1) => {
   if (isKiloanItem(item)) return kiloanLineTotal(unit, kiloanWeightOf(item));
   return Math.round(unit * (Number(item?.qty) || 0));
 };
+
+/**
+ * Total tampilan rincian item. Item kiloan tanpa `type` tetap dihitung dari Kg
+ * (contoh Cuci Kering Lipat 3 Kg × Rp 5.000 = Rp 15.000, bukan harga satuan).
+ */
+export const displayItemAmount = (item: any) => {
+  const unit = Number(item?.basePrice ?? item?.price) || 0;
+  const explicit = Number(item?.line_total ?? item?.subtotal ?? item?.total);
+  if (Number.isFinite(explicit) && explicit > unit && explicit > 0) return Math.round(explicit);
+  const kg = Number(item?.weight ?? item?.kg) || 0;
+  const typedPcs = String(item?.type || item?.unit || '').toLowerCase() === 'pcs';
+  if (!typedPcs && kg > 0) return kiloanLineTotal(unit, kg);
+  return cartLineAmount(item);
+};

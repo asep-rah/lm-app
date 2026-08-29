@@ -24,14 +24,23 @@ export default function FileProofInput({
 }) {
   const id = useId();
   const [preview, setPreview] = useState('');
+  const [videoPreview, setVideoPreview] = useState('');
 
   useEffect(() => {
-    if (!file || !String(file.type || '').startsWith('image/')) {
+    const type = String(file?.type || '');
+    if (!file || (!type.startsWith('image/') && !type.startsWith('video/'))) {
       setPreview('');
+      setVideoPreview('');
       return;
     }
     const url = URL.createObjectURL(file);
-    setPreview(url);
+    if (type.startsWith('video/')) {
+      setVideoPreview(url);
+      setPreview('');
+    } else {
+      setPreview(url);
+      setVideoPreview('');
+    }
     return () => URL.revokeObjectURL(url);
   }, [file]);
 
@@ -69,7 +78,10 @@ export default function FileProofInput({
           className="h-20 w-full object-cover rounded-lg border border-slate-200"
         />
       )}
-      {file && !preview && (
+      {videoPreview && (
+        <video src={videoPreview} controls className="h-28 w-full rounded-lg border border-slate-200 bg-black" />
+      )}
+      {file && !preview && !videoPreview && (
         <p className="text-[10px] text-slate-500 font-medium truncate">{file.name}</p>
       )}
     </div>

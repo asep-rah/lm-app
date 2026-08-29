@@ -14,7 +14,14 @@ import ChatAttachment, { visibleChatText } from '@/components/ChatAttachment';
 import ChatInvoiceCard from '@/components/ChatInvoiceCard';
 import FileProofInput from '@/components/FileProofInput';
 import { fileToCompressedDataUrl, uploadChatAttachment, uploadProofFile } from '@/lib/uploadProof';
-import { kiloanLineTotal } from '@/lib/kiloanPrice';
+import { displayItemAmount, kiloanLineTotal } from '@/lib/kiloanPrice';
+import { formatEstSelesai, formatTrxId } from '@/lib/posQueue';
+import {
+  complaintStepOf,
+  customerRespondComplaint,
+  decisionLabelOf,
+  loadComplaintForOrder
+} from '@/lib/csCare';
 import { nearestOpenOutlet } from '@/lib/outletCapacity';
 import { toast } from '@/lib/toast';
 import {
@@ -140,7 +147,7 @@ function ProofPhotoGrid({
     { label: 'Outlet', src: order?.photo_outlet_url },
     { label: 'Sortir', src: sortirPhotoOf(order, logs) },
     { label: 'Rak', src: order?.rack_photo_url },
-    { label: 'Antar', src: order?.photo_delivery_url }
+    { label: 'Antar', src: order?.photo_delivery_url || order?.photo_antar_url || order?.delivery_photo_url }
   ];
   return (
     <div className="grid grid-cols-5 gap-1.5">
@@ -300,7 +307,10 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
   const [complaintOpen, setComplaintOpen] = useState(false);
   const [complaintText, setComplaintText] = useState('');
   const [complaintFile, setComplaintFile] = useState<File | null>(null);
+  const [complaintVideo, setComplaintVideo] = useState<File | null>(null);
   const [complaintBusy, setComplaintBusy] = useState(false);
+  const [detailComplaint, setDetailComplaint] = useState<any | null>(null);
+  const [complaintRespondBusy, setComplaintRespondBusy] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewStars, setReviewStars] = useState(0);
   const [reviewText, setReviewText] = useState('');
@@ -552,11 +562,14 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
         setDetailOrder(next);
       }
     });
+    loadComplaintForOrder(detailOrder).then((row) => {
+      if (!cancelled) setDetailComplaint(row);
+    });
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detailOrder?.id]);
+  }, [detailOrder?.id, detailOrder?.complaint_status]);
 
   const handleSudahSesuai = async () => {
     if (!detailOrder) return;
@@ -575,6 +588,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
   const handleSubmitComplaint = async () => {
     if (!detailOrder) return;
     if (!complaintText.trim()) return toast('Isi deskripsi kendala.', 'warn');
+    if (!complaintVideo) return toast('Video unboxing wajib diunggah sebelum mengirim komplain.', 'warn');
     setComplaintBusy(true);
     try {
       let photoUrl = '';
@@ -583,10 +597,12 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
           (await uploadProofFile(complaintFile, `complaint_${detailOrder.id}`).catch(() => '')) ||
           (await fileToCompressedDataUrl(complaintFile));
       }
+      const videoUrl = await uploadProofFile(complaintVideo, `unbox_${detailOrder.id}`);
       const { error, order } = await submitOrderComplaint({
         order: detailOrder,
         description: complaintText.trim(),
         photoUrl,
+        videoUrl,
         customerName: customerName || customerData?.name,
         customerPhone,
         outletName: outletsList.find((o) => String(o.id) === String(detailOrder.outlet_id))?.name || currentOutletObj?.name
@@ -599,9 +615,35 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       setComplaintOpen(false);
       setComplaintText('');
       setComplaintFile(null);
+      setComplaintVideo(null);
       toast('Komplain terkirim ke CS Care. Tim akan menindaklanjuti.', 'ok');
+    } catch (err: any) {
+      toast(err?.message || 'Gagal unggah video unboxing.', 'err');
     } finally {
       setComplaintBusy(false);
+    }
+  };
+
+  const handleComplaintRespond = async (agree: boolean) => {
+    if (!detailComplaint) return toast('Tiket komplain belum siap. Coba buka ulang detail.', 'warn');
+    setComplaintRespondBusy(true);
+    try {
+      const { error } = await customerRespondComplaint({
+        issue: detailComplaint,
+        order: detailOrder,
+        agree
+      });
+      if (error) {
+        toast('Gagal mengirim tanggapan: ' + error.message, 'err');
+        return;
+      }
+      const nextStatus = agree ? 'resolved' : 'appealed';
+      setDetailOrder((prev: any) => (prev ? { ...prev, complaint_status: nextStatus } : prev));
+      const refreshed = await loadComplaintForOrder(detailOrder);
+      setDetailComplaint(refreshed);
+      toast(agree ? 'Terima kasih. Komplain diselesaikan.' : 'Banding terkirim. CS Care akan investigasi ulang.', 'ok');
+    } finally {
+      setComplaintRespondBusy(false);
     }
   };
 
@@ -812,7 +854,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
       pickup_created_at: relatedPickup?.created_at,
       photo_pickup_url: t.photo_pickup_url || relatedPickup?.photo_pickup_url || relatedPickup?.photo_url,
       photo_outlet_url: t.photo_outlet_url || relatedPickup?.photo_outlet_url,
-      photo_delivery_url: t.photo_delivery_url || relatedPickup?.photo_delivery_url,
+      photo_delivery_url: t.photo_delivery_url || relatedPickup?.photo_delivery_url || t.photo_antar_url || relatedPickup?.photo_antar_url || t.delivery_photo_url,
       rack_photo_url: t.rack_photo_url || relatedPickup?.rack_photo_url,
       sortir_photo_url: t.sortir_photo_url || relatedPickup?.sortir_photo_url
     };
@@ -827,7 +869,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
         ...p,
         photo_pickup_url: p.photo_pickup_url || p.photo_url,
         photo_outlet_url: p.photo_outlet_url,
-        photo_delivery_url: p.photo_delivery_url,
+        photo_delivery_url: p.photo_delivery_url || p.photo_antar_url || p.delivery_photo_url,
         rack_photo_url: p.rack_photo_url,
         sortir_photo_url: p.sortir_photo_url
       });
@@ -840,7 +882,8 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
     ...row,
     photo_pickup_url: row.photo_pickup_url || pickup?.photo_pickup_url || pickup?.photo_url || row.photo_url,
     photo_outlet_url: row.photo_outlet_url || pickup?.photo_outlet_url,
-    photo_delivery_url: row.photo_delivery_url || pickup?.photo_delivery_url,
+    photo_delivery_url: row.photo_delivery_url || pickup?.photo_delivery_url || row.photo_antar_url || pickup?.photo_antar_url || row.delivery_photo_url,
+    photo_antar_url: row.photo_antar_url || pickup?.photo_antar_url || row.photo_delivery_url,
     rack_photo_url: row.rack_photo_url || pickup?.rack_photo_url,
     sortir_photo_url: row.sortir_photo_url || pickup?.sortir_photo_url,
     items: safeParse(row.items, row.items),
@@ -1318,15 +1361,6 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
           let activeIndex = stages.findIndex(s => s.match.some(m => currentStatus.includes(m)));
           if (activeIndex === -1) activeIndex = 0;
 
-          const formattedDate = order.created_at
-            ? new Date(order.created_at).toLocaleDateString('id-ID', {
-                day: 'numeric',
-                month: 'short',
-                hour: '2-digit',
-                minute: '2-digit'
-              })
-            : 'Baru Saja';
-
           return (
             <div
               key={order.id}
@@ -1334,10 +1368,18 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
               className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 flex flex-col gap-3 transition-all hover:shadow-md cursor-pointer active:scale-[0.98] mb-3"
             >
               {/* Header Kartu */}
-              <div className="flex justify-between items-center border-b border-slate-50 pb-2 gap-2">
-                <span className="text-[10px] font-extrabold tracking-wider text-slate-400 uppercase">
-                  {order.receipt_number || order.order_type || 'Laundry Express'} • {formattedDate}
-                </span>
+              <div className="flex justify-between items-start border-b border-slate-50 pb-2 gap-2">
+                <div className="min-w-0 space-y-0.5">
+                  <p className="text-[11px] font-black text-slate-800">
+                    ID Transaksi: {formatTrxId(order)}
+                  </p>
+                  <p className="text-[10px] font-semibold text-slate-500">
+                    Estimasi Selesai: {formatEstSelesai(order)}
+                  </p>
+                  <p className="text-[10px] font-semibold text-slate-500">
+                    Status Cucian: {order.status || 'Menunggu'}
+                  </p>
+                </div>
                 <div className="flex items-center gap-1 shrink-0">
                   <SlaBadge duration={order.duration || order.service_type} createdAt={order.created_at} />
                   <StatusPill status={order.status || 'Menunggu Kurir'} />
@@ -1347,9 +1389,6 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
               {/* Body Kartu */}
               <div className="flex justify-between items-center">
                 <div className="pr-2">
-                  <h4 className="font-bold text-slate-800 text-sm line-clamp-1">
-                    {order.service_type || 'Layanan Laundry'}
-                  </h4>
                   <button
                     type="button"
                     onClick={(e) => {
@@ -2353,16 +2392,12 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
       {/* Content */}
       <div className="p-4 overflow-y-auto space-y-4 text-xs text-slate-700">
-        <div className="bg-indigo-50 p-3 rounded-xl border border-indigo-100 flex justify-between items-center">
-          <div>
-            <span className="text-[10px] text-indigo-500 font-bold uppercase block">Layanan</span>
-            <span className="font-bold text-slate-900 text-sm">
-              {detailOrder.service_type || detailOrder.service_name || 'Cuci Kering Gosok'}
-            </span>
-          </div>
-          <span className="px-2.5 py-1 bg-indigo-600 text-white font-black text-[10px] rounded-lg">
-            {detailOrder.status || 'Menunggu Kurir'}
-          </span>
+        <div className="bg-indigo-50 p-3 rounded-xl border border-indigo-100 space-y-1.5">
+          <p className="font-black text-slate-900 text-sm">ID Transaksi: {formatTrxId(detailOrder)}</p>
+          <p className="text-[11px] font-semibold text-indigo-800">Estimasi Selesai: {formatEstSelesai(detailOrder)}</p>
+          <p className="text-[11px] font-semibold text-indigo-800">
+            Status Cucian: {detailOrder.status || 'Menunggu'}
+          </p>
         </div>
 
         {/* Rincian Items + harga */}
@@ -2388,7 +2423,7 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
                       </div>
                       <div className="text-right">
                         <span className="font-black text-slate-900 block">
-                          Rp {Number(it.price || it.amount || 0).toLocaleString('id-ID')}
+                          Rp {displayItemAmount(it).toLocaleString('id-ID')}
                         </span>
                         <span className="px-2 py-0.5 bg-slate-200 text-slate-700 font-bold text-[10px] rounded-md">
                           {it.status || detailOrder.status || 'Proses'}
@@ -2458,10 +2493,48 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
 
         {isOrderFinished(detailOrder) && (() => {
           const ui = showComplaintActions(detailOrder);
+          if (ui.awaitingCustomer || complaintStepOf(detailComplaint) === 'awaiting_customer') {
+            return (
+              <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 space-y-2">
+                <p className="text-[11px] font-bold text-indigo-900">
+                  Keputusan Supervisor: {decisionLabelOf(detailComplaint?.supervisor_decision)}
+                  {detailComplaint?.supervisor_note ? ` — ${detailComplaint.supervisor_note}` : ''}
+                </p>
+                <p className="text-[10px] text-indigo-700">Setuju untuk menyelesaikan, atau Banding agar CS Care investigasi ulang.</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    disabled={complaintRespondBusy}
+                    onClick={() => handleComplaintRespond(true)}
+                    className="bg-emerald-600 text-white font-black text-[11px] py-2.5 rounded-xl"
+                  >
+                    {complaintRespondBusy ? 'Mengirim…' : 'Setuju'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={complaintRespondBusy}
+                    onClick={() => handleComplaintRespond(false)}
+                    className="bg-rose-50 text-rose-700 border border-rose-200 font-black text-[11px] py-2.5 rounded-xl"
+                  >
+                    Banding
+                  </button>
+                </div>
+              </div>
+            );
+          }
           if (ui.pending) {
+            const step = complaintStepOf(detailComplaint);
+            const msg =
+              step === 'pending_supervisor'
+                ? 'Temuan CS Care menunggu keputusan Supervisor.'
+                : step === 'decision_ready'
+                ? 'Supervisor sudah memutuskan. CS Care akan meneruskan ke Anda via Live Chat.'
+                : step === 'appealed'
+                ? 'Banding diterima. CS Care sedang investigasi ulang.'
+                : 'Komplain Anda sedang diinvestigasi CS Care.';
             return (
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-[11px] font-bold text-amber-800">
-                Komplain Anda sedang ditangani Supervisor & CS.
+                {msg}
               </div>
             );
           }
@@ -2536,7 +2609,21 @@ const handleTopupXendit = async (priceAmount: number, packageName: string) => {
               placeholder="Jelaskan kendala (sobek, kurang, salah item, dll.)"
               className="w-full border border-slate-200 rounded-xl p-2.5 text-xs"
             />
-            <FileProofInput file={complaintFile} onFile={setComplaintFile} />
+            <div>
+              <p className="text-[10px] font-black text-rose-600 mb-1">Video unboxing (wajib)</p>
+              <FileProofInput
+                file={complaintVideo}
+                onFile={setComplaintVideo}
+                accept="video/*"
+                required
+                label="Unggah video unboxing"
+                icon="upload"
+              />
+            </div>
+            <div>
+              <p className="text-[10px] font-bold text-slate-500 mb-1">Foto tambahan (opsional)</p>
+              <FileProofInput file={complaintFile} onFile={setComplaintFile} />
+            </div>
             <div className="flex gap-2">
               <button type="button" onClick={() => setComplaintOpen(false)} className="flex-1 border border-slate-200 font-bold text-xs py-2.5 rounded-xl">
                 Batal

@@ -31,6 +31,8 @@ import ChatInvoiceCard from '@/components/ChatInvoiceCard';
 import { isTaskCompleted } from '@/lib/taskRoles';
 import { toast } from '@/lib/toast';
 import FileProofInput from '@/components/FileProofInput';
+import { notifyOps, unlockOpsAudio } from '@/lib/opsNotify';
+import { isComplaintIssue } from '@/lib/csCare';
 
 type Thread = {
   key: string;
@@ -58,24 +60,6 @@ const fmtDur = (ms: number) => {
   const s = Math.round(ms / 1000);
   if (s < 60) return `${s}s`;
   return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
-};
-
-const playChime = () => {
-  try {
-    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.value = 880;
-    gain.gain.setValueAtTime(0.07, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.28);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.3);
-  } catch {
-    /* ignore */
-  }
 };
 
 export default function CsCommandCenter() {
@@ -340,21 +324,13 @@ export default function CsCommandCenter() {
         }
       });
 
-    let lastChimeAt = 0;
-    const chimeOnce = () => {
-      const n = Date.now();
-      if (n - lastChimeAt < 900) return;
-      lastChimeAt = n;
-      playChime();
-    };
-
     const ch = supabase
       .channel('cs_command_chats')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'support_chats' }, (payload) => {
         const row: any = payload.new;
         if (row && String(row.sender_type).toLowerCase() === 'customer' && !isStaffOnlyMessage(row) && row.id && !seenIds.current.has(row.id)) {
           seenIds.current.add(row.id);
-          chimeOnce();
+          notifyOps('chat', 'Pesan baru dari pelanggan.', true);
         }
         loadThreadsRef.current();
         const openKey = selectedKeyRef.current;
@@ -363,7 +339,7 @@ export default function CsCommandCenter() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'support_chat_sessions' }, (payload) => {
         const wasClosed = sessionLooksClosed(payload.old);
         const nowOpen = !sessionLooksClosed(payload.new);
-        if (wasClosed && nowOpen) chimeOnce();
+        if (wasClosed && nowOpen) notifyOps('chat', 'Chat pelanggan masuk / dibuka ulang.', true);
         loadThreadsRef.current();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'system_tasks' }, (payload) => {
@@ -372,10 +348,15 @@ export default function CsCommandCenter() {
           row &&
           (row.source_type === 'PAYMENT_VERIFY' || String(row.title || '').includes('Konfirmasi Pembayaran'));
         if (isPay && payload.eventType === 'INSERT') {
-          chimeOnce();
-          toast('Pembayaran baru menunggu konfirmasi.', 'warn');
+          notifyOps('payment', 'Kasir: Menunggu Konfirmasi Tagihan.', true);
         }
         loadPayTasks();
+      })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'outlet_issues' }, (payload) => {
+        const row: any = payload.new;
+        if (isComplaintIssue(row)) {
+          notifyOps('complaint', 'Komplain baru dari pelanggan. Perlu investigasi CS Care.', true);
+        }
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
         const openKey = selectedKeyRef.current;
@@ -704,7 +685,10 @@ export default function CsCommandCenter() {
   return (
     <div
       className="h-screen bg-slate-50 text-slate-900 flex flex-col overflow-hidden"
-      onPointerDown={() => setAudioReady(true)}
+      onPointerDown={() => {
+        unlockOpsAudio();
+        setAudioReady(true);
+      }}
     >
       <header className="bg-white border-b border-slate-200/80 px-4 py-2.5 flex items-center gap-4 shrink-0">
         <div className="min-w-[160px]">

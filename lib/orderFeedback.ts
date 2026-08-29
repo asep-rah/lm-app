@@ -49,10 +49,13 @@ export const complaintStatusOf = (order: any): string => {
 
 export const showComplaintActions = (order: any) => {
   const st = complaintStatusOf(order);
-  if (st.includes('pending')) {
+  if (st.includes('awaiting')) {
+    return { showConfirm: false, showComplain: false, autoConfirmed: false, pending: false, locked: true, awaitingCustomer: true };
+  }
+  if (st.includes('pending') || st.includes('appeal') || st.includes('decision')) {
     return { showConfirm: false, showComplain: false, autoConfirmed: false, pending: true, locked: true };
   }
-  if (st.includes('resolved')) {
+  if (st.includes('resolved') || st.includes('selesai')) {
     return { showConfirm: false, showComplain: false, autoConfirmed: false, pending: false, locked: true };
   }
   if (['confirmed', 'locked', 'sudah sesuai'].includes(st) || order?.confirmed_at) {
@@ -119,6 +122,7 @@ export const submitOrderComplaint = async (opts: {
   order: any;
   description: string;
   photoUrl?: string;
+  videoUrl?: string;
   customerName?: string;
   customerPhone?: string;
   outletName?: string;
@@ -126,6 +130,9 @@ export const submitOrderComplaint = async (opts: {
   const order = opts.order || {};
   const desc = String(opts.description || '').trim();
   if (!desc) return { error: { message: 'Isi deskripsi kendala' } };
+  if (!String(opts.videoUrl || '').trim()) {
+    return { error: { message: 'Video unboxing wajib diunggah sebelum mengirim komplain' } };
+  }
 
   const txId = isPosOrder(order) ? order.id : order.transaction_id || null;
   const pickupId = order.pickup_id || (!isPosOrder(order) ? order.id : null);
@@ -138,7 +145,8 @@ export const submitOrderComplaint = async (opts: {
     phone ? `HP: ${phone}` : '',
     resi ? `Resi: ${resi}` : '',
     desc,
-    opts.photoUrl ? `Bukti: ${opts.photoUrl}` : ''
+    opts.photoUrl ? `Bukti: ${opts.photoUrl}` : '',
+    opts.videoUrl ? `Video unboxing: ${opts.videoUrl}` : ''
   ]
     .filter(Boolean)
     .join('\n');
@@ -159,8 +167,10 @@ export const submitOrderComplaint = async (opts: {
         outlet_name: outletName || null,
         urgency: 'Mendesak',
         priority: 'high',
-        status: 'pending_resolution',
-        media_url: opts.photoUrl || null,
+        status: 'pending_investigation',
+        media_url: opts.photoUrl || opts.videoUrl || null,
+        unboxing_video_url: opts.videoUrl || null,
+        workflow_step: 'investigation',
         transaction_id: txId,
         pickup_id: pickupId,
         assigned_to_role: 'cs_care'
@@ -171,8 +181,8 @@ export const submitOrderComplaint = async (opts: {
         description: body,
         reporter_name: reporter,
         urgency: 'Mendesak',
-        status: 'pending_resolution',
-        media_url: opts.photoUrl || null,
+        status: 'pending_investigation',
+        media_url: opts.photoUrl || opts.videoUrl || null,
         assigned_to_role: 'cs_care'
       },
       {
@@ -207,10 +217,10 @@ export const submitOrderComplaint = async (opts: {
   }
 
   if (order?.id) writeLocalFlag('complain', order.id);
-  const patch = await patchOrderComplaint(order, { complaint_status: 'pending_resolution' });
+  const patch = await patchOrderComplaint(order, { complaint_status: 'pending_investigation' });
   return {
     error: patch.error,
-    order: { ...order, complaint_status: 'pending_resolution' }
+    order: { ...order, complaint_status: 'pending_investigation' }
   };
 };
 

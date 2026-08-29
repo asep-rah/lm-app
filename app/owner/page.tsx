@@ -19,6 +19,7 @@ import { fetchRoleKpis } from '@/lib/kpiMetrics';
 import { canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
 import { isMultiOutletRole, staffRolesForForm } from '@/lib/staffRoles';
 import OutletCsatPanel from '@/components/OutletCsatPanel';
+import SupervisorComplaintPanel from '@/components/SupervisorComplaintPanel';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -926,6 +927,9 @@ export default function Dashboard() {
           <RequisitionForm employeeName={currentUserName} role={currentUserRole} selectedOutlet={selectedOutlet !== 'ALL' ? selectedOutlet : undefined} />
           <div className="space-y-4">
             <RoleTaskInbox role={currentUserRole || undefined} />
+            {['owner', 'supervisor'].includes(currentUserRole) && (
+              <SupervisorComplaintPanel agentName={currentUserName} />
+            )}
             {['owner', 'supervisor'].includes(currentUserRole) && <HeadTaskDelegator />}
           </div>
         </div>

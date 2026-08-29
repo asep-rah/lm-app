@@ -16,6 +16,14 @@ import HeadTaskDelegator from '@/components/HeadTaskDelegator';
 import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
 import { toast } from '@/lib/toast';
 import { updateWithFallback } from '@/lib/safeWrite';
+import {
+  SUPERVISOR_DECISIONS,
+  complaintStepOf,
+  isComplaintIssue,
+  issueDescriptionPlain,
+  issueResi,
+  supervisorDecide
+} from '@/lib/csCare';
 
 const todayStart = () => {
   const d = new Date();
@@ -43,6 +51,8 @@ export default function StaffWorkspace() {
   const [unassignedChats, setUnassignedChats] = useState(0);
   const [outletCaps, setOutletCaps] = useState<any[]>([]);
   const [capBusy, setCapBusy] = useState<string | null>(null);
+  const [supNote, setSupNote] = useState('');
+  const [supBusy, setSupBusy] = useState<string | null>(null);
 
   const loadTasks = async () => {
     if (!aliases.length) {
@@ -78,8 +88,8 @@ export default function StaffWorkspace() {
       setInvestorNotes(data || []);
     }
     if (role === 'supervisor') {
-      const { data } = await supabase.from('outlet_issues').select('*').order('created_at', { ascending: false }).limit(8);
-      setIssues((data || []).filter((i: any) => String(i.status || '') !== 'Selesai'));
+      const { data } = await supabase.from('outlet_issues').select('*').order('created_at', { ascending: false }).limit(40);
+      setIssues((data || []).filter((i: any) => String(i.status || '').toLowerCase() !== 'selesai' && complaintStepOf(i) !== 'resolved'));
       const { data: outs } = await supabase.from('outlets').select('id, name, is_overcapacity').order('name');
       setOutletCaps(outs || []);
     }
@@ -149,6 +159,27 @@ export default function StaffWorkspace() {
     }
     toast(res.isOverdue ? `Selesai, SLA terlewati (−${Math.abs(res.penalty || 0)})` : 'Tugas selesai.', res.isOverdue ? 'warn' : 'ok');
     loadTasks();
+  };
+
+  const handleSupervisorDecision = async (issue: any, decision: string) => {
+    setSupBusy(`${issue.id}-${decision}`);
+    try {
+      const { error } = await supervisorDecide({
+        issue,
+        decision,
+        note: supNote,
+        agentName: session.name
+      });
+      if (error) {
+        toast(error.message, 'err');
+        return;
+      }
+      toast(`Keputusan ${SUPERVISOR_DECISIONS.find((d) => d.value === decision)?.label} dikirim ke CS Care.`, 'ok');
+      setSupNote('');
+      loadContext();
+    } finally {
+      setSupBusy(null);
+    }
   };
 
   const toggleOutletCapacity = async (outlet: any) => {
@@ -364,9 +395,48 @@ export default function StaffWorkspace() {
                     </button>
                   </div>
                 ))}
+                <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400 pt-2">Persetujuan komplain</p>
+                {issues.filter((i) => isComplaintIssue(i) && complaintStepOf(i) === 'pending_supervisor').length === 0 && (
+                  <p className="text-xs text-slate-400">Tidak ada komplain menunggu keputusan.</p>
+                )}
+                {issues
+                  .filter((i) => isComplaintIssue(i) && complaintStepOf(i) === 'pending_supervisor')
+                  .map((i) => (
+                    <div key={i.id} className="text-xs border border-amber-100 bg-amber-50/50 rounded-lg px-2.5 py-2 space-y-2">
+                      <p className="font-semibold">{issueResi(i)}</p>
+                      <p className="text-slate-600 line-clamp-3">{issueDescriptionPlain(i)}</p>
+                      {i.findings && <p className="text-indigo-800">Temuan: {i.findings}</p>}
+                      {i.cctv_notes && <p className="text-slate-500">CCTV: {i.cctv_notes}</p>}
+                      <input
+                        value={supNote}
+                        onChange={(e) => setSupNote(e.target.value)}
+                        placeholder="Catatan Supervisor (opsional)"
+                        className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-[11px] bg-white"
+                      />
+                      <div className="grid grid-cols-3 gap-1">
+                        {SUPERVISOR_DECISIONS.map((d) => (
+                          <button
+                            key={d.value}
+                            type="button"
+                            disabled={supBusy === `${i.id}-${d.value}`}
+                            onClick={() => handleSupervisorDecision(i, d.value)}
+                            className={`text-[9px] font-black py-1.5 rounded-md ${
+                              d.value === 'reject'
+                                ? 'bg-rose-600 text-white'
+                                : d.value === 'cash'
+                                ? 'bg-emerald-600 text-white'
+                                : 'bg-indigo-600 text-white'
+                            }`}
+                          >
+                            {d.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                 <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400 pt-2">Kendala outlet</p>
-                {issues.length === 0 && <p className="text-xs text-slate-400">Tidak ada issue terbuka.</p>}
-                {issues.map((i) => (
+                {issues.filter((i) => !isComplaintIssue(i)).length === 0 && <p className="text-xs text-slate-400">Tidak ada issue terbuka.</p>}
+                {issues.filter((i) => !isComplaintIssue(i)).map((i) => (
                   <div key={i.id} className="text-xs border border-slate-100 rounded-lg px-2.5 py-2">
                     <p className="font-semibold">{i.category || 'Issue'}</p>
                     <p className="text-slate-500 line-clamp-2">{i.description}</p>

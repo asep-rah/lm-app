@@ -66,6 +66,53 @@ export const slaRemainingLabel = (due: number, now = Date.now()) => {
 export const sortProsesBySla = (orders: any[], now = Date.now()) =>
   [...orders].sort((a, b) => slaDueMs(a, now) - slaDueMs(b, now));
 
+/** Satu kartu induk per transaksi/resi. Item tidak dipecah jadi kartu terpisah. */
+export const coalesceProsesCards = (orders: any[]): any[] => {
+  const byId = new Map<string, any>();
+  for (const o of orders || []) {
+    const id = String(o?.id || '');
+    if (!id || byId.has(id)) continue;
+    byId.set(id, { ...o, items: parseOrderItems(o.items) });
+  }
+  const byResi = new Map<string, any>();
+  for (const o of byId.values()) {
+    const resi = String(o.receipt_number || o.id);
+    const existing = byResi.get(resi);
+    if (!existing) {
+      byResi.set(resi, o);
+      continue;
+    }
+    const mergedItems = [...parseOrderItems(existing.items), ...parseOrderItems(o.items)];
+    byResi.set(resi, {
+      ...existing,
+      items: mergedItems,
+      weight_kg: Number(existing.weight_kg || 0) + Number(o.weight_kg || 0),
+      pcs_count: Number(existing.pcs_count || 0) + Number(o.pcs_count || 0)
+    });
+  }
+  return [...byResi.values()];
+};
+
+export const formatEstSelesai = (order: any) => {
+  const due = slaDueMs(order);
+  const d = new Date(due);
+  if (isNaN(d.getTime())) return '—';
+  return d.toLocaleString('id-ID', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+};
+
+export const formatTrxId = (order: any) => {
+  const raw = String(order?.receipt_number || order?.order_number || '').trim();
+  if (raw) return raw;
+  const tail = String(order?.id || '').replace(/-/g, '').slice(-6).toUpperCase();
+  return tail ? `TRX-${tail}` : 'TRX------';
+};
+
 const searchHaystack = (order: any) => {
   const items = parseOrderItems(order?.items);
   const itemNames = items.map((it) => it?.name || it?.service_type || '').join(' ');

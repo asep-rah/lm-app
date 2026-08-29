@@ -11,6 +11,14 @@ import { isVoidTransaction } from '@/lib/voidTx';
 import { canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
 import { staffRolesForForm } from '@/lib/staffRoles';
 import OutletCsatPanel from '@/components/OutletCsatPanel';
+import { toast } from '@/lib/toast';
+import {
+  SUPERVISOR_DECISIONS,
+  complaintStepOf,
+  isComplaintIssue,
+  issueDescriptionPlain,
+  supervisorDecide
+} from '@/lib/csCare';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -96,6 +104,8 @@ export default function Dashboard() {
   const [txWorkLogs, setTxWorkLogs] = useState<any[]>([]);
 // State & Logic To-Do List Kendala Outlet (Real-Time)
 const [outletIssues, setOutletIssues] = useState<any[]>([]);
+const [supNote, setSupNote] = useState('');
+const [supBusy, setSupBusy] = useState<string | null>(null);
 
 const fetchOutletIssues = async () => {
   const { data } = await supabase
@@ -147,6 +157,27 @@ const handleUpdateIssueStatus = async (id: string, newStatus: string) => {
 
   const { error } = await supabase.from('outlet_issues').update(updates).eq('id', id);
   if (!error) fetchOutletIssues();
+};
+
+const handleSupervisorDecision = async (issue: any, decision: string) => {
+  setSupBusy(`${issue.id}-${decision}`);
+  try {
+    const { error } = await supervisorDecide({
+      issue,
+      decision,
+      note: supNote,
+      agentName: currentUserName || 'Supervisor'
+    });
+    if (error) {
+      toast(error.message, 'err');
+      return;
+    }
+    toast(`Keputusan ${SUPERVISOR_DECISIONS.find((d) => d.value === decision)?.label} dikirim ke CS Care.`, 'ok');
+    setSupNote('');
+    fetchOutletIssues();
+  } finally {
+    setSupBusy(null);
+  }
 };
 // Fungsi Supervisor Menyetujui Pengajuan Pengeluaran
 const handleApproveExpense = async (expenseId: string) => {
@@ -705,27 +736,65 @@ setDeleteRequests(delData);
               </div>
 
               <p className="text-slate-700 font-medium bg-white p-3 rounded-xl border border-slate-200 leading-relaxed">
-                {issue.description}
+                {isComplaintIssue(issue) ? issueDescriptionPlain(issue) : issue.description}
               </p>
+              {isComplaintIssue(issue) && issue.findings && (
+                <p className="text-[11px] text-indigo-800 bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-2">
+                  Temuan CS Care: {issue.findings}
+                  {issue.cctv_notes ? ` · CCTV: ${issue.cctv_notes}` : ''}
+                </p>
+              )}
 
               <div className="flex justify-between items-center pt-2 border-t border-slate-200 text-[10px]">
                 <span className="text-slate-400 font-bold">Pelapor: {issue.reporter_name} • {new Date(issue.created_at).toLocaleString('id-ID')}</span>
                 <div className="flex gap-2">
-                  {issue.status !== 'Sedang Diproses' && issue.status !== 'Selesai' && (
-                    <button
-                      onClick={() => handleUpdateIssueStatus(issue.id, 'Sedang Diproses')}
-                      className="bg-amber-500 hover:bg-amber-600 text-white font-bold px-3 py-1.5 rounded-lg shadow-sm transition"
-                    >
-                      Proses Task
-                    </button>
-                  )}
-                  {issue.status !== 'Selesai' && (
-                    <button
-                      onClick={() => handleUpdateIssueStatus(issue.id, 'Selesai')}
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1.5 rounded-lg shadow-sm transition"
-                    >
-                      ✓ Tandai Selesai
-                    </button>
+                  {isComplaintIssue(issue) && complaintStepOf(issue) === 'pending_supervisor' ? (
+                    <div className="flex flex-col items-end gap-1.5">
+                      <input
+                        value={supNote}
+                        onChange={(e) => setSupNote(e.target.value)}
+                        placeholder="Catatan (opsional)"
+                        className="border border-slate-200 rounded-lg px-2 py-1 text-[10px] w-44"
+                      />
+                      <div className="flex gap-1">
+                        {SUPERVISOR_DECISIONS.map((d) => (
+                          <button
+                            key={d.value}
+                            type="button"
+                            disabled={supBusy === `${issue.id}-${d.value}`}
+                            onClick={() => handleSupervisorDecision(issue, d.value)}
+                            className={`font-bold px-2.5 py-1.5 rounded-lg text-white ${
+                              d.value === 'reject' ? 'bg-rose-600' : d.value === 'cash' ? 'bg-emerald-600' : 'bg-indigo-600'
+                            }`}
+                          >
+                            {d.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : isComplaintIssue(issue) ? (
+                    <span className="text-[10px] font-bold text-slate-500">
+                      {complaintStepOf(issue) === 'resolved' ? 'Selesai' : 'Diproses CS Care'}
+                    </span>
+                  ) : (
+                    <>
+                      {issue.status !== 'Sedang Diproses' && issue.status !== 'Selesai' && (
+                        <button
+                          onClick={() => handleUpdateIssueStatus(issue.id, 'Sedang Diproses')}
+                          className="bg-amber-500 hover:bg-amber-600 text-white font-bold px-3 py-1.5 rounded-lg shadow-sm transition"
+                        >
+                          Proses Task
+                        </button>
+                      )}
+                      {issue.status !== 'Selesai' && (
+                        <button
+                          onClick={() => handleUpdateIssueStatus(issue.id, 'Selesai')}
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1.5 rounded-lg shadow-sm transition"
+                        >
+                          ✓ Tandai Selesai
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
               </div>

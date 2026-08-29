@@ -7,10 +7,10 @@ import {
   CheckCircle2,
   Clock,
   Droplets,
-  Flame,
   Minus,
   Plus,
-  Scissors,
+  Search,
+  Shirt,
   ShoppingBag,
   Store,
   Truck,
@@ -153,7 +153,7 @@ export const TRACKER_STAGES: { label: string; icon: LucideIcon; match: string[] 
   { label: 'Jemput', icon: Truck, match: ['baru', 'menunggu', 'request', 'jemput', 'menuju', 'dibawa'] },
   { label: 'Diterima', icon: Store, match: ['diterima', 'tiba', 'kasir'] },
   { label: 'Proses', icon: Droplets, match: ['cuci', 'mencuci', 'sortir', 'ering'] },
-  { label: 'Setrika', icon: Flame, match: ['setrika', 'gosok', 'pack', 'emas'] },
+  { label: 'Setrika', icon: Shirt, match: ['setrika', 'gosok', 'pack', 'emas'] },
   { label: 'Siap', icon: Box, match: ['siap'] },
   { label: 'Selesai', icon: CheckCircle2, match: ['selesai', 'terkirim', 'delivered', 'diambil'] }
 ];
@@ -161,10 +161,10 @@ export const TRACKER_STAGES: { label: string; icon: LucideIcon; match: string[] 
 export const TIMELINE_ICONS: Record<string, LucideIcon> = {
   jemput: Truck,
   outlet: Store,
-  sortir: Scissors,
+  sortir: Search,
   cuci: Droplets,
   kering: Wind,
-  setrika: Flame,
+  setrika: Shirt,
   packing: ShoppingBag,
   siap: Box,
   selesai: CheckCircle2
