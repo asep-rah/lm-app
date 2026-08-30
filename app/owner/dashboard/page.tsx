@@ -5,6 +5,7 @@ import Link from 'next/link';
 import StageTimeline from '@/components/StageTimeline';
 import OwnerExecNav from '@/components/OwnerExecNav';
 import FinanceAlertListener from '@/components/FinanceAlertListener';
+import WasherFraudAlertListener from '@/components/WasherFraudAlertListener';
 import AICopilotCard from '@/components/analytics/AICopilotCard';
 import { isVoidTransaction } from '@/lib/voidTx';
 import { canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
@@ -721,6 +722,7 @@ setDeleteRequests(delData);
         </div>
 
         {isOwnerRole(currentUserRole) && <FinanceAlertListener />}
+        {(isOwnerRole(currentUserRole) || currentUserRole === 'supervisor') && <WasherFraudAlertListener />}
 
         {activeTab === 'pnl' && (
           <div className="space-y-4 md:space-y-6">

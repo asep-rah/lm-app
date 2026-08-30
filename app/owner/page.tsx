@@ -11,6 +11,7 @@ import { canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from
 import { isMultiOutletRole, staffRolesForForm } from '@/lib/staffRoles';
 import OwnerExecNav from '@/components/OwnerExecNav';
 import FinanceAlertListener from '@/components/FinanceAlertListener';
+import WasherFraudAlertListener from '@/components/WasherFraudAlertListener';
 import AICopilotCard from '@/components/analytics/AICopilotCard';
 
 const supabase = createClient(
@@ -850,6 +851,7 @@ export default function Dashboard() {
         </div>
 
         {isOwnerRole(currentUserRole) && <FinanceAlertListener />}
+        {(isOwnerRole(currentUserRole) || currentUserRole === 'supervisor') && <WasherFraudAlertListener />}
 
         {/* TAB 1: PNL & LEADERBOARD RANKING */}
         {activeTab === 'pnl' && (

@@ -21,6 +21,7 @@ import { prAmount, prQty } from '@/lib/cmsRequisition';
 import { toast } from '@/lib/toast';
 import { updateWithFallback } from '@/lib/safeWrite';
 import AICopilotCard from '@/components/analytics/AICopilotCard';
+import WasherFraudAlertListener from '@/components/WasherFraudAlertListener';
 import { parseIdList } from '@/lib/aiCopilotAnalytics';
 import {
   SUPERVISOR_DECISIONS,
@@ -278,6 +279,7 @@ export default function StaffWorkspace() {
       </header>
 
       <main className="max-w-6xl mx-auto px-4 py-5 space-y-4">
+        {role === 'supervisor' && <WasherFraudAlertListener />}
         {(role === 'supervisor' || role === 'finance' || role === 'head_finance' || role === 'head' || role === 'head_management') && (
           <AICopilotCard
             scope="supervisor"

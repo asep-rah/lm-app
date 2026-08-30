@@ -25,6 +25,14 @@ import { dispatchThirdPartyDelivery, isThirdPartyDelivery } from '@/lib/thirdPar
 import ThirdPartyDispatchForm from '@/components/ThirdPartyDispatchForm';
 import ThirdPartyDeliveryCard from '@/components/ThirdPartyDeliveryCard';
 import CashDepositQrisPanel from '@/components/CashDepositQrisPanel';
+import WasherAssignPanel from '@/components/pos/WasherAssignPanel';
+import { buildBagStickers, printBagStickers } from '@/utils/thermalPrinter';
+import {
+  createWasherCycles,
+  hasOpenMachineCycles,
+  inferMachineMode,
+  type MachineMode
+} from '@/lib/lgThinq';
 import {
   CASHIER_SESSION_MISSING,
   cashierIdForColumn,
@@ -615,7 +623,9 @@ const handleApplyLoan = async (e: React.FormEvent) => {
   const [pcsCount, setPcsCount] = useState('');
 
   // STATE KERANJANG MULTI-ITEM BARU
-  const [cartItems, setCartItems] = useState<Array<{ id: string; name: string; type: 'kg' | 'pcs'; basePrice: number; price: number; qty: number; note: string }>>([]);
+  const [cartItems, setCartItems] = useState<
+    Array<{ id: string; name: string; type: 'kg' | 'pcs'; basePrice: number; price: number; qty: number; note: string; machineMode?: MachineMode }>
+  >([]);
   const [serviceQuery, setServiceQuery] = useState('');
   const [serviceCat, setServiceCat] = useState<'all' | 'kg' | 'pcs'>('all');
   const [selectedServiceInput, setSelectedServiceInput] = useState('');
@@ -660,7 +670,12 @@ const handleApplyLoan = async (e: React.FormEvent) => {
   const [stageProofNotes, setStageProofNotes] = useState('');
   const [queueSearch, setQueueSearch] = useState('');
   const [completedPickups, setCompletedPickups] = useState<any[]>([]);
-  const [printMode, setPrintMode] = useState<'receipt'|'payslip'>('receipt');
+  const [printMode, setPrintMode] = useState<'receipt' | 'payslip' | 'bag-sticker'>('receipt');
+  const [bagStickers, setBagStickers] = useState<
+    Array<{ receipt: string; bagIndex: number; totalBags: number; customerName: string; service: string; machineTag: string }>
+  >([]);
+  const [splitPerBag, setSplitPerBag] = useState(false);
+  const [defaultMachineMode, setDefaultMachineMode] = useState<MachineMode>('LG_15');
 
   // MODAL DETAIL TRANSAKSI & FORM EDIT KASIR
   const [selectedTxDetail, setSelectedTxDetail] = useState<any>(null);
@@ -763,7 +778,8 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       basePrice: basePrice,
       price: finalUnitPrice,
       qty: qty,
-      note: [inputItemNote, pcsNote].filter(Boolean).join(' · ')
+      note: [inputItemNote, pcsNote].filter(Boolean).join(' · '),
+      machineMode: inferMachineMode({ name: targetService, machineMode: defaultMachineMode })
     };
 
     setCartItems(prev => [...prev, newItem]);
@@ -1386,7 +1402,9 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       discount_amount: calculatedDiscount,
       notes: combinedNotes,
       amount: totalPay,
-      items: cartItems.length > 0 ? cartItems : [{ name: primaryServiceLabel, qty: totalPcsSum || 1, weight: totalKgSum || 0 }],
+      items: cartItems.length > 0
+        ? cartItems.map((it) => ({ ...it, machineMode: it.machineMode || inferMachineMode(it), splitPerBag }))
+        : [{ name: primaryServiceLabel, qty: totalPcsSum || 1, weight: totalKgSum || 0, machineMode: defaultMachineMode, splitPerBag }],
       payment_method: finalPaymentMethodLabel,
       status: isNonCashVerifyMethod(finalPaymentMethodLabel) ? PENDING_PAY_STATUS : 'Diterima',
       by_sortir: employeeName
@@ -1453,6 +1471,27 @@ const handleApplyLoan = async (e: React.FormEvent) => {
         remainingDeposit: nextDepositBal != null ? nextDepositBal : (depositDeductionAmount > 0 ? customerDeposit : null), 
         created_at: newTx.created_at 
       });
+      const cycleItems = (orderData.items as any[]) || [];
+      await createWasherCycles({
+        db: supabase as any,
+        orderId: newTx.id,
+        outletId: selectedOutlet,
+        items: cycleItems,
+        splitPerBag,
+        bagCount: Number(bagCount) || cycleItems.length || 1,
+        startedBy: employeeId
+      });
+      const stickers = buildBagStickers(
+        newTx.receipt_number || generatedResi,
+        Number(bagCount) || cycleItems.length || 1,
+        cycleItems.map((it: any) => ({
+          name: it.name,
+          machineMode: it.machineMode,
+          machineTag: it.machineMode
+        })),
+        { receipt: newTx.receipt_number || generatedResi, customerName: customerName || 'Pelanggan' }
+      );
+      setBagStickers(stickers);
       
       setCreatedTxSuccess({
         ...newTx,
@@ -1472,7 +1511,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     }
       setCustomerOrder(null);
       clearPickupPrefill();
-      setAmount(''); setCustomerName(''); setCustomerPhone(''); setWeightKg(''); setPcsCount(''); setNotes(''); setDiscountValue(''); setCartItems([]); setDeliveryFee(orderType === 'Online' ? '20000' : '');
+      setAmount(''); setCustomerName(''); setCustomerPhone(''); setWeightKg(''); setPcsCount(''); setNotes(''); setDiscountValue(''); setCartItems([]); setSplitPerBag(false); setDeliveryFee(orderType === 'Online' ? '20000' : '');
       refreshData();
     } else alert('❌ Gagal: ' + error?.message);
     setIsSubmitting(false);
@@ -1621,6 +1660,15 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
   if (isPaymentLocked(order)) {
     alert('⏳ Pembayaran belum dikonfirmasi CS. Produksi terkunci sampai pembayaran lunas.');
     return;
+  }
+
+  const nextStage = stageKeyOf(targetStatus);
+  if (nextStage === 'kering' || nextStage === 'setrika' || nextStage === 'packing' || nextStage === 'siap') {
+    const { data: cycles } = await supabase.from('washer_cycle_logs').select('status').eq('order_id', order.id);
+    if (hasOpenMachineCycles(cycles || [])) {
+      alert('⏳ Order tetap IN_PROGRESS: masih ada batch mesin LG yang RUNNING. Tunggu semua siklus COMPLETED.');
+      return;
+    }
   }
 
   const targetKey = stageKeyOf(targetStatus);
@@ -2292,6 +2340,19 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
   const totalTakeHomePay = Math.max(0, baseSalaryUsed + tenureBonusAmount + calcStats.membershipBonus - empLoansDeduction - empPenaltiesDeduction);
 
   const handlePrintReceiptAuto = () => { setPrintMode('receipt'); setTimeout(() => window.print(), 100); };
+  const handlePrintBagStickersNow = async (tx?: any) => {
+    const src = tx || lastOrderInfo || createdTxSuccess || selectedTxDetail;
+    if (!src) return;
+    const items = Array.isArray(src.items) ? src.items : Array.isArray(src.cartItems) ? src.cartItems : [];
+    const n = Math.max(1, Number(src.bag_count) || Number(bagCount) || items.length || bagStickers.length || 1);
+    const stickers = await printBagStickers(src.id || src.receipt_number, n, items, {
+      receipt: src.receipt_number,
+      customerName: src.customer_name || editCustomerName || customerName,
+      storeName: src.outletName || outletName
+    });
+    setBagStickers(stickers);
+    setPrintMode('bag-sticker');
+  };
   const handlePrintPayslip = () => { setPrintMode('payslip'); setTimeout(() => window.print(), 100); };
 
   const handlePrintReceiptFromTx = (tx: any) => {
@@ -2389,6 +2450,19 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
               <div className="whitespace-pre-line">{receiptTerms}</div>
             </div>
             <div className="text-center text-[8px] mt-2 font-bold">Cek Cucian: lm-coral.vercel.app/track</div>
+          </div>
+        )}
+
+        {printMode === 'bag-sticker' && bagStickers.length > 0 && (
+          <div className="text-black bg-white">
+            {bagStickers.map((s) => (
+              <div key={`${s.receipt}-${s.bagIndex}`} className="p-2 w-[58mm] text-[10px] font-mono leading-tight mx-auto break-after-page border-b border-dashed border-black">
+                <div className="text-center font-black text-[13px]">[{s.receipt}]</div>
+                <div className="text-center font-bold mt-1">KANTONG {s.bagIndex} DARI {s.totalBags}</div>
+                <div className="mt-2">{s.customerName}</div>
+                <div className="font-bold">{s.service} / {s.machineTag}</div>
+              </div>
+            ))}
           </div>
         )}
 
@@ -2577,6 +2651,13 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
                 🖨️ CETAK STRUK / NOTA
               </button>
               <button
+                type="button"
+                onClick={() => handlePrintBagStickersNow(createdTxSuccess)}
+                className="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-md transition"
+              >
+                🏷️ Cetak Stiker Kantong
+              </button>
+              <button
                 onClick={() => setCreatedTxSuccess(null)}
                 className="w-full bg-slate-200 text-slate-700 font-bold py-2.5 rounded-xl text-xs hover:bg-slate-300 transition"
               >
@@ -2759,6 +2840,13 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
                   🖨️ Cetak Struk
                 </button>
               </div>
+              <button
+                type="button"
+                onClick={() => handlePrintBagStickersNow({ ...selectedTxDetail, customer_name: editCustomerName })}
+                className="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2.5 rounded-xl text-xs shadow transition"
+              >
+                🏷️ Cetak Ulang Stiker Kantong
+              </button>
 
               <button
                 onClick={() => setSelectedTxDetail(null)}
@@ -3145,6 +3233,17 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
           ) : (
             <p className="text-xs text-slate-400 italic py-6 text-center">Keranjang kosong — pilih layanan di kiri.</p>
           )}
+
+          <WasherAssignPanel
+            items={cartItems}
+            splitPerBag={splitPerBag}
+            onSplitChange={setSplitPerBag}
+            bagCount={bagCount}
+            onChangeItem={(idx, mode) => {
+              setDefaultMachineMode(mode);
+              setCartItems((prev) => prev.map((it, i) => (i === idx ? { ...it, machineMode: mode } : it)));
+            }}
+          />
 
           {orderType === 'Online' && (
             <input
