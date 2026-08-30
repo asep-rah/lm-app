@@ -176,7 +176,8 @@ export const mayarWebhookRefs = (body: any) => {
   ]
     .map((v) => String(v || ''))
     .join(' ');
-  const resi = (text.match(/TRX-[A-Z0-9-]+/i) || text.match(/DEP-[A-Z0-9-]+/i) || [])[0] || '';
+  const resi =
+    (text.match(/SETOR-[A-Z0-9-]+/i) || text.match(/TRX-[A-Z0-9-]+/i) || text.match(/DEP-[A-Z0-9-]+/i) || [])[0] || '';
   return {
     paymentId: String(data.id || data.transactionId || data.paymentId || body?.id || '').trim(),
     receipt: resi,
@@ -200,6 +201,8 @@ export async function requestMayarInvoice(input: MayarChargeInput): Promise<Maya
 export async function simulateMayarAutoPay(opts: {
   transactionId?: string;
   topupId?: string;
+  cashDepositId?: string;
+  paymentId?: string;
   receipt?: string;
   amount?: number;
   customerPhone?: string;

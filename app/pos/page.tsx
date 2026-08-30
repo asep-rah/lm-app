@@ -24,6 +24,7 @@ import { toast } from '@/lib/toast';
 import { dispatchThirdPartyDelivery, isThirdPartyDelivery } from '@/lib/thirdPartyDelivery';
 import ThirdPartyDispatchForm from '@/components/ThirdPartyDispatchForm';
 import ThirdPartyDeliveryCard from '@/components/ThirdPartyDeliveryCard';
+import CashDepositQrisPanel from '@/components/CashDepositQrisPanel';
 import {
   classifyQueueOrder,
   coalesceProsesCards,
@@ -3348,14 +3349,22 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
           <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-xl flex justify-between items-center mb-4">
             <div>
               <h4 className="font-bold text-xs text-emerald-900">📲 Setoran Cash Outlet via Wallet/QRIS</h4>
-              <p className="text-[10px] text-emerald-700">Top-up cash via Indomaret/Alfamart/m-Banking lalu setor ke QRIS Meja Kasir</p>
+              <p className="text-[10px] text-emerald-700">Generate QRIS Mayar sebesar net tunai, scan dari e-wallet, otomatis BALANCED.</p>
             </div>
-            <button
-              onClick={() => setShowDepositModal(true)}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-2 rounded-xl text-xs shadow transition whitespace-nowrap"
-            >
-              Setor Sekarang
-            </button>
+            <div className="flex gap-2">
+              <Link
+                href="/pos/closing"
+                className="bg-white border border-emerald-300 text-emerald-800 font-bold px-3 py-2 rounded-xl text-xs shadow-sm whitespace-nowrap"
+              >
+                Closing QRIS
+              </Link>
+              <button
+                onClick={() => setShowDepositModal(true)}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-2 rounded-xl text-xs shadow transition whitespace-nowrap"
+              >
+                Setor Sekarang
+              </button>
+            </div>
           </div>
               <RequisitionForm
                 selectedOutlet={selectedOutlet}
@@ -3491,11 +3500,18 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
                 />
               </div>
 
+              <CashDepositQrisPanel
+                outletId={selectedOutlet}
+                kasirId={employeeId}
+                physicalCash={parseFloat(depositAmount) || 0}
+                adminFee={parseFloat(adminFee) || 0}
+              />
+
               {/* Panduan Singkat */}
               <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl text-[10px] text-amber-900 space-y-1">
                 <p className="font-bold">📍 Langkah Akhir Kasir:</p>
-                <p>1. Lakukan Scan QRIS Meja Kasir menggunakan e-Wallet / M-Banking Anda sejumlah nominal setoran.</p>
-                <p>2. Tekan tombol <b>Kirim Setoran</b> di bawah untuk diteruskan ke tim Finance.</p>
+                <p>1. Isi fisik kas + admin, lalu tekan <b>Generate QRIS Setoran Mayar</b>.</p>
+                <p>2. Scan QR dari e-wallet. Webhook Mayar menandai setoran <b>BALANCED</b> otomatis.</p>
               </div>
             </div>
 
@@ -3574,6 +3590,22 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
                 />
               </div>
 
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">Biaya Admin Setoran (Rp)</label>
+                <input
+                  type="number"
+                  placeholder="0"
+                  value={adminFee}
+                  onChange={(e) => setAdminFee(e.target.value)}
+                  className="w-full border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 focus:outline-none"
+                />
+              </div>
+              <CashDepositQrisPanel
+                outletId={selectedOutlet}
+                kasirId={employeeId}
+                physicalCash={parseFloat(physicalCashCount) || 0}
+                adminFee={parseFloat(adminFee) || 0}
+              />
               <div>
                 <label className="text-xs font-bold text-slate-700 block mb-1">Catatan Shift / Serah Terima (Opsional)</label>
                 <input

@@ -69,6 +69,22 @@ export default function FinanceAlertListener({
         );
         loadOpen();
       })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'cash_deposits' }, (payload) => {
+        const row = payload.new as { status?: string; status_qris?: string; qr_payment_status?: string; amount_cash?: number; net_deposit_amount?: number; outlet_id?: string };
+        const st = String(row?.status || '').toUpperCase();
+        const qris = String(row?.status_qris || row?.qr_payment_status || '').toLowerCase();
+        const nowBalanced = st === 'BALANCED' || qris === 'success';
+        const was = payload.old as { status?: string } | null;
+        if (nowBalanced && String(was?.status || '').toUpperCase() !== 'BALANCED') {
+          const name = names[String(row.outlet_id || '')] || 'Outlet';
+          notifyOps(
+            'payment',
+            `Setoran kasir ${name} terverifikasi otomatis · Rp ${Number(row.net_deposit_amount || row.amount_cash || 0).toLocaleString('id-ID')} (BALANCED)`,
+            true,
+            openBoard ? { onClick: openBoard } : undefined
+          );
+        }
+      })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_reconciliations' }, (payload) => {
         const row = payload.new as DailyReconRow;
         const prev = (payload.old as { status?: string } | null)?.status;

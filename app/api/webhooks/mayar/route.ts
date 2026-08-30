@@ -4,6 +4,7 @@ import { insertChatMessage } from '@/lib/csChat';
 import { completePaymentVerifyTasks, gatewayPaidAttempts } from '@/lib/paymentVerify';
 import { isMayarPaidEvent, mayarWebhookRefs } from '@/lib/mayar';
 import { creditDepositTopup, depositPackageOf, findDepositTopup } from '@/lib/depositTopup';
+import { findCashDeposit, settleCashDeposit } from '@/lib/cashDepositQris';
 
 export const dynamic = 'force-dynamic';
 
@@ -95,6 +96,23 @@ export async function POST(req: Request) {
       const { error } = await applyPaid(tx, body.simulate ? 'Mayar Mock' : 'Mayar QRIS');
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
       return NextResponse.json({ status: 'success', transactionId: tx.id, is_paid: true });
+    }
+
+    const cashDeposit = await findCashDeposit(supabase, {
+      depositId: body.cashDepositId || body?.data?.cashDepositId,
+      paymentId: refs.paymentId,
+      receipt: refs.receipt
+    });
+    if (cashDeposit) {
+      const { error, already } = await settleCashDeposit(supabase, cashDeposit);
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({
+        status: 'success',
+        type: 'cash_deposit',
+        cashDepositId: cashDeposit.id,
+        balanced: true,
+        already: !!already
+      });
     }
 
     const topup = await findDepositTopup(supabase, {

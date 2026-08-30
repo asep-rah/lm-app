@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { simulateMayarAutoPay } from '@/lib/mayar';
 
 export default function MockMayarPayPage() {
-  const [meta, setMeta] = useState({ paymentId: '', resi: '-', amount: 0, tx: '', topup: '', phone: '', href: '' });
+  const [meta, setMeta] = useState({ paymentId: '', resi: '-', amount: 0, tx: '', topup: '', cashDeposit: '', phone: '', href: '' });
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [err, setErr] = useState('');
@@ -18,6 +18,7 @@ export default function MockMayarPayPage() {
       amount: Number(q.get('amount') || 0),
       tx: q.get('tx') || '',
       topup: q.get('topup') || '',
+      cashDeposit: q.get('cashDeposit') || '',
       phone: q.get('phone') || '',
       href: window.location.href
     });
@@ -28,7 +29,7 @@ export default function MockMayarPayPage() {
     : '';
 
   const pay = async () => {
-    if (!meta.tx && !meta.topup) {
+    if (!meta.tx && !meta.topup && !meta.cashDeposit) {
       setErr('Transaksi tidak tertaut. Gunakan tombol Test Auto-Payment di CS/POS.');
       return;
     }
@@ -38,6 +39,7 @@ export default function MockMayarPayPage() {
       await simulateMayarAutoPay({
         transactionId: meta.tx || undefined,
         topupId: meta.topup || undefined,
+        cashDepositId: meta.cashDeposit || undefined,
         receipt: meta.resi,
         amount: meta.amount,
         customerPhone: meta.phone || undefined
