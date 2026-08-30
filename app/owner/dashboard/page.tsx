@@ -5,6 +5,7 @@ import Link from 'next/link';
 import StageTimeline from '@/components/StageTimeline';
 import OwnerExecNav from '@/components/OwnerExecNav';
 import FinanceAlertListener from '@/components/FinanceAlertListener';
+import AICopilotCard from '@/components/analytics/AICopilotCard';
 import { isVoidTransaction } from '@/lib/voidTx';
 import { canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
 import { staffRolesForForm } from '@/lib/staffRoles';
@@ -769,6 +770,12 @@ setDeleteRequests(delData);
                 <p className="mt-2 pt-2 border-t text-[11px] font-semibold text-slate-500">OPEX Rp {stats.expense.toLocaleString('id-ID')}</p>
               </div>
             </div>
+
+            <AICopilotCard
+              scope="owner"
+              outletId={selectedOutlet}
+              period={period as 'THIS_MONTH' | 'LAST_MONTH' | 'THIS_YEAR' | 'ALL'}
+            />
 
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 md:gap-6 pt-2">
               <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">

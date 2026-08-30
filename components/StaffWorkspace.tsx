@@ -20,6 +20,8 @@ import RequisitionForm from '@/components/RequisitionForm';
 import { prAmount, prQty } from '@/lib/cmsRequisition';
 import { toast } from '@/lib/toast';
 import { updateWithFallback } from '@/lib/safeWrite';
+import AICopilotCard from '@/components/analytics/AICopilotCard';
+import { parseIdList } from '@/lib/aiCopilotAnalytics';
 import {
   SUPERVISOR_DECISIONS,
   complaintStepOf,
@@ -44,6 +46,15 @@ const priorityOf = (task: any) => {
 export default function StaffWorkspace() {
   const session = useMemo(() => getStaffSession(), []);
   const role = session.role;
+  const supervisorAccessOutlets = useMemo(() => {
+    try {
+      const raw = localStorage.getItem('laundry_owner_user') || localStorage.getItem('laundry_user');
+      const u = raw ? JSON.parse(raw) : {};
+      return parseIdList(u.access_outlets);
+    } catch {
+      return [];
+    }
+  }, []);
   const aliases = inboxRolesFor(role);
 
   const [tasks, setTasks] = useState<any[]>([]);
@@ -267,6 +278,15 @@ export default function StaffWorkspace() {
       </header>
 
       <main className="max-w-6xl mx-auto px-4 py-5 space-y-4">
+        {(role === 'supervisor' || role === 'finance' || role === 'head_finance' || role === 'head' || role === 'head_management') && (
+          <AICopilotCard
+            scope="supervisor"
+            outletId={session.outletId || 'ALL'}
+            period="THIS_MONTH"
+            supervisorName={session.name}
+            accessOutlets={supervisorAccessOutlets}
+          />
+        )}
         {(role === 'admin_ops' || role === 'admin') && (
           <section className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
             <RequisitionForm employeeName={session.name} role={role} selectedOutlet={session.outletId || undefined} />

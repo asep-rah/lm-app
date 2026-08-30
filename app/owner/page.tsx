@@ -11,6 +11,7 @@ import { canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from
 import { isMultiOutletRole, staffRolesForForm } from '@/lib/staffRoles';
 import OwnerExecNav from '@/components/OwnerExecNav';
 import FinanceAlertListener from '@/components/FinanceAlertListener';
+import AICopilotCard from '@/components/analytics/AICopilotCard';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -892,6 +893,12 @@ export default function Dashboard() {
           />
         </div>
         )}
+
+            <AICopilotCard
+              scope="owner"
+              outletId={selectedOutlet}
+              period={period as 'THIS_MONTH' | 'LAST_MONTH' | 'THIS_YEAR' | 'ALL'}
+            />
 
             {/* TABEL LEADERBOARD SUPERVISOR & RANKING OUTLET */}
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 md:gap-6 pt-2">
