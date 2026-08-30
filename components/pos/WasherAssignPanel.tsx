@@ -4,16 +4,21 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import {
   BEDCOVER_DOUBLE_BADGE,
+  BEDCOVER_ONE_PCS_BADGE,
   OVER_LIMIT_BADGE,
   OP_LIMIT_LG15_KG,
   OP_LIMIT_LG24_KG,
   PARALLEL_WASH_NOTICE,
+  applyCycleSlot,
   assignmentBadge,
   balanceWasherAssignments,
   eligibleWashersForItem,
   ensureDefaultWashers,
   exceedsOpLimit,
+  expandWashSlots,
   isBedcoverDouble,
+  isBedcoverItem,
+  isBedcoverSingle,
   isLargeWasher,
   itemWeightKg,
   modeFromCapacity,
@@ -41,7 +46,12 @@ export default function WasherAssignPanel({
   items: CartMachineItem[];
   onChangeItem: (
     index: number,
-    patch: { machineMode?: MachineMode; washerId?: string | null; washerName?: string | null }
+    patch: {
+      machineMode?: MachineMode | null;
+      washerId?: string | null;
+      washerName?: string | null;
+      cycleSlots?: CartMachineItem['cycleSlots'];
+    }
   ) => void;
   splitPerBag: boolean;
   onSplitChange: (next: boolean) => void;
@@ -50,12 +60,11 @@ export default function WasherAssignPanel({
 }) {
   const [washers, setWashers] = useState<WasherRow[]>([]);
   const [pendingCycles, setPendingCycles] = useState<any[]>([]);
-  const touched = useRef<Set<number>>(new Set());
+  const touched = useRef<Set<string>>(new Set());
   const appliedKey = useRef('');
 
-  const washRows = (items || [])
-    .map((item, index) => ({ item, index }))
-    .filter(({ item }) => needsWasherCycle(item));
+  const washSlots = useMemo(() => expandWashSlots(items || []), [items]);
+  const hasBedcover = (items || []).some((it) => needsWasherCycle(it) && isBedcoverItem(it));
 
   useEffect(() => {
     if (!outletId) return;
@@ -88,20 +97,22 @@ export default function WasherAssignPanel({
 
   const reservedIds = useMemo(() => {
     const ids: string[] = [];
-    washRows.forEach(({ item, index }) => {
-      if (touched.current.has(index) && item.washerId) ids.push(String(item.washerId));
+    washSlots.forEach((s) => {
+      if (touched.current.has(`${s.sourceIndex}:${s.slotIndex}`) && s.item.washerId) {
+        ids.push(String(s.item.washerId));
+      }
     });
     return ids;
-  }, [washRows]);
+  }, [washSlots]);
 
   const plan = useMemo(
     () => balanceWasherAssignments(items || [], washers, reservedIds, workloads),
     [items, washers, reservedIds, workloads]
   );
 
-  const planByIndex = useMemo(() => {
-    const map = new Map<number, (typeof plan)[number]>();
-    plan.forEach((p) => map.set(p.index, p));
+  const planBySlot = useMemo(() => {
+    const map = new Map<string, (typeof plan)[number]>();
+    plan.forEach((p) => map.set(`${p.index}:${p.slotIndex ?? 0}`, p));
     return map;
   }, [plan]);
 
@@ -112,36 +123,68 @@ export default function WasherAssignPanel({
     return ids.size > 1 || types.size > 1 || plan.some((p) => p.loadBalanced || p.queueDiverted);
   }, [plan]);
 
-  const anyOverLimit = washRows.some(({ item }) => exceedsOpLimit(itemWeightKg(item)));
+  const anyOverLimit = (items || []).some((item) => needsWasherCycle(item) && exceedsOpLimit(itemWeightKg(item)));
 
   useEffect(() => {
-    if (!washers.length || !washRows.length) return;
+    if (!washers.length || !washSlots.length) return;
     const key =
-      washRows.map(({ item, index }) => `${index}:${item.qty}:${item.name}:${item.weight || 0}`).join('|') +
+      washSlots
+        .map((s) => {
+          const src = items[s.sourceIndex];
+          return `${s.sourceIndex}:${s.slotIndex}:${src?.qty}:${src?.pcs}:${src?.name}`;
+        })
+        .join('|') +
       '|' +
       washers.map((w) => `${w.id}:${w.status}`).join(',') +
       '|' +
-      plan.map((p) => `${p.index}:${p.washer?.id || ''}:${p.loadBalanced ? 1 : 0}:${p.queueDiverted ? 1 : 0}`).join(',');
+      plan.map((p) => `${p.index}:${p.slotIndex}:${p.washer?.id || ''}:${p.loadBalanced ? 1 : 0}:${p.queueDiverted ? 1 : 0}`).join(',');
     if (appliedKey.current === key) return;
     appliedKey.current = key;
-    plan.forEach((p) => {
-      const item = items[p.index];
-      if (!item || !needsWasherCycle(item) || !p.washer) return;
-      if (isBedcoverDouble(item) && !isLargeWasher(p.washer)) return;
-      if (touched.current.has(p.index) && !(isBedcoverDouble(item) && !isLargeWasher(washers.find((w) => w.id === item.washerId)))) {
-        return;
-      }
-      if (item.washerId === p.washer.id) return;
-      onChangeItem(p.index, {
-        machineMode: p.machineMode,
-        washerId: p.washer.id,
-        washerName: washerDisplayName(p.washer, washers)
+
+    const bySource = new Map<number, typeof washSlots>();
+    washSlots.forEach((s) => {
+      const arr = bySource.get(s.sourceIndex) || [];
+      arr.push(s);
+      bySource.set(s.sourceIndex, arr);
+    });
+
+    bySource.forEach((slots, sourceIndex) => {
+      const source = items[sourceIndex];
+      if (!source || !needsWasherCycle(source)) return;
+      let next = source;
+      let changed = false;
+      slots.forEach((s) => {
+        const p = planBySlot.get(`${s.sourceIndex}:${s.slotIndex}`);
+        if (!p?.washer) return;
+        if (isBedcoverDouble(source) && !isLargeWasher(p.washer)) return;
+        const touchKey = `${s.sourceIndex}:${s.slotIndex}`;
+        const currentWasher = washers.find((w) => w.id === s.item.washerId);
+        if (
+          touched.current.has(touchKey) &&
+          !(isBedcoverDouble(source) && currentWasher && !isLargeWasher(currentWasher))
+        ) {
+          return;
+        }
+        if (s.item.washerId === p.washer.id && source.cycleSlots?.[s.slotIndex]?.washerId === p.washer.id) return;
+        next = { ...next, ...applyCycleSlot(next, s.slotIndex, {
+          machineMode: p.machineMode,
+          washerId: p.washer.id,
+          washerName: washerDisplayName(p.washer, washers)
+        }) };
+        changed = true;
+      });
+      if (!changed) return;
+      onChangeItem(sourceIndex, {
+        machineMode: next.machineMode,
+        washerId: next.washerId,
+        washerName: next.washerName,
+        cycleSlots: next.cycleSlots
       });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [washers, items, outletId, plan]);
+  }, [washers, items, outletId, plan, washSlots]);
 
-  if (!washRows.length) return null;
+  if (!washSlots.length) return null;
 
   return (
     <div className="rounded-2xl border border-cyan-100 bg-cyan-50/70 p-3 space-y-2.5">
@@ -151,6 +194,11 @@ export default function WasherAssignPanel({
           Batas operasional: LG 15kg maks {OP_LIMIT_LG15_KG}kg · LG 24kg maks {OP_LIMIT_LG24_KG}kg. Setrika / dry clean tidak tampil.
         </p>
       </div>
+      {hasBedcover && (
+        <div className="rounded-xl bg-rose-50 border border-rose-200 px-2.5 py-2 text-[11px] font-black text-rose-900 leading-snug">
+          {BEDCOVER_ONE_PCS_BADGE}
+        </div>
+      )}
       {parallelNotice && (
         <div className="rounded-xl bg-violet-50 border border-violet-200 px-2.5 py-2 text-[11px] font-black text-violet-900 leading-snug">
           {PARALLEL_WASH_NOTICE}
@@ -202,32 +250,41 @@ export default function WasherAssignPanel({
         </span>
       </label>
       <div className="space-y-1.5">
-        {washRows.map(({ item, index }, row) => {
-          const weight = itemWeightKg(item);
-          const over = exceedsOpLimit(weight);
-          const hard24 = isBedcoverDouble(item);
-          const assign = planByIndex.get(index);
-          const options = eligibleWashersForItem(item, washers);
+        {washSlots.map((slot, row) => {
+          const { item, sourceIndex, slotIndex } = slot;
+          const source = items[sourceIndex] || item;
+          const over = exceedsOpLimit(itemWeightKg(source));
+          const hard24 = isBedcoverDouble(source);
+          const onePiece = isBedcoverItem(source);
+          const assign = planBySlot.get(`${sourceIndex}:${slotIndex}`);
+          const options = eligibleWashersForItem(source, washers);
           const rowWasher = assign?.washer || options.find((w) => w.id === item.washerId) || null;
           const loadBalanced = Boolean(assign?.loadBalanced);
           const queueDiverted = Boolean(assign?.queueDiverted);
-          const parts = splitPayloadKg(weight, item);
+          const parts = splitPayloadKg(itemWeightKg(source), source);
           const selectedId = item.washerId && options.some((w) => w.id === item.washerId) ? item.washerId : '';
           return (
             <div
-              key={item.id || item.cart_item_id || item.service_name || item.name || index}
+              key={`${source.id || source.cart_item_id || source.name || sourceIndex}:${slotIndex}`}
               className="bg-white border border-cyan-100 rounded-xl px-2.5 py-2"
             >
               <p className="text-[11px] font-bold text-slate-800 leading-snug">{assignmentBadge(item, row + 1)}</p>
+              {onePiece && (
+                <p className="mt-1 text-[10px] font-black text-rose-800">{BEDCOVER_ONE_PCS_BADGE}</p>
+              )}
               {hard24 && (
                 <p className="mt-1 text-[10px] font-black text-indigo-800">{BEDCOVER_DOUBLE_BADGE}</p>
               )}
               {rowWasher && (
                 <p className="mt-1 text-[10px] font-black text-emerald-800">
-                  {suggestBadge(rowWasher, washers, { loadBalanced, queueDiverted })}
+                  {suggestBadge(rowWasher, washers, {
+                    loadBalanced,
+                    queueDiverted,
+                    onePieceCycle: onePiece && !loadBalanced && !queueDiverted
+                  })}
                 </p>
               )}
-              {over && (
+              {over && slotIndex === 0 && (
                 <p className="mt-1 text-[10px] font-black text-amber-800">
                   {OVER_LIMIT_BADGE}
                   {parts.length > 1
@@ -238,22 +295,21 @@ export default function WasherAssignPanel({
               <select
                 value={selectedId}
                 onChange={(e) => {
-                  if (!hard24) touched.current.add(index);
+                  if (!hard24) touched.current.add(`${sourceIndex}:${slotIndex}`);
                   const w = options.find((x) => x.id === e.target.value);
-                  if (!w) {
-                    onChangeItem(index, {
-                      machineMode: hard24 ? 'LG_24' : assign?.machineMode,
-                      washerId: null,
-                      washerName: null
-                    });
-                    return;
-                  }
-                  if (hard24 && !isLargeWasher(w)) return;
-                  onChangeItem(index, {
-                    machineMode: modeFromCapacity(w.capacity_kg),
-                    washerId: w.id,
-                    washerName: washerDisplayName(w, washers)
-                  });
+                  const patch = w
+                    ? {
+                        machineMode: hard24 ? ('LG_24' as MachineMode) : modeFromCapacity(w.capacity_kg),
+                        washerId: w.id,
+                        washerName: washerDisplayName(w, washers)
+                      }
+                    : {
+                        machineMode: hard24 ? ('LG_24' as MachineMode) : assign?.machineMode,
+                        washerId: null,
+                        washerName: null
+                      };
+                  if (w && hard24 && !isLargeWasher(w)) return;
+                  onChangeItem(sourceIndex, applyCycleSlot(source, slotIndex, patch));
                 }}
                 className="mt-1.5 w-full border border-slate-200 rounded-lg px-2 py-1.5 text-[10px] font-bold bg-slate-50"
               >
@@ -263,7 +319,8 @@ export default function WasherAssignPanel({
                     {washerOptionLabel(w, washers, {
                       recommended: rowWasher?.id === w.id && !loadBalanced && !queueDiverted,
                       loadBalanced: rowWasher?.id === w.id && loadBalanced,
-                      queueDiverted: rowWasher?.id === w.id && queueDiverted
+                      queueDiverted: rowWasher?.id === w.id && queueDiverted,
+                      onePieceCycle: onePiece && isBedcoverSingle(source) && washerCapKg(w) === 15
                     })}
                   </option>
                 ))}

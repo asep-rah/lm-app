@@ -36,6 +36,7 @@ import {
   hasIncompleteWashCycles,
   inferMachineMode,
   needsWasherCycle,
+  planWasherBatches,
   startVerifiedWasherCycle,
   washerDisplayName,
   type MachineMode
@@ -644,6 +645,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       machineMode?: MachineMode | null;
       washerId?: string | null;
       washerName?: string | null;
+      cycleSlots?: Array<{ washerId?: string | null; washerName?: string | null; machineMode?: MachineMode | null }>;
     }>
   >([]);
   const [serviceQuery, setServiceQuery] = useState('');
@@ -1618,14 +1620,18 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     if (!error) {
       const updatedTx = { ...selectedTxDetail, ...payload };
       setSelectedTxDetail(updatedTx);
-      for (let i = 0; i < editMachineItems.length; i += 1) {
-        const wid = editMachineItems[i]?.washerId;
+      const batches = planWasherBatches(editMachineItems, {
+        splitPerBag: editSplitPerBag,
+        bagCount: Number(editPcsCount) || undefined
+      });
+      for (const batch of batches) {
+        const wid = batch.washerId;
         if (!wid) continue;
         await supabase
           .from('washer_cycle_logs')
-          .update({ washer_id: wid, machine_tag: editMachineItems[i]?.machineMode === 'LG_24' ? 'LG-24KG' : 'LG-15KG' })
+          .update({ washer_id: wid, machine_tag: batch.machineTag })
           .eq('order_id', selectedTxDetail.id)
-          .eq('batch_index', i + 1)
+          .eq('batch_index', batch.batchIndex)
           .in('status', ['PENDING', 'QUEUED']);
       }
       alert(needsCustomerApproval ? '⚠️ Disimpan & dikirim ke CS!' : '✅ Transaksi diperbarui!');
