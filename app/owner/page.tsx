@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
 import StageTimeline from '@/components/StageTimeline';
+import WasherBatchTimeline from '@/components/pos/WasherBatchTimeline';
 import { isVoidTransaction } from '@/lib/voidTx';
 import MetricCard from '@/components/ui/MetricCard';
 import { SkeletonCard } from '@/components/ui/Skeleton';
@@ -106,6 +107,7 @@ export default function Dashboard() {
   const [fullYearHistory, setFullYearHistory] = useState<any[]>([]);
   const [selectedTxDetail, setSelectedTxDetail] = useState<any>(null);
   const [txWorkLogs, setTxWorkLogs] = useState<any[]>([]);
+  const [txWasherCycles, setTxWasherCycles] = useState<any[]>([]);
 
   // Nama crew per tahap. Kolom by_* hanya sebagian yang ada di schema, jadi
   // work_logs dipakai sebagai sumber cadangan. Kegagalan kueri sengaja
@@ -113,6 +115,7 @@ export default function Dashboard() {
   useEffect(() => {
     if (!selectedTxDetail?.id) {
       setTxWorkLogs([]);
+      setTxWasherCycles([]);
       return;
     }
 
@@ -130,6 +133,14 @@ export default function Dashboard() {
           return;
         }
         setTxWorkLogs(data || []);
+      });
+    supabase
+      .from('washer_cycle_logs')
+      .select('*')
+      .eq('order_id', selectedTxDetail.id)
+      .order('batch_index', { ascending: true })
+      .then(({ data }) => {
+        if (!cancelled) setTxWasherCycles(data || []);
       });
 
     return () => {
@@ -797,6 +808,7 @@ export default function Dashboard() {
               </div>
 
               {/* TIM CREW & WAKTU PENGERJAAN */}
+              <WasherBatchTimeline cycles={txWasherCycles} />
               <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
                 <StageTimeline
                   logs={txWorkLogs}

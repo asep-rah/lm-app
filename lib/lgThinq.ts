@@ -40,7 +40,12 @@ export type WasherBatch = {
   itemName: string;
   qty: number;
   washerId?: string | null;
+  batchTotal?: number;
 };
+
+/** Operational payload — not drum nameplate. */
+export const OP_LIMIT_LG15_KG = 7;
+export const OP_LIMIT_LG24_KG = 10;
 
 export type BagQrPayload = {
   orderId?: string;
@@ -72,12 +77,57 @@ export const machineTagOf = (mode?: MachineMode | null) => {
   return 'MANUAL';
 };
 
+export const itemWeightKg = (item: CartMachineItem) => {
+  if (item.type === 'kg' || Number(item.weight) > 0) return Number(item.qty ?? item.weight) || 0;
+  return Number(item.weight) || 0;
+};
+
+export const isBedcoverLike = (item?: CartMachineItem | null) => {
+  const name = [item?.name, item?.category, item?.service_type].map((v) => String(v || '').toLowerCase()).join(' ');
+  return /bedcover|selimut|sprei|gordyn|karpet/.test(name);
+};
+
 export const inferMachineMode = (item: CartMachineItem): MachineMode => {
   if (isNoMachineService(item)) return 'NO_MACHINE_REQUIRED';
   if (item.machineMode === 'LG_24' || item.machineMode === 'LG_15') return item.machineMode;
-  const name = String(item.name || item.category || '').toLowerCase();
-  if (/bedcover|selimut|sprei|gordyn|karpet/.test(name)) return 'LG_24';
+  return recommendModeForWeight(itemWeightKg(item), item);
+};
+
+export const recommendModeForWeight = (weightKg: number, item?: CartMachineItem | null): MachineMode => {
+  if (item && isNoMachineService(item)) return 'NO_MACHINE_REQUIRED';
+  const w = Number(weightKg) || 0;
+  if (isBedcoverLike(item) || (w > OP_LIMIT_LG15_KG && w <= OP_LIMIT_LG24_KG)) return 'LG_24';
+  if (w > OP_LIMIT_LG24_KG) return 'LG_24';
   return 'LG_15';
+};
+
+export const exceedsOpLimit = (weightKg: number) => Number(weightKg) > OP_LIMIT_LG24_KG;
+
+export const opLimitOf = (mode?: MachineMode | null) =>
+  mode === 'LG_24' ? OP_LIMIT_LG24_KG : OP_LIMIT_LG15_KG;
+
+export const splitPayloadKg = (
+  weightKg: number,
+  item?: CartMachineItem | null
+): Array<{ qty: number; machineMode: MachineMode }> => {
+  const w = Math.round((Number(weightKg) || 0) * 10) / 10;
+  const bed = isBedcoverLike(item);
+  if (w <= 0) return [{ qty: 0, machineMode: bed ? 'LG_24' : 'LG_15' }];
+  if (w <= OP_LIMIT_LG15_KG && !bed) return [{ qty: w, machineMode: 'LG_15' }];
+  if (w <= OP_LIMIT_LG24_KG) return [{ qty: w, machineMode: 'LG_24' }];
+  const parts: Array<{ qty: number; machineMode: MachineMode }> = [];
+  let remain = w;
+  while (remain > OP_LIMIT_LG24_KG) {
+    parts.push({ qty: OP_LIMIT_LG15_KG, machineMode: 'LG_15' });
+    remain = Math.round((remain - OP_LIMIT_LG15_KG) * 10) / 10;
+  }
+  if (remain > 0) {
+    parts.push({
+      qty: remain,
+      machineMode: remain > OP_LIMIT_LG15_KG || bed ? 'LG_24' : 'LG_15'
+    });
+  }
+  return parts;
 };
 
 export const assignmentBadge = (item: CartMachineItem, rowIndex: number) => {
@@ -102,12 +152,7 @@ export const assignmentBadge = (item: CartMachineItem, rowIndex: number) => {
   return `${name} - ${qtyLabel} (${ident})`;
 };
 
-export const capacityOf = (mode: MachineMode) => (mode === 'LG_24' ? 24 : mode === 'LG_15' ? 15 : 0);
-
-export const itemWeightKg = (item: CartMachineItem) => {
-  if (item.type === 'kg' || Number(item.weight) > 0) return Number(item.qty ?? item.weight) || 0;
-  return Number(item.weight) || 0;
-};
+export const capacityOf = (mode: MachineMode) => (mode === 'LG_24' ? OP_LIMIT_LG24_KG : mode === 'LG_15' ? OP_LIMIT_LG15_KG : 0);
 
 export const modeFromCapacity = (kg?: number): MachineMode => (Number(kg) >= 24 ? 'LG_24' : 'LG_15');
 
@@ -152,7 +197,7 @@ export const washerDisplayName = (washer?: WasherRow | null, peers: WasherRow[] 
   return `Mesin LG ${cap}kg #${n}`;
 };
 
-/** Pilih mesin terbaik: muat kapasitas, prioritas IDLE, lalu timer tersisa paling pendek. */
+/** Pilih mesin terbaik: batas operasional 7/10 kg, prioritas IDLE, lalu timer tersisa paling pendek. */
 export function suggestWasher(
   weightKg: number,
   washers: WasherRow[],
@@ -160,26 +205,65 @@ export function suggestWasher(
 ): WasherRow | null {
   const list = washers || [];
   if (!list.length) return null;
-  const need24 = prefer === 'LG_24' || Number(weightKg) > 15;
-  const candidates = list.filter((w) => {
-    const cap = Number(w.capacity_kg) || 0;
-    if (need24) return cap >= 24;
-    return cap >= Math.min(15, Number(weightKg) || 0) || cap === 15 || cap === 24;
-  });
-  const pool = candidates.length ? candidates : list;
+  const need24 = prefer === 'LG_24' || Number(weightKg) > OP_LIMIT_LG15_KG;
+  const typed = list.filter((w) => (need24 ? washerCapKg(w) === 24 : washerCapKg(w) === 15));
+  const pool = (typed.length ? typed : list).slice();
   const score = (w: WasherRow) => {
     const idleRank = isWasherIdle(w) ? 0 : 1;
     const rem = remainingMs(w);
-    const waste = Math.max(0, Number(w.capacity_kg) - Math.max(Number(weightKg) || 0, 1));
-    const preferFit = need24 ? (Number(w.capacity_kg) >= 24 ? 0 : 1e8) : Number(w.capacity_kg) === 15 ? 0 : 400;
-    return idleRank * 1e12 + rem + waste * 80 + preferFit;
+    const typeFit = need24 === (washerCapKg(w) === 24) ? 0 : 1e8;
+    return idleRank * 1e12 + rem + typeFit;
   };
-  return [...pool].sort((a, b) => score(a) - score(b))[0] || null;
+  return pool.sort((a, b) => score(a) - score(b))[0] || null;
 }
+
+export const washerOptionLabel = (
+  washer: WasherRow,
+  peers: WasherRow[] = [],
+  opts?: { recommended?: boolean }
+) => {
+  const cap = washerCapKg(washer);
+  const max = cap >= 24 ? OP_LIMIT_LG24_KG : OP_LIMIT_LG15_KG;
+  const status = isWasherIdle(washer) ? 'Kosong' : remainingLabel(washer);
+  const rec = opts?.recommended ? ` (Rekomendasi - Maks ${max}kg)` : ` (Maks ${max}kg)`;
+  return `${washerDisplayName(washer, peers)} - ${status}${rec}`;
+};
 
 export const suggestBadge = (washer: WasherRow | null, peers: WasherRow[] = []) => {
   if (!washer) return '🟢 Rekomendasi POS: menunggu status mesin';
-  return `🟢 Rekomendasi POS: ${washerDisplayName(washer, peers)} (${remainingLabel(washer)})`;
+  return `🟢 ${washerOptionLabel(washer, peers, { recommended: true })}`;
+};
+
+export const OVER_LIMIT_BADGE = '⚠️ Melebihi Maks 10kg (Bagi ke 2 Mesin/Kloter)';
+
+export const formatWibHm = (iso?: string | null) => {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Jakarta',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).format(d);
+};
+
+export const machineShortOf = (tagOrMode?: string | null) => {
+  const t = String(tagOrMode || '').toUpperCase();
+  if (t.includes('24')) return 'LG 24kg';
+  if (t.includes('15')) return 'LG 15kg';
+  return 'LG';
+};
+
+export const formatBatchAuditLine = (cycle: any, total = 0) => {
+  const n = Number(cycle?.batch_index) || 1;
+  const kg = Number(cycle?.split_weight_kg ?? cycle?.qty) || 0;
+  const machine = machineShortOf(cycle?.machine_tag || cycle?.machineMode);
+  const start = formatWibHm(cycle?.started_at);
+  const end = cycle?.completed_at ? formatWibHm(cycle.completed_at) : cycle?.status === 'RUNNING' ? 'berjalan' : '—';
+  const kgBit = kg ? `${kg}kg - ${machine}` : machine;
+  const extra = total > 1 ? '' : '';
+  return `⏱️ Batch ${n}${extra} (${kgBit}): ${start} - ${end} WIB`;
 };
 
 export const encodeBagQr = (opts: {
@@ -262,53 +346,50 @@ export function planWasherBatches(
   const bags = Math.max(1, Number(opts.bagCount) || list.length || 1);
   const batches: WasherBatch[] = [];
 
+  const pushParts = (item: CartMachineItem, weight: number, labelBase: string) => {
+    const parts = splitPayloadKg(weight, item);
+    parts.forEach((part, i) => {
+      batches.push({
+        batchIndex: batches.length + 1,
+        bagLabel:
+          parts.length > 1 ? `Batch ${i + 1} of ${parts.length}` : labelBase,
+        machineMode: part.machineMode,
+        machineTag: machineTagOf(part.machineMode),
+        itemName: String(item.name || 'Cucian'),
+        qty: part.qty,
+        washerId: item.washerId || null
+      });
+    });
+  };
+
   if (split) {
     const physical = Math.max(bags, list.length);
     for (let i = 0; i < physical; i += 1) {
       const item = list[i] || list[list.length - 1];
-      const mode = inferMachineMode(item);
-      if (mode === 'NO_MACHINE_REQUIRED') continue;
-      batches.push({
-        batchIndex: i + 1,
-        bagLabel: `KANTONG ${i + 1} DARI ${physical}`,
-        machineMode: mode,
-        machineTag: machineTagOf(mode),
-        itemName: String(item.name || 'Cucian'),
-        qty: Number(item.qty) || 1,
-        washerId: item.washerId || null
-      });
+      if (inferMachineMode(item) === 'NO_MACHINE_REQUIRED') continue;
+      pushParts(item, itemWeightKg(item) || Number(item.qty) || 1, `KANTONG ${i + 1} DARI ${physical}`);
     }
-    return batches;
+    return batches.map((b, i) => ({ ...b, batchIndex: i + 1, batchTotal: batches.length }));
   }
 
-  const groups = new Map<MachineMode, CartMachineItem[]>();
-  list.forEach((item) => {
-    const mode = inferMachineMode(item);
-    const arr = groups.get(mode) || [];
-    arr.push(item);
-    groups.set(mode, arr);
+  const totalWeight = list.reduce((s, g) => s + itemWeightKg(g), 0);
+  const names = list.map((g) => g.name).filter(Boolean).join(' + ') || 'Cucian';
+  const seed = list.find((g) => isBedcoverLike(g)) || list[0];
+  const parts = splitPayloadKg(totalWeight || list.reduce((s, g) => s + (Number(g.qty) || 0), 0), seed);
+  parts.forEach((part, i) => {
+    batches.push({
+      batchIndex: i + 1,
+      bagLabel: parts.length > 1 ? `Batch ${i + 1} of ${parts.length}` : `MESIN ${machineTagOf(part.machineMode)}`,
+      machineMode: part.machineMode,
+      machineTag: machineTagOf(part.machineMode),
+      itemName: names,
+      qty: part.qty,
+      washerId: list.find((g) => g.washerId)?.washerId || null,
+      batchTotal: parts.length
+    });
   });
 
-  groups.forEach((group, mode) => {
-    if (mode === 'NO_MACHINE_REQUIRED' || mode === 'MANUAL') return;
-    const names = group.map((g) => g.name).filter(Boolean).join(' + ') || 'Cucian';
-    const weight = group.reduce((s, g) => s + (Number(g.qty) || 0), 0);
-    const cap = capacityOf(mode);
-    const chunks = cap > 0 ? Math.max(1, Math.ceil(weight / cap)) : 1;
-    for (let i = 0; i < chunks; i += 1) {
-      batches.push({
-        batchIndex: batches.length + 1,
-        bagLabel: chunks > 1 ? `BATCH ${i + 1}/${chunks}` : `MESIN ${machineTagOf(mode)}`,
-        machineMode: mode,
-        machineTag: machineTagOf(mode),
-        itemName: names,
-        qty: weight / chunks,
-        washerId: group.find((g) => g.washerId)?.washerId || null
-      });
-    }
-  });
-
-  return batches.map((b, i) => ({ ...b, batchIndex: i + 1 }));
+  return batches.map((b, i) => ({ ...b, batchIndex: i + 1, batchTotal: batches.length }));
 }
 
 type Db = { from: (table: string) => any };
@@ -342,14 +423,14 @@ export async function createWasherCycles(opts: {
   const cycles: any[] = [];
 
   for (const batch of batches) {
-    const cap = capacityOf(batch.machineMode);
+    const drum = batch.machineMode === 'LG_24' ? 24 : 15;
     if (batch.machineMode === 'NO_MACHINE_REQUIRED' || batch.machineTag === 'NO_MACHINE') continue;
     const preferred = (washers || []).find((w: any) => batch.washerId && String(w.id) === String(batch.washerId));
     const washer =
       preferred ||
-      suggestWasher(Number(batch.qty) || cap, washers || [], batch.machineMode) ||
-      (washers || []).find((w: any) => Number(w.capacity_kg) === cap && String(w.status || 'IDLE') === 'IDLE') ||
-      (washers || []).find((w: any) => Number(w.capacity_kg) === cap);
+      suggestWasher(Number(batch.qty) || capacityOf(batch.machineMode), washers || [], batch.machineMode) ||
+      (washers || []).find((w: any) => Number(w.capacity_kg) === drum && String(w.status || 'IDLE') === 'IDLE') ||
+      (washers || []).find((w: any) => Number(w.capacity_kg) === drum);
 
     const status = 'PENDING';
     const { data, error } = await insertWithFallback('washer_cycle_logs', [
@@ -361,7 +442,19 @@ export async function createWasherCycles(opts: {
         status,
         batch_index: batch.batchIndex,
         bag_label: batch.bagLabel,
-        machine_tag: batch.machineTag
+        machine_tag: batch.machineTag,
+        split_weight_kg: batch.qty,
+        batch_total: batch.batchTotal || batches.length
+      },
+      {
+        washer_id: washer?.id || null,
+        order_id: opts.orderId,
+        cycle_type: 'WASH',
+        status,
+        batch_index: batch.batchIndex,
+        bag_label: batch.bagLabel,
+        machine_tag: batch.machineTag,
+        split_weight_kg: batch.qty
       },
       {
         washer_id: washer?.id || null,
@@ -387,10 +480,13 @@ export async function startVerifiedWasherCycle(opts: {
   const db = opts.db;
   if (!db) return { error: { message: 'DB kosong' } };
   const actor = uuidOrNull(opts.startedBy);
+  const now = new Date().toISOString();
   if (opts.cycleId) {
     await updateWithFallback(
       'washer_cycle_logs',
       [
+        { status: 'RUNNING', started_at: now, started_by_user_id: actor },
+        { status: 'RUNNING', started_at: now },
         { status: 'RUNNING', started_by_user_id: actor },
         { status: 'RUNNING' }
       ],
@@ -412,6 +508,53 @@ export async function startVerifiedWasherCycle(opts: {
     );
   }
   return { error: null };
+}
+
+export async function completeWasherCycles(opts: {
+  db?: Db;
+  cycleId?: string | null;
+  washerId?: string | null;
+}) {
+  const db = opts.db;
+  if (!db) return { error: { message: 'DB kosong' } };
+  const now = new Date();
+  const nowIso = now.toISOString();
+  let rows: any[] = [];
+  if (opts.cycleId) {
+    const { data } = await db.from('washer_cycle_logs').select('*').eq('id', opts.cycleId).limit(1);
+    rows = data || [];
+  } else if (opts.washerId) {
+    const { data } = await db
+      .from('washer_cycle_logs')
+      .select('*')
+      .eq('washer_id', opts.washerId)
+      .eq('status', 'RUNNING');
+    rows = data || [];
+  }
+  for (const row of rows) {
+    const started = Date.parse(String(row.started_at || row.created_at || ''));
+    const mins = Number.isFinite(started) ? Math.max(1, Math.round((now.getTime() - started) / 60000)) : null;
+    await updateWithFallback(
+      'washer_cycle_logs',
+      [
+        { status: 'COMPLETED', completed_at: nowIso, duration_minutes: mins },
+        { status: 'COMPLETED', completed_at: nowIso },
+        { status: 'COMPLETED' }
+      ],
+      { column: 'id', value: row.id }
+    );
+  }
+  if (opts.washerId) {
+    await updateWithFallback(
+      'washers',
+      [
+        { status: 'IDLE', current_order_id: null },
+        { status: 'IDLE' }
+      ],
+      { column: 'id', value: opts.washerId }
+    );
+  }
+  return { error: null, completed: rows.length };
 }
 
 export const machineCyclesAllDone = (cycles: any[]) => {

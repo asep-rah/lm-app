@@ -28,6 +28,7 @@ import CashDepositQrisPanel from '@/components/CashDepositQrisPanel';
 import WasherAssignPanel from '@/components/pos/WasherAssignPanel';
 import MachineLoadVerifyModal from '@/components/pos/MachineLoadVerifyModal';
 import LayFlatPhotoModal from '@/components/pos/LayFlatPhotoModal';
+import WasherBatchTimeline from '@/components/pos/WasherBatchTimeline';
 import { intakePcsOf, PCS_MISMATCH_ALERT } from '@/lib/layFlatProof';
 import { buildBagStickers, printBagStickers } from '@/utils/thermalPrinter';
 import {
@@ -710,6 +711,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
   const [selectedTxDetail, setSelectedTxDetail] = useState<any>(null);
   const [createdTxSuccess, setCreatedTxSuccess] = useState<any>(null);
   const [txWorkLogs, setTxWorkLogs] = useState<any[]>([]);
+  const [txWasherCycles, setTxWasherCycles] = useState<any[]>([]);
 
   // STATES FORM EDIT DALAM MODAL
   const [editCustomerName, setEditCustomerName] = useState('');
@@ -979,8 +981,15 @@ const handleApplyLoan = async (e: React.FormEvent) => {
         .then(({ data }) => {
           if (data) setTxWorkLogs(data);
         });
+      supabase
+        .from('washer_cycle_logs')
+        .select('*')
+        .eq('order_id', selectedTxDetail.id)
+        .order('batch_index', { ascending: true })
+        .then(({ data }) => setTxWasherCycles(data || []));
     } else {
       setTxWorkLogs([]);
+      setTxWasherCycles([]);
     }
   }, [selectedTxDetail]);
 
@@ -3023,6 +3032,8 @@ const handleStatusChange = async (
                 setEditMachineItems((prev) => prev.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
               }}
             />
+
+            <WasherBatchTimeline cycles={txWasherCycles} />
 
             <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
               <StageTimeline logs={txWorkLogs} transaction={selectedTxDetail} />

@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import {
   FRAUD_ALERT_TEXT,
+  completeWasherCycles,
   isMaintenanceCycle,
   isShiftEndWindow,
   isStandardWashCycle,
@@ -23,6 +24,11 @@ const isRunning = (status: unknown) => {
   return s === 'RUNNING' || s === 'WASH' || s === 'IN_PROGRESS' || s === 'ON';
 };
 
+const isFinished = (status: unknown) => {
+  const s = String(status || '').toUpperCase();
+  return ['IDLE', 'OFF', 'COMPLETED', 'DONE', 'FINISHED', 'STOP', 'STOPPED'].includes(s);
+};
+
 const machineTagOf = (washer: { capacity_kg?: number }) =>
   Number(washer.capacity_kg) >= 24 ? 'LG-24KG' : 'LG-15KG';
 
@@ -39,6 +45,20 @@ export async function POST(req: Request) {
       String(body.context || '').toLowerCase().includes('closing');
 
     if (!isRunning(nextStatus) && nextStatus) {
+      if (isFinished(nextStatus) && (washerId || deviceId)) {
+        let washerDone: any = null;
+        if (washerId) {
+          const { data } = await supabase.from('washers').select('*').eq('id', washerId).maybeSingle();
+          washerDone = data;
+        } else if (deviceId) {
+          const { data } = await supabase.from('washers').select('*').eq('thinq_device_id', deviceId).maybeSingle();
+          washerDone = data;
+        }
+        if (washerDone?.id) {
+          await completeWasherCycles({ db: supabase as any, washerId: washerDone.id });
+          return Response.json({ ok: true, completed: true, washerId: washerDone.id, status: nextStatus, cycleType });
+        }
+      }
       return Response.json({ ok: true, ignored: true, status: nextStatus || null, cycleType });
     }
 
@@ -64,10 +84,18 @@ export async function POST(req: Request) {
     const hasLinkedCycle = (activeCycles || []).some((c: any) => c.order_id);
 
     if (orderLinked || hasLinkedCycle) {
+      const now = new Date().toISOString();
       await supabase
         .from('washers')
-        .update({ status: 'RUNNING', last_started_at: new Date().toISOString() })
+        .update({ status: 'RUNNING', last_started_at: now })
         .eq('id', washer.id);
+      for (const c of activeCycles || []) {
+        await supabase
+          .from('washer_cycle_logs')
+          .update({ started_at: now, status: 'RUNNING' })
+          .eq('id', c.id)
+          .is('started_at', null);
+      }
       return Response.json({
         ok: true,
         authorized: true,
@@ -105,7 +133,8 @@ export async function POST(req: Request) {
           bag_label: allowShiftClean
             ? `Shift-end ${cycleType}`
             : `${cycleType} (1x di luar jam closing)`,
-          machine_tag: machineTagOf(washer)
+          machine_tag: machineTagOf(washer),
+          started_at: new Date().toISOString()
         }
       ]);
       const today = jakartaDate();

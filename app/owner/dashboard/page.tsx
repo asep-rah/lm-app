@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
 import StageTimeline from '@/components/StageTimeline';
+import WasherBatchTimeline from '@/components/pos/WasherBatchTimeline';
 import OwnerExecNav from '@/components/OwnerExecNav';
 import FinanceAlertListener from '@/components/FinanceAlertListener';
 import WasherFraudAlertListener from '@/components/WasherFraudAlertListener';
@@ -101,6 +102,7 @@ export default function Dashboard() {
   const [fullYearHistory, setFullYearHistory] = useState<any[]>([]);
   const [selectedTxDetail, setSelectedTxDetail] = useState<any>(null);
   const [txWorkLogs, setTxWorkLogs] = useState<any[]>([]);
+  const [txWasherCycles, setTxWasherCycles] = useState<any[]>([]);
 // State & Logic To-Do List Kendala Outlet (Real-Time)
 const [outletIssues, setOutletIssues] = useState<any[]>([]);
 const [supNote, setSupNote] = useState('');
@@ -133,6 +135,7 @@ useEffect(() => {
 useEffect(() => {
   if (!selectedTxDetail?.id) {
     setTxWorkLogs([]);
+    setTxWasherCycles([]);
     return;
   }
   let cancelled = false;
@@ -144,6 +147,14 @@ useEffect(() => {
     .then(({ data, error }) => {
       if (cancelled) return;
       setTxWorkLogs(error ? [] : data || []);
+    });
+  supabase
+    .from('washer_cycle_logs')
+    .select('*')
+    .eq('order_id', selectedTxDetail.id)
+    .order('batch_index', { ascending: true })
+    .then(({ data }) => {
+      if (!cancelled) setTxWasherCycles(data || []);
     });
   return () => {
     cancelled = true;
@@ -672,6 +683,7 @@ setDeleteRequests(delData);
                 <p className="text-xs font-black text-slate-900">{selectedTxDetail.receipt_number || 'Detail transaksi'}</p>
                 <button onClick={() => setSelectedTxDetail(null)} className="text-xs font-bold text-slate-400">Tutup</button>
               </div>
+              <WasherBatchTimeline cycles={txWasherCycles} />
               <StageTimeline logs={txWorkLogs} transaction={selectedTxDetail} title="Tim Crew & Waktu Pengerjaan" />
             </div>
           </div>
