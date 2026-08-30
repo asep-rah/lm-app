@@ -3,32 +3,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import {
-  BEDCOVER_DOUBLE_BADGE,
-  BEDCOVER_ONE_PCS_BADGE,
-  OVER_LIMIT_BADGE,
   OP_LIMIT_LG15_KG,
-  OP_LIMIT_LG24_KG,
-  PARALLEL_WASH_NOTICE,
+  SLOT_SPLIT_BANNER,
   applyCycleSlot,
-  assignmentBadge,
   balanceWasherAssignments,
-  eligibleWashersForItem,
   ensureDefaultWashers,
-  exceedsOpLimit,
   expandWashSlots,
   isBedcoverDouble,
   isBedcoverItem,
-  isBedcoverSingle,
   isLargeWasher,
+  isWasherDisabledForItem,
   itemWeightKg,
   modeFromCapacity,
   needsWasherCycle,
-  remainingLabel,
-  splitPayloadKg,
-  suggestBadge,
-  washerCapKg,
+  washSlotTitle,
+  washerCompactOptionLabel,
   washerDisplayName,
-  washerOptionLabel,
   workloadByWasherId,
   type CartMachineItem,
   type MachineMode,
@@ -64,7 +54,15 @@ export default function WasherAssignPanel({
   const appliedKey = useRef('');
 
   const washSlots = useMemo(() => expandWashSlots(items || []), [items]);
-  const hasBedcover = (items || []).some((it) => needsWasherCycle(it) && isBedcoverItem(it));
+
+  const showSplitBanner = useMemo(
+    () =>
+      (items || []).some((it) => {
+        if (!needsWasherCycle(it)) return false;
+        return isBedcoverItem(it) || itemWeightKg(it) > OP_LIMIT_LG15_KG;
+      }) || washSlots.some((s) => s.slotTotal > 1),
+    [items, washSlots]
+  );
 
   useEffect(() => {
     if (!outletId) return;
@@ -116,15 +114,6 @@ export default function WasherAssignPanel({
     return map;
   }, [plan]);
 
-  const parallelNotice = useMemo(() => {
-    const assigned = plan.map((p) => p.washer).filter(Boolean) as WasherRow[];
-    const ids = new Set(assigned.map((w) => w.id));
-    const types = new Set(assigned.map((w) => washerCapKg(w)));
-    return ids.size > 1 || types.size > 1 || plan.some((p) => p.loadBalanced || p.queueDiverted);
-  }, [plan]);
-
-  const anyOverLimit = (items || []).some((item) => needsWasherCycle(item) && exceedsOpLimit(itemWeightKg(item)));
-
   useEffect(() => {
     if (!washers.length || !washSlots.length) return;
     const key =
@@ -166,11 +155,14 @@ export default function WasherAssignPanel({
           return;
         }
         if (s.item.washerId === p.washer.id && source.cycleSlots?.[s.slotIndex]?.washerId === p.washer.id) return;
-        next = { ...next, ...applyCycleSlot(next, s.slotIndex, {
-          machineMode: p.machineMode,
-          washerId: p.washer.id,
-          washerName: washerDisplayName(p.washer, washers)
-        }) };
+        next = {
+          ...next,
+          ...applyCycleSlot(next, s.slotIndex, {
+            machineMode: p.machineMode,
+            washerId: p.washer.id,
+            washerName: washerDisplayName(p.washer, washers)
+          })
+        };
         changed = true;
       });
       if (!changed) return;
@@ -187,116 +179,44 @@ export default function WasherAssignPanel({
   if (!washSlots.length) return null;
 
   return (
-    <div className="rounded-2xl border border-cyan-100 bg-cyan-50/70 p-3 space-y-2.5">
-      <div>
-        <p className="text-[10px] font-black uppercase tracking-widest text-cyan-800">LG ThinQ · Assignment Mesin</p>
-        <p className="text-[10px] text-cyan-900/80">
-          Batas operasional: LG 15kg maks {OP_LIMIT_LG15_KG}kg · LG 24kg maks {OP_LIMIT_LG24_KG}kg. Setrika / dry clean tidak tampil.
+    <div className="rounded-xl border border-slate-200 bg-white p-2.5 space-y-1.5">
+      {showSplitBanner && (
+        <p className="text-[10px] font-semibold text-slate-600 leading-tight truncate">
+          {SLOT_SPLIT_BANNER}
         </p>
-      </div>
-      {hasBedcover && (
-        <div className="rounded-xl bg-rose-50 border border-rose-200 px-2.5 py-2 text-[11px] font-black text-rose-900 leading-snug">
-          {BEDCOVER_ONE_PCS_BADGE}
-        </div>
       )}
-      {parallelNotice && (
-        <div className="rounded-xl bg-violet-50 border border-violet-200 px-2.5 py-2 text-[11px] font-black text-violet-900 leading-snug">
-          {PARALLEL_WASH_NOTICE}
-        </div>
-      )}
-      {anyOverLimit && (
-        <div className="rounded-xl bg-amber-50 border border-amber-300 px-2.5 py-2 space-y-1.5">
-          <p className="text-[11px] font-black text-amber-900">{OVER_LIMIT_BADGE}</p>
-          <button
-            type="button"
-            onClick={() => onSplitChange(true)}
-            className="text-[10px] font-black text-amber-800 underline"
-          >
-            Terapkan bagi kloter otomatis
-          </button>
-        </div>
-      )}
-      {washers.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {washers.map((w) => {
-            const idle = String(w.status || 'IDLE').toUpperCase() === 'IDLE';
-            const load = Math.round(workloads.get(String(w.id)) || 0);
-            return (
-              <span
-                key={w.id}
-                className={`text-[9px] font-black px-2 py-0.5 rounded-full border ${
-                  idle ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-amber-50 text-amber-800 border-amber-200'
-                }`}
-              >
-                {washerDisplayName(w, washers)} · {idle ? 'IDLE' : remainingLabel(w)}
-                {load > 0 ? ` · antri ${load}m` : ''}
-              </span>
-            );
-          })}
-        </div>
-      )}
-      <label className="flex items-start gap-2 text-[11px] font-bold text-slate-800">
+      <label className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-500">
         <input
           type="checkbox"
           checked={splitPerBag}
           onChange={(e) => onSplitChange(e.target.checked)}
-          className="mt-0.5"
+          className="shrink-0"
         />
-        <span>
-          Pisahkan Pengerjaan Per Kantong (Request Customer)
-          <span className="block font-normal text-slate-500">
-            Jangan gabung kiloan ke 1 siklus. {bagCount ? `${bagCount} kantong fisik.` : ''}
-          </span>
+        <span className="truncate">
+          Pisah per kantong{bagCount ? ` · ${bagCount} kantong` : ''}
         </span>
       </label>
-      <div className="space-y-1.5">
-        {washSlots.map((slot, row) => {
+      <div className="space-y-1">
+        {washSlots.map((slot) => {
           const { item, sourceIndex, slotIndex } = slot;
           const source = items[sourceIndex] || item;
-          const over = exceedsOpLimit(itemWeightKg(source));
           const hard24 = isBedcoverDouble(source);
-          const onePiece = isBedcoverItem(source);
           const assign = planBySlot.get(`${sourceIndex}:${slotIndex}`);
-          const options = eligibleWashersForItem(source, washers);
-          const rowWasher = assign?.washer || options.find((w) => w.id === item.washerId) || null;
-          const loadBalanced = Boolean(assign?.loadBalanced);
-          const queueDiverted = Boolean(assign?.queueDiverted);
-          const parts = splitPayloadKg(itemWeightKg(source), source);
-          const selectedId = item.washerId && options.some((w) => w.id === item.washerId) ? item.washerId : '';
+          const selectedId = item.washerId && washers.some((w) => w.id === item.washerId) ? String(item.washerId) : '';
           return (
             <div
               key={`${source.id || source.cart_item_id || source.name || sourceIndex}:${slotIndex}`}
-              className="bg-white border border-cyan-100 rounded-xl px-2.5 py-2"
+              className="rounded-lg border border-slate-100 bg-slate-50/80 px-2 py-1.5"
             >
-              <p className="text-[11px] font-bold text-slate-800 leading-snug">{assignmentBadge(item, row + 1)}</p>
-              {onePiece && (
-                <p className="mt-1 text-[10px] font-black text-rose-800">{BEDCOVER_ONE_PCS_BADGE}</p>
-              )}
-              {hard24 && (
-                <p className="mt-1 text-[10px] font-black text-indigo-800">{BEDCOVER_DOUBLE_BADGE}</p>
-              )}
-              {rowWasher && (
-                <p className="mt-1 text-[10px] font-black text-emerald-800">
-                  {suggestBadge(rowWasher, washers, {
-                    loadBalanced,
-                    queueDiverted,
-                    onePieceCycle: onePiece && !loadBalanced && !queueDiverted
-                  })}
-                </p>
-              )}
-              {over && slotIndex === 0 && (
-                <p className="mt-1 text-[10px] font-black text-amber-800">
-                  {OVER_LIMIT_BADGE}
-                  {parts.length > 1
-                    ? ` → ${parts.map((p, i) => `Kloter ${i + 1}: ${p.qty}kg ${p.machineMode === 'LG_24' ? 'LG 24kg' : 'LG 15kg'}`).join(' + ')}`
-                    : ''}
-                </p>
-              )}
+              <p className="text-[11px] font-bold text-slate-800 leading-tight truncate">
+                {washSlotTitle(slot)}
+              </p>
               <select
                 value={selectedId}
                 onChange={(e) => {
                   if (!hard24) touched.current.add(`${sourceIndex}:${slotIndex}`);
-                  const w = options.find((x) => x.id === e.target.value);
+                  const w = washers.find((x) => x.id === e.target.value);
+                  if (w && isWasherDisabledForItem(source, w)) return;
                   const patch = w
                     ? {
                         machineMode: hard24 ? ('LG_24' as MachineMode) : modeFromCapacity(w.capacity_kg),
@@ -308,22 +228,20 @@ export default function WasherAssignPanel({
                         washerId: null,
                         washerName: null
                       };
-                  if (w && hard24 && !isLargeWasher(w)) return;
                   onChangeItem(sourceIndex, applyCycleSlot(source, slotIndex, patch));
                 }}
-                className="mt-1.5 w-full border border-slate-200 rounded-lg px-2 py-1.5 text-[10px] font-bold bg-slate-50"
+                className="mt-1 w-full border border-slate-200 rounded-md px-2 py-1 text-[11px] font-semibold bg-white text-slate-800"
               >
                 {!selectedId && <option value="">Pilih mesin…</option>}
-                {options.map((w) => (
-                  <option key={w.id} value={w.id}>
-                    {washerOptionLabel(w, washers, {
-                      recommended: rowWasher?.id === w.id && !loadBalanced && !queueDiverted,
-                      loadBalanced: rowWasher?.id === w.id && loadBalanced,
-                      queueDiverted: rowWasher?.id === w.id && queueDiverted,
-                      onePieceCycle: onePiece && isBedcoverSingle(source) && washerCapKg(w) === 15
-                    })}
-                  </option>
-                ))}
+                {washers.map((w) => {
+                  const disabled = isWasherDisabledForItem(source, w) && w.id !== selectedId;
+                  const shorterQueue = Boolean(assign?.shorterQueue && assign?.washer?.id === w.id);
+                  return (
+                    <option key={w.id} value={w.id} disabled={disabled}>
+                      {washerCompactOptionLabel(w, washers, { disabled, shorterQueue })}
+                    </option>
+                  );
+                })}
               </select>
             </div>
           );
