@@ -80,14 +80,28 @@ export const mapsDirectionsUrl = (outlet: ShowcaseOutlet | null | undefined) => 
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
 };
 
-export const formatGoogleReviewCount = (count: number) => {
-  const n = Math.max(0, Math.round(Number(count) || 0));
-  if (n >= 100) return `${n}+`;
-  return String(n);
+export const DEFAULT_GOOGLE_RATING = 4.9;
+
+const hasNumericField = (value: unknown) => value != null && value !== '';
+
+/** Saved `outlets.google_rating` / `google_review_count` — default 4.9 only if unset. */
+export const dbGoogleStats = (outlet: Partial<ShowcaseOutlet> | null | undefined) => {
+  const hasRating = hasNumericField(outlet?.google_rating);
+  const hasCount = hasNumericField(outlet?.google_review_count);
+  const parsedRating = Number(outlet?.google_rating);
+  const parsedCount = Number(outlet?.google_review_count);
+  return {
+    rating: hasRating && parsedRating > 0 ? parsedRating : DEFAULT_GOOGLE_RATING,
+    reviewCount: hasCount ? Math.max(0, Math.round(Number.isFinite(parsedCount) ? parsedCount : 0)) : 0,
+    hasRating,
+    hasCount
+  };
 };
 
+export const formatGoogleReviewCount = (count: number) => String(Math.max(0, Math.round(Number(count) || 0)));
+
 export const googleRatingBadge = (rating: number, reviewCount: number) => {
-  const stars = Number.isFinite(rating) ? Number(rating).toFixed(1) : '5.0';
+  const stars = Number.isFinite(rating) && rating > 0 ? Number(rating).toFixed(1) : String(DEFAULT_GOOGLE_RATING);
   return `⭐ ${stars} • ${formatGoogleReviewCount(reviewCount)} Ulasan Google`;
 };
 
@@ -154,9 +168,10 @@ export async function fetchOutletGoogleRating(outlet: ShowcaseOutlet): Promise<{
   mapsUrl: string;
   source: 'google' | 'fallback';
 }> {
+  const local = dbGoogleStats(outlet);
   const fallback = {
-    rating: Number(outlet.google_rating) > 0 ? Number(outlet.google_rating) : 5,
-    reviewCount: Math.max(0, Number(outlet.google_review_count) || 0),
+    rating: local.rating,
+    reviewCount: local.reviewCount,
     mapsUrl: mapsDirectionsUrl(outlet),
     source: 'fallback' as const
   };
@@ -167,11 +182,25 @@ export async function fetchOutletGoogleRating(outlet: ShowcaseOutlet): Promise<{
     const res = await fetch(`/api/outlets/google-rating?${qs.toString()}`);
     if (!res.ok) return fallback;
     const json = await res.json();
+    const live = json.source === 'google' && json.hasPlacesKey !== false;
+    if (!live) {
+      const remote = dbGoogleStats({
+        ...outlet,
+        google_rating: json.rating ?? outlet.google_rating ?? 4.9,
+        google_review_count: json.reviewCount ?? json.review_count ?? outlet.google_review_count ?? 0
+      });
+      return {
+        rating: local.hasRating ? local.rating : remote.rating,
+        reviewCount: local.hasCount ? local.reviewCount : remote.reviewCount,
+        mapsUrl: String(json.mapsUrl || json.maps_url || fallback.mapsUrl),
+        source: 'fallback'
+      };
+    }
     return {
       rating: Number(json.rating) > 0 ? Number(json.rating) : fallback.rating,
       reviewCount: Math.max(0, Number(json.reviewCount ?? json.review_count) || fallback.reviewCount),
       mapsUrl: String(json.mapsUrl || json.maps_url || fallback.mapsUrl),
-      source: json.source === 'google' ? 'google' : 'fallback'
+      source: 'google'
     };
   } catch {
     return fallback;

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { createMayarPayment, isMayarKeyValid } from '@/lib/mayar';
 import { cashDepositReceiptOf, insertPendingCashDepositDb, netDepositOf } from '@/lib/cashDepositQris';
-import { resolveActorUuid, resolveOutletUuid } from '@/lib/outletUuid';
+import { CASHIER_SESSION_MISSING, cashierIdForColumn, resolveOutletUuid } from '@/lib/outletUuid';
 
 export const dynamic = 'force-dynamic';
 
@@ -42,7 +42,13 @@ export async function POST(req: Request) {
     if (!outlet) {
       return NextResponse.json({ error: 'Outlet tidak ditemukan' }, { status: 404 });
     }
-    const kasirId = resolveActorUuid(kasirRaw, body);
+    const cashierId = cashierIdForColumn(kasirRaw || body.id || body.user_id);
+    if (!kasirRaw && !cashierId) {
+      return NextResponse.json({ error: CASHIER_SESSION_MISSING }, { status: 400 });
+    }
+    if (!cashierId) {
+      return NextResponse.json({ error: CASHIER_SESSION_MISSING }, { status: 400 });
+    }
 
     const receipt = cashDepositReceiptOf(outletId, shiftDate);
     const apiKey = isMayarKeyValid(outlet.mayar_api_key) ? String(outlet.mayar_api_key).trim() : '';
@@ -61,8 +67,8 @@ export async function POST(req: Request) {
 
     const { data, error } = await insertPendingCashDepositDb(supabase, {
       outlet_id: outletId,
-      cashier_id: kasirId || null,
-      kasir_id: kasirId || null,
+      cashier_id: cashierId,
+      kasir_id: kasirRaw || cashierId,
       amount_cash: physical || net + adminFee,
       admin_fee: adminFee,
       net_deposit_amount: net,

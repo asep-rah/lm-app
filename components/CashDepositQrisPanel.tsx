@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { simulateMayarAutoPay } from '@/lib/mayar';
 import { isCashDepositBalanced, netDepositOf } from '@/lib/cashDepositQris';
-import { resolveActorUuid, resolveOutletUuid } from '@/lib/outletUuid';
+import { CASHIER_SESSION_MISSING, resolveCashierSessionId, resolveOutletUuid } from '@/lib/outletUuid';
 import { toast } from '@/lib/toast';
 
 const QR_TTL_SEC = 10 * 60;
@@ -84,6 +84,26 @@ export default function CashDepositQrisPanel({
   const generate = async () => {
     if (!outletId) return toast('Pilih outlet dulu.', 'warn');
     if (net < 1000) return toast('Net setoran (fisik − admin) minimal Rp 1.000.', 'warn');
+
+    const { data: { user } } = await supabase.auth.getUser();
+    let currentProfile: Record<string, unknown> | null = null;
+    try {
+      currentProfile = JSON.parse(localStorage.getItem('laundry_user') || localStorage.getItem('laundry_owner_user') || 'null');
+    } catch {
+      currentProfile = null;
+    }
+    const activeCashierId =
+      user?.id ||
+      (currentProfile as any)?.id ||
+      localStorage.getItem('user_id') ||
+      kasirId ||
+      (await resolveCashierSessionId(kasirId, supabase, currentProfile));
+
+    if (!activeCashierId) {
+      toast(CASHIER_SESSION_MISSING, 'err');
+      return;
+    }
+
     setBusy(true);
     setBalanced(false);
     try {
@@ -96,7 +116,9 @@ export default function CashDepositQrisPanel({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           outlet_id: outletUuid,
-          kasir_id: resolveActorUuid(kasirId) || undefined,
+          cashier_id: activeCashierId,
+          kasir_id: activeCashierId,
+          created_by: activeCashierId,
           net_deposit_amount: net,
           physical_cash: physicalCash,
           admin_fee: adminFee,
@@ -106,7 +128,7 @@ export default function CashDepositQrisPanel({
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json?.error || 'Gagal generate QRIS');
       setCharge(json);
-      toast('QRIS setoran siap discan dari e-wallet.', 'ok');
+      toast(json?.mock ? 'QRIS uji coba (Mock/Sandbox) siap. Gunakan tombol simulasi.' : 'QRIS setoran siap discan dari e-wallet.', 'ok');
     } catch (e: any) {
       toast(e?.message || 'Gagal generate QRIS setoran', 'err');
     } finally {
@@ -124,6 +146,7 @@ export default function CashDepositQrisPanel({
         amount: charge.net_deposit_amount,
         paymentId: charge.mayar_transaction_id
       });
+      toast('Simulasi berhasil. Setoran ditandai BALANCED.', 'ok');
     } catch (e: any) {
       toast(e?.message || 'Simulasi gagal', 'err');
     } finally {
@@ -171,14 +194,14 @@ export default function CashDepositQrisPanel({
                   Buka tautan pembayaran
                 </a>
               )}
-              {charge.mock && (
+              {(charge.mock || process.env.NEXT_PUBLIC_ENABLE_MOCK_PAYMENTS === 'true') && (
                 <button
                   type="button"
                   disabled={busy}
                   onClick={simulate}
-                  className="w-full bg-amber-500 text-white text-[11px] font-bold py-2 rounded-xl"
+                  className="w-full bg-amber-500 hover:bg-amber-600 text-white text-[11px] font-extrabold py-2.5 rounded-xl"
                 >
-                  Test Auto-Payment (Mock)
+                  Simulasi Bayar QRIS (Test Mode)
                 </button>
               )}
             </>

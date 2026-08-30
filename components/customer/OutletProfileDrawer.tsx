@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Clock, MapPin, Navigation, Store, X } from 'lucide-react';
 import {
+  dbGoogleStats,
   fetchOutletGoogleRating,
   googleRatingBadge,
   mapsDirectionsUrl,
@@ -25,9 +26,8 @@ export default function OutletProfileDrawer({
   useEffect(() => {
     if (!outlet) return;
     setPhotoIdx(0);
-    const rating = Number(outlet.google_rating) > 0 ? Number(outlet.google_rating) : 5;
-    const count = Math.max(0, Number(outlet.google_review_count) || 0);
-    setBadge(googleRatingBadge(rating, count));
+    const saved = dbGoogleStats(outlet);
+    setBadge(googleRatingBadge(saved.rating, saved.reviewCount));
     setMapsUrl(mapsDirectionsUrl(outlet));
     let cancelled = false;
     fetchOutletGoogleRating(outlet).then((live) => {

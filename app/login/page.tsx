@@ -64,6 +64,7 @@ export default function LoginPage() {
     const role = (user.role || 'kasir').toLowerCase();
     localStorage.setItem('laundry_user', JSON.stringify(user));
     localStorage.setItem('laundry_owner_user', JSON.stringify(user));
+    if (user?.id) localStorage.setItem('user_id', String(user.id));
     window.location.href = homePathForRole(role);
   };
 

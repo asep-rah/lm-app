@@ -38,22 +38,26 @@ export async function GET(req: Request) {
   let placeId = String(url.searchParams.get('placeId') || url.searchParams.get('place_id') || '').trim();
 
   let fallback = {
-    rating: 5,
+    rating: 4.9,
     reviewCount: 0,
     mapsUrl: '',
     placeId: '',
-    source: 'fallback' as const
+    source: 'fallback' as const,
+    hasPlacesKey: false
   };
 
   if (outletId) {
     const { data } = await supabase.from('outlets').select('*').eq('id', outletId).maybeSingle();
     if (data) {
+      const savedRating = data.google_rating;
+      const savedCount = data.google_review_count;
       fallback = {
-        rating: Number(data.google_rating) > 0 ? Number(data.google_rating) : 5,
-        reviewCount: Math.max(0, Number(data.google_review_count) || 0),
+        rating: savedRating != null && Number(savedRating) > 0 ? Number(savedRating) : 4.9,
+        reviewCount: savedCount != null ? Math.max(0, Math.round(Number(savedCount) || 0)) : 0,
         mapsUrl: mapsUrlFrom(data),
         placeId: String(data.google_place_id || '').trim(),
-        source: 'fallback'
+        source: 'fallback',
+        hasPlacesKey: false
       };
       if (!placeId) placeId = fallback.placeId;
     }
@@ -66,8 +70,11 @@ export async function GET(req: Request) {
       ''
   ).trim();
 
-  if (!apiKey || !placeId) {
-    return NextResponse.json(fallback);
+  if (!apiKey) {
+    return NextResponse.json({ ...fallback, hasPlacesKey: false, source: 'fallback' });
+  }
+  if (!placeId) {
+    return NextResponse.json({ ...fallback, hasPlacesKey: true, source: 'fallback' });
   }
 
   try {
@@ -89,12 +96,13 @@ export async function GET(req: Request) {
         reviewCount: liveCount > 0 ? liveCount : fallback.reviewCount,
         mapsUrl: String(result.url || fallback.mapsUrl || ''),
         placeId,
-        source: 'google'
+        source: 'google',
+        hasPlacesKey: true
       });
     }
   } catch {
     /* Places API unreachable — keep DB fallback */
   }
 
-  return NextResponse.json(fallback);
+  return NextResponse.json({ ...fallback, hasPlacesKey: Boolean(apiKey), source: 'fallback' });
 }

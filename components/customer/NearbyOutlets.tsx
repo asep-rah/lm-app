@@ -1,7 +1,14 @@
 'use client';
 
 import { MapPin, Navigation } from 'lucide-react';
-import { distanceLabelKm, isComingSoonOutlet, outletAddressOf, type ShowcaseOutlet } from '@/lib/outletShowcase';
+import {
+  dbGoogleStats,
+  distanceLabelKm,
+  googleRatingBadge,
+  isComingSoonOutlet,
+  outletAddressOf,
+  type ShowcaseOutlet
+} from '@/lib/outletShowcase';
 
 export default function NearbyOutlets({
   items,
@@ -30,7 +37,9 @@ export default function NearbyOutlets({
         )}
       </div>
       <div className="space-y-2">
-        {items.slice(0, 6).map(({ outlet, km }) => (
+        {items.slice(0, 6).map(({ outlet, km }) => {
+          const g = dbGoogleStats(outlet);
+          return (
           <button
             key={String(outlet.id)}
             type="button"
@@ -42,6 +51,9 @@ export default function NearbyOutlets({
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-xs font-extrabold text-slate-900 truncate">{String(outlet.name || 'Outlet')}</p>
+              <p className="text-[10px] font-bold text-amber-700">
+                {googleRatingBadge(g.rating, g.reviewCount)}
+              </p>
               <p className="text-[10px] text-slate-500 truncate">{outletAddressOf(outlet) || 'Alamat belum diisi'}</p>
               {km != null ? (
                 <p className="text-[10px] font-bold text-blue-600 mt-0.5">{distanceLabelKm(km)}</p>
@@ -52,7 +64,8 @@ export default function NearbyOutlets({
               )}
             </div>
           </button>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

@@ -37,8 +37,15 @@ export const appBaseUrl = (override?: string) =>
     .replace(/\/$/, '')
     .replace(/^(?!https?:\/\/)/, 'https://');
 
-export const mockQrisImageUrl = (payload: string) =>
-  `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(payload)}`;
+export const isMockPaymentsEnabled = () =>
+  /^(1|true|yes|on)$/i.test(
+    String(process.env.NEXT_PUBLIC_ENABLE_MOCK_PAYMENTS || process.env.ENABLE_MOCK_PAYMENTS || '')
+  );
+
+export const mockQrisImageUrl = (payload?: string) =>
+  `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(
+    payload || 'MOCK_DEPOSIT_PAYMENT'
+  )}`;
 
 export const buildMockMayarCharge = (input: MayarChargeInput): MayarChargeResult => {
   const receipt = String(input.receipt || input.transactionId || Date.now());
@@ -50,7 +57,7 @@ export const buildMockMayarCharge = (input: MayarChargeInput): MayarChargeResult
     mock: true,
     paymentId,
     invoiceUrl,
-    qrisUrl: mockQrisImageUrl(invoiceUrl)
+    qrisUrl: mockQrisImageUrl(`MOCK_DEPOSIT_PAYMENT:${receipt}`)
   };
 };
 
@@ -117,6 +124,8 @@ export async function createMayarPayment(input: MayarChargeInput): Promise<Mayar
     throw new Error('Nominal pembayaran minimal Rp 1.000');
   }
 
+  if (isMockPaymentsEnabled()) return buildMockMayarCharge(input);
+
   const apiKey = resolveKey(input);
   if (!apiKey) return buildMockMayarCharge(input);
 
@@ -141,7 +150,7 @@ export async function createMayarPayment(input: MayarChargeInput): Promise<Mayar
       posted = await postMayarCreate(MAYAR_CREATE_URL_V2, apiKey, body);
     }
     if (!posted.ok) {
-      console.warn('Mayar create failed, using mock:', posted.status, posted.json);
+      console.warn('Mayar create failed (incl. 401/403/trial), using mock:', posted.status, posted.json);
       return buildMockMayarCharge(input);
     }
     const parsed = parseMayarCreate(posted.json);

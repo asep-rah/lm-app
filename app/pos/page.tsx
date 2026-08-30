@@ -25,7 +25,14 @@ import { dispatchThirdPartyDelivery, isThirdPartyDelivery } from '@/lib/thirdPar
 import ThirdPartyDispatchForm from '@/components/ThirdPartyDispatchForm';
 import ThirdPartyDeliveryCard from '@/components/ThirdPartyDeliveryCard';
 import CashDepositQrisPanel from '@/components/CashDepositQrisPanel';
-import { matchOutletUuid, resolveActorUuid, resolveOutletUuid, uuidOrNull } from '@/lib/outletUuid';
+import {
+  CASHIER_SESSION_MISSING,
+  cashierIdForColumn,
+  matchOutletUuid,
+  resolveCashierSessionId,
+  resolveOutletUuid,
+  uuidOrNull
+} from '@/lib/outletUuid';
 import {
   classifyQueueOrder,
   coalesceProsesCards,
@@ -374,17 +381,30 @@ const handleSubmitDeposit = async () => {
   }
   if (outletUuid !== selectedOutlet) setSelectedOutlet(outletUuid);
 
-  let staff: any = null;
+  const { data: authData } = await supabase.auth.getUser();
+  let currentProfile: any = null;
   try {
-    staff = JSON.parse(localStorage.getItem('laundry_user') || 'null');
+    currentProfile = JSON.parse(localStorage.getItem('laundry_user') || 'null');
   } catch {
-    staff = null;
+    currentProfile = null;
   }
-  const kasirUuid = resolveActorUuid(employeeId, staff);
-  const shiftUuid = uuidOrNull((staff as any)?.shift_id);
+  const activeCashierId =
+    authData?.user?.id ||
+    currentProfile?.id ||
+    localStorage.getItem('user_id') ||
+    employeeId ||
+    (await resolveCashierSessionId(employeeId, supabase, currentProfile));
+  const cashierId = cashierIdForColumn(activeCashierId);
+  if (!cashierId || !activeCashierId) {
+    return alert(CASHIER_SESSION_MISSING);
+  }
+  const shiftUuid = uuidOrNull(currentProfile?.shift_id);
 
   const depositRow: Record<string, unknown> = {
     outlet_id: outletUuid,
+    cashier_id: cashierId,
+    kasir_id: String(activeCashierId),
+    created_by: cashierId,
     amount_cash: amount,
     admin_fee: fee,
     net_deposit_amount: Math.max(0, amount - fee),
@@ -393,28 +413,20 @@ const handleSubmitDeposit = async () => {
     status: 'PENDING',
     proof_url: proofUrl || 'Setor via QRIS Meja Kasir'
   };
-  if (kasirUuid) {
-    depositRow.cashier_id = kasirUuid;
-    depositRow.kasir_id = kasirUuid;
-    depositRow.created_by = kasirUuid;
-  } else if (employeeId) {
-    depositRow.kasir_id = String(employeeId);
-  }
   if (shiftUuid) depositRow.shift_id = shiftUuid;
 
   const { error: depositErr } = await insertWithFallback('cash_deposits', [
     depositRow,
     {
       outlet_id: outletUuid,
-      cashier_id: kasirUuid,
+      cashier_id: cashierId,
       amount_cash: amount,
       admin_fee: fee,
       deposit_method: depositMethod,
       qr_payment_status: 'pending',
       proof_url: depositRow.proof_url
     },
-    { outlet_id: outletUuid, amount_cash: amount, admin_fee: fee, qr_payment_status: 'pending' },
-    { outlet_id: outletUuid, amount_cash: amount }
+    { outlet_id: outletUuid, cashier_id: cashierId, amount_cash: amount }
   ]);
 
   if (depositErr) return alert('❌ Gagal menyimpan setoran: ' + depositErr.message);
@@ -466,7 +478,7 @@ const handleSubmitClosingShift = async () => {
   } catch {
     staff = null;
   }
-  const kasirUuid = resolveActorUuid(employeeId, staff);
+  const kasirUuid = cashierIdForColumn(employeeId || staff?.id);
 
   // Catat data closing ke tabel cash_closings / expenses jika ada minus
   const closingRow: Record<string, unknown> = {
@@ -908,7 +920,12 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       const userStr = localStorage.getItem('laundry_user');
       if (userStr) {
         const user = JSON.parse(userStr);
-        setEmployeeId(user.id); setEmployeeName(user.name); setEmployeeUsername(user.username); setEmployeeRole(user.role || 'Kasir'); setEmpBasicSalary(Number(user.basic_salary) || 1500000);
+        setEmployeeId(user.id);
+        setEmployeeName(user.name);
+        setEmployeeUsername(user.username);
+        setEmployeeRole(user.role || 'Kasir');
+        setEmpBasicSalary(Number(user.basic_salary) || 1500000);
+        if (user.id) localStorage.setItem('user_id', String(user.id));
 
         if (user.created_at) {
           const createdAt = new Date(user.created_at);
@@ -1068,7 +1085,10 @@ const handleApplyLoan = async (e: React.FormEvent) => {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('laundry_user'); localStorage.removeItem('laundry_owner_user'); window.location.href = '/login';
+    localStorage.removeItem('laundry_user');
+    localStorage.removeItem('laundry_owner_user');
+    localStorage.removeItem('user_id');
+    window.location.href = '/login';
   };
 
   useEffect(() => {

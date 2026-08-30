@@ -5,10 +5,14 @@ export const dynamic = 'force-dynamic';
 /** Test Auto-Payment: POST the same webhook receiver with a mock paid event. */
 export async function POST(req: Request) {
   try {
-    if (process.env.NODE_ENV === 'production') {
+    const body = await req.json().catch(() => ({}));
+    const mockOn = /^(1|true|yes|on)$/i.test(
+      String(process.env.NEXT_PUBLIC_ENABLE_MOCK_PAYMENTS || process.env.ENABLE_MOCK_PAYMENTS || '')
+    );
+    const isCashDepositSim = !!(body.cashDepositId || String(body.receipt || '').toUpperCase().startsWith('SETOR-'));
+    if (process.env.NODE_ENV === 'production' && !mockOn && !isCashDepositSim) {
       return NextResponse.json({ error: 'Simulasi dinonaktifkan di production' }, { status: 403 });
     }
-    const body = await req.json().catch(() => ({}));
     if (!body.transactionId && !body.topupId && !body.cashDepositId && !body.receipt) {
       return NextResponse.json({ error: 'transactionId, topupId, cashDepositId, atau receipt wajib' }, { status: 400 });
     }

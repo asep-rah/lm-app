@@ -1,5 +1,5 @@
 import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
-import { isUuidString, uuidOrNull } from '@/lib/outletUuid';
+import { cashierIdForColumn, isUuidString } from '@/lib/outletUuid';
 
 export const CASH_DEPOSIT_OPEX = 'Biaya Admin Setoran Cash (OPEX)';
 
@@ -55,12 +55,13 @@ const cashDepositPayloads = (row: {
   proof_url?: string;
 }) => {
   const outletId = isUuidString(row.outlet_id) ? String(row.outlet_id) : null;
-  const cashierUuid = uuidOrNull(row.cashier_id) || uuidOrNull(row.kasir_id);
-  const kasirText = cashierUuid || (row.kasir_id && !isUuidString(row.kasir_id) ? String(row.kasir_id) : cashierUuid);
+  const cashierUuid = cashierIdForColumn(row.cashier_id) || cashierIdForColumn(row.kasir_id);
+  const kasirText = String(row.kasir_id || row.cashier_id || cashierUuid || '').trim() || cashierUuid;
   const full = {
     outlet_id: outletId,
     cashier_id: cashierUuid,
     kasir_id: kasirText,
+    created_by: cashierUuid,
     amount_cash: row.amount_cash,
     admin_fee: row.admin_fee,
     net_deposit_amount: row.net_deposit_amount,
@@ -90,6 +91,7 @@ const cashDepositPayloads = (row: {
     },
     {
       outlet_id: full.outlet_id,
+      cashier_id: full.cashier_id,
       amount_cash: full.amount_cash,
       admin_fee: full.admin_fee,
       qr_payment_status: 'pending'
@@ -101,9 +103,17 @@ export async function insertPendingCashDepositDb(db: Db, row: Parameters<typeof 
   if (row.outlet_id && !isUuidString(row.outlet_id)) {
     return { data: null, error: { message: `invalid outlet_id (bukan UUID): "${row.outlet_id}"` } };
   }
+  if (!cashierIdForColumn(row.cashier_id) && !cashierIdForColumn(row.kasir_id)) {
+    return { data: null, error: { message: 'Sesi login kasir tidak ditemukan, silakan refresh halaman' } };
+  }
   let lastErr: { message: string } | null = null;
+  const forcedCashier = cashierIdForColumn(row.cashier_id) || cashierIdForColumn(row.kasir_id);
   for (const attempt of cashDepositPayloads(row)) {
     const clean = Object.fromEntries(Object.entries(attempt).filter(([, v]) => v !== undefined && v !== null && v !== ''));
+    if (forcedCashier) clean.cashier_id = forcedCashier;
+    if (!clean.cashier_id) {
+      return { data: null, error: { message: 'Sesi login kasir tidak ditemukan. Silakan refresh halaman atau login ulang.' } };
+    }
     const { data, error } = await db.from('cash_deposits').insert([clean]).select('*');
     if (!error) return { data, error: null };
     lastErr = { message: error.message };
