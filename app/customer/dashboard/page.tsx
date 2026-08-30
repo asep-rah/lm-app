@@ -2527,25 +2527,23 @@ export default function CustomerDashboardPage() {
             <div className="flex-1 min-w-0 pr-1.5">
               <p className="font-semibold text-[12px] sm:text-[13px] leading-snug flex flex-wrap items-center gap-x-1 gap-y-0">
                 <span>Customer Service Care</span>
-                <span className="inline-flex items-center gap-0.5">
+                <span className="inline-flex items-center">
                   BERANI
                   <svg
+                    width="18"
+                    height="18"
                     viewBox="0 0 24 24"
-                    width="15"
-                    height="15"
-                    className="shrink-0"
+                    fill="none"
+                    xmlns="http://www.w3.org/2000/svg"
+                    className="inline-block ml-1 align-middle shrink-0"
                     aria-label="Akun terverifikasi"
                     role="img"
                   >
-                    <circle cx="12" cy="12" r="11" fill="#1DA1F2" />
                     <path
-                      d="M7.1 12.2l3.1 3.1 6.7-6.7"
-                      fill="none"
-                      stroke="#fff"
-                      strokeWidth="2.35"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
+                      d="M22.5 12.5C22.5 10.87 21.35 9.53 19.82 9.18C20.1 8.21 19.9 7.12 19.23 6.34C18.56 5.56 17.48 5.16 16.48 5.28C15.93 3.84 14.53 2.85 12.98 2.85C11.43 2.85 10.03 3.84 9.48 5.28C8.48 5.16 7.4 5.56 6.73 6.34C6.06 7.12 5.86 8.21 6.14 9.18C4.61 9.53 3.46 10.87 3.46 12.5C3.46 14.13 4.61 15.47 6.14 15.82C5.86 16.79 6.06 17.88 6.73 18.66C7.4 19.44 8.48 19.84 9.48 19.72C10.03 21.16 11.43 22.15 12.98 22.15C14.53 22.15 15.93 21.16 16.48 19.72C17.48 19.84 18.56 19.44 19.23 18.66C19.9 17.88 20.1 16.79 19.82 15.82C21.35 15.47 22.5 14.13 22.5 12.5Z"
+                      fill="#0084FF"
                     />
+                    <path d="M10.2 15.8L6.8 12.4L8.2 11L10.2 13L16.2 7L17.6 8.4L10.2 15.8Z" fill="white" />
                   </svg>
                 </span>
               </p>
