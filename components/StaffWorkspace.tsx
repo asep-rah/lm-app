@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabaseClient';
 import {
   canAccessSettings,
   canAccessKpiSettings,
+  canAccessFinanceRecon,
   getStaffSession,
   isHeadManagementRole
 } from '@/lib/staffSession';
@@ -391,7 +392,7 @@ export default function StaffWorkspace() {
               </div>
             )}
 
-            {(role === 'finance' || role === 'head_finance') && <FinanceWorkspacePanel />}
+            {canAccessFinanceRecon(role) && <FinanceWorkspacePanel />}
 
             {(role === 'admin_ops' || role === 'admin') && (
               <div className="space-y-2">

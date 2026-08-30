@@ -44,6 +44,10 @@ import {
   readLocalFlag
 } from '@/lib/orderFeedback';
 import { IconBadge, SlaBadge, StarRating, StatusPill, StepperBtn, TRACKER_STAGES } from '@/components/customer/ui';
+import PromoBannerCarousel from '@/components/customer/PromoBannerCarousel';
+import NearbyOutlets from '@/components/customer/NearbyOutlets';
+import OutletProfileDrawer from '@/components/customer/OutletProfileDrawer';
+import { bannerSlidesOf, nearbyActiveOutlets, type ShowcasePromo } from '@/lib/outletShowcase';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -236,6 +240,9 @@ export default function CustomerDashboardPage() {
   const [customerAddress, setCustomerAddress] = useState('');
   const [isEditingAddress, setIsEditingAddress] = useState(false);
   const [userCoords, setUserCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [showcasePromos, setShowcasePromos] = useState<ShowcasePromo[]>([]);
+  const [profileOutlet, setProfileOutlet] = useState<any | null>(null);
+  const [locatingGps, setLocatingGps] = useState(false);
 
   const [isKiloanChecked, setIsKiloanChecked] = useState(false);
   const [selectedKiloanSvc, setSelectedKiloanSvc] = useState('');
@@ -844,7 +851,7 @@ export default function CustomerDashboardPage() {
         [...(pendingPickups || []), ...(pendingTx || [])].forEach((row: any) => {
           if (row.outlet_id) pendingByOutlet[row.outlet_id] = (pendingByOutlet[row.outlet_id] || 0) + 1;
         });
-        const open = dbOutlets.filter((o: any) => !o.is_overcapacity && (pendingByOutlet[o.id] || 0) < 20);
+        const open = dbOutlets.filter((o: any) => !o.is_coming_soon && !o.is_overcapacity && (pendingByOutlet[o.id] || 0) < 20);
         const visible = open.length ? open : dbOutlets;
         setOutletsList(dbOutlets);
         setFilteredOutlets(visible);
@@ -870,6 +877,9 @@ export default function CustomerDashboardPage() {
         if (defaultSatuan) setSelectedSatuanSvc(defaultSatuan.name);
       }
 
+      const { data: bannerPromos } = await supabase.from('promotions').select('*').order('created_at', { ascending: false });
+      if (bannerPromos) setShowcasePromos(bannerPromos);
+
       const savedPhone = localStorage.getItem('laundry_customer_phone');
       const savedAddr = localStorage.getItem('laundry_customer_address');
       if (savedAddr) setCustomerAddress(savedAddr);
@@ -887,12 +897,13 @@ export default function CustomerDashboardPage() {
 
           if (dbOutlets && dbOutlets.length > 0) {
             const nearby = dbOutlets.filter((o: any) => {
+              if (o.is_coming_soon) return false;
               if (o.is_overcapacity) return false;
               if (!o.latitude || !o.longitude) return true;
               const dist = calculateDistanceKm(lat, lon, Number(o.latitude), Number(o.longitude));
               return dist <= 30;
             });
-            const pool = nearby.length ? nearby : dbOutlets.filter((o: any) => !o.is_overcapacity);
+            const pool = nearby.length ? nearby : dbOutlets.filter((o: any) => !o.is_overcapacity && !o.is_coming_soon);
             const visible = pool.length ? pool : dbOutlets;
             setFilteredOutlets(visible);
             const pick = nearestOpenOutlet(visible, { lat, lon }, {}, calculateDistanceKm);
@@ -1115,6 +1126,18 @@ export default function CustomerDashboardPage() {
     localStorage.setItem('laundry_customer_address', customerAddress);
     setIsEditingAddress(false);
     alert('Alamat penjemputan berhasil disimpan!');
+  };
+
+  const requestNearbyLocation = () => {
+    if (!navigator.geolocation) return;
+    setLocatingGps(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setUserCoords({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+        setLocatingGps(false);
+      },
+      () => setLocatingGps(false)
+    );
   };
 
   const handleGetCurrentLocation = () => {
@@ -1409,6 +1432,16 @@ export default function CustomerDashboardPage() {
         </div>
       </div>
 
+      {(activeTab === 'home' || !customerData) && (
+        <PromoBannerCarousel
+          slides={bannerSlidesOf(showcasePromos, outletsList)}
+          onOpenOutlet={(id) => {
+            const found = outletsList.find((o) => String(o.id) === String(id));
+            if (found) setProfileOutlet(found);
+          }}
+        />
+      )}
+
       {!customerData ? (
         <form onSubmit={handleLogin} className="bg-white border border-slate-200 p-6 rounded-3xl space-y-4 shadow-sm my-6">
           <div className="w-14 h-14 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
@@ -1430,7 +1463,20 @@ export default function CustomerDashboardPage() {
             Lanjutkan
           </button>
         </form>
-      ) : (
+      ) : null}
+
+      {!customerData && (
+        <div className="mt-4">
+          <NearbyOutlets
+            items={nearbyActiveOutlets(outletsList, userCoords)}
+            locating={locatingGps}
+            onOpen={(o) => setProfileOutlet(o)}
+            onRequestLocation={requestNearbyLocation}
+          />
+        </div>
+      )}
+
+      {customerData ? (
         <>
           {activeTab === 'home' && (
             <div className="space-y-4">
@@ -1478,6 +1524,13 @@ export default function CustomerDashboardPage() {
                   </div>
                 </button>
               </div>
+
+              <NearbyOutlets
+                items={nearbyActiveOutlets(outletsList, userCoords)}
+                locating={locatingGps}
+                onOpen={(o) => setProfileOutlet(o)}
+                onRequestLocation={requestNearbyLocation}
+              />
 
               <div className="space-y-3 pt-1">
       {/* Header Section */}
@@ -2322,7 +2375,7 @@ export default function CustomerDashboardPage() {
             </div>
           )}
         </>
-      )}
+      ) : null}
 
       {/* MODAL KLAIM VOUCHER PROMO AKTIF */}
       {showPromoModal && (
@@ -2502,6 +2555,8 @@ export default function CustomerDashboardPage() {
           </div>
         </div>
       )}
+
+      <OutletProfileDrawer outlet={profileOutlet} onClose={() => setProfileOutlet(null)} />
 
       {complaintTicketOpen && complaintTicket && (
         <ComplaintTicketChat

@@ -11,8 +11,9 @@ export const nearestOpenOutlet = (
   pendingByOutlet: Record<string, number>,
   distKm: (a: number, b: number, c: number, d: number) => number
 ) => {
-  const open = (outlets || []).filter((o) => !isOutletOverCapacity(o, pendingByOutlet[o.id] || 0));
-  const pool = open.length ? open : outlets || [];
+  const notSoon = (outlets || []).filter((o) => !o?.is_coming_soon);
+  const open = notSoon.filter((o) => !isOutletOverCapacity(o, pendingByOutlet[o.id] || 0));
+  const pool = open.length ? open : notSoon.length ? notSoon : outlets || [];
   if (!pool.length) return null;
   if (!coords) return pool[0];
   return [...pool].sort((a, b) => {

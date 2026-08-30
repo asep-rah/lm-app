@@ -77,6 +77,12 @@ export const isWorkspaceRole = (role: string) => {
 export const isAdminOpsRole = (role: string) =>
   ['finance', 'admin_ops', 'admin', 'head_finance', 'owner'].includes(role);
 
+/** Auto-reconciliation, leakage alerts, dan audit board. */
+export const canAccessFinanceRecon = (role: string) => {
+  const r = String(role || '').toLowerCase().trim();
+  return r === 'finance' || r === 'head_finance' || r === 'owner';
+};
+
 /** Purchase Request (CMS) hanya Kasir / POS yang boleh mengajukan. */
 export const canCreateRequisition = (role: string) =>
   ['kasir', 'pos'].includes(String(role || '').toLowerCase().trim());

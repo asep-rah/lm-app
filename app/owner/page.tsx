@@ -10,6 +10,7 @@ import { SkeletonCard } from '@/components/ui/Skeleton';
 import { canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
 import { isMultiOutletRole, staffRolesForForm } from '@/lib/staffRoles';
 import OwnerExecNav from '@/components/OwnerExecNav';
+import FinanceAlertListener from '@/components/FinanceAlertListener';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -151,6 +152,7 @@ export default function Dashboard() {
     setCurrentUserName(user.name);
     const tab = new URLSearchParams(window.location.search).get('tab');
     if (tab === 'history' || tab === 'transaksi') setActiveTab('history');
+    if (tab === 'settings') setActiveTab('settings');
   }, []);
 
   const handleLogout = () => {
@@ -846,6 +848,8 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {isOwnerRole(currentUserRole) && <FinanceAlertListener />}
+
         {/* TAB 1: PNL & LEADERBOARD RANKING */}
         {activeTab === 'pnl' && (
           <div className="space-y-4 md:space-y-6">
@@ -1123,6 +1127,16 @@ export default function Dashboard() {
           <>
             {activeTab === 'settings' && (
               <div className="flex flex-col gap-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <Link href="/owner/settings/outlets" className="bg-white border border-sky-200 rounded-2xl p-4 shadow-sm hover:border-sky-400 transition">
+                    <p className="text-sm font-black text-slate-900">Profil Outlet & Google</p>
+                    <p className="text-[11px] text-slate-500 mt-0.5">Foto, jam buka, Coming Soon, Place ID, dan rating fallback.</p>
+                  </Link>
+                  <Link href="/owner/settings/promos" className="bg-white border border-amber-200 rounded-2xl p-4 shadow-sm hover:border-amber-400 transition">
+                    <p className="text-sm font-black text-slate-900">Banner Promo Customer</p>
+                    <p className="text-[11px] text-slate-500 mt-0.5">Carousel pengumuman di beranda aplikasi pelanggan.</p>
+                  </Link>
+                </div>
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                   
                   {/* MODUL DYNAMIC SERVICES + SEARCH & LIMIT MAX 5 */}

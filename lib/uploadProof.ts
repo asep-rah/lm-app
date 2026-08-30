@@ -76,13 +76,12 @@ export async function fileToCompressedDataUrl(file: File): Promise<string> {
   }
 }
 
-const tryStorageUpload = async (file: File, prefix: string): Promise<string | null> => {
+const tryStorageUpload = async (file: File, prefix: string, buckets = ['laundry-proofs', 'outlet-issues']): Promise<string | null> => {
   try {
     const { supabase } = await import('@/lib/supabaseClient');
     const rawExt = String(file.name || '').split('.').pop() || '';
     const ext = rawExt.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8) || (file.type.startsWith('video/') ? 'mp4' : 'jpg');
     const fileName = `${prefix}_${Date.now()}.${ext}`;
-    const buckets = ['laundry-proofs', 'outlet-issues'];
     for (const bucket of buckets) {
       const { error } = await supabase.storage.from(bucket).upload(fileName, file, {
         contentType: file.type || (file.type.startsWith('video/') ? 'video/mp4' : 'image/jpeg'),
@@ -124,6 +123,24 @@ export async function uploadProofFile(file: File, prefix: string): Promise<strin
   }
   if (isVideo) {
     throw new Error('Video unboxing gagal diunggah. Coba lagi atau gunakan file lebih kecil.');
+  }
+  return fileToCompressedDataUrl(file);
+}
+
+/** Foto outlet / banner promo: coba bucket khusus dulu, lalu laundry-proofs, lalu data URL. */
+export async function uploadShowcaseFile(
+  file: File,
+  prefix: string,
+  buckets: string[]
+): Promise<string> {
+  try {
+    const stored = await withTimeout(
+      tryStorageUpload(file, prefix, [...buckets, 'laundry-proofs', 'outlet-issues']),
+      8000
+    );
+    if (stored && stored.startsWith('http')) return stored;
+  } catch {
+    /* bucket belum dibuat / 403 */
   }
   return fileToCompressedDataUrl(file);
 }

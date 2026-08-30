@@ -6,6 +6,8 @@ import { supabase } from '@/lib/supabaseClient';
 import { isVoidTransaction } from '@/lib/voidTx';
 import { toast } from '@/lib/toast';
 import { updateWithFallback } from '@/lib/safeWrite';
+import FinanceReconBoard from '@/components/FinanceReconBoard';
+import FinanceAlertListener from '@/components/FinanceAlertListener';
 
 const fmt = (n: number) => `Rp ${Number(n || 0).toLocaleString('id-ID')}`;
 
@@ -16,7 +18,7 @@ const thisMonthStart = () => {
   return d.toISOString();
 };
 
-type Panel = 'pnl' | 'coa' | 'recon' | 'roi' | null;
+type Panel = 'pnl' | 'coa' | 'recon' | 'roi' | 'audit' | null;
 
 export default function FinanceWorkspacePanel() {
   const [open, setOpen] = useState<Panel>(null);
@@ -135,11 +137,18 @@ export default function FinanceWorkspacePanel() {
       title: 'Monitoring ROI & Keuangan Outlet',
       desc: 'Kesehatan finansial realtime per cabang.',
       tone: 'bg-amber-50 border-amber-100 text-amber-900'
+    },
+    {
+      id: 'audit' as const,
+      title: 'Auto-Reconciliation & Audit Board',
+      desc: 'Matched/unmatched harian, analisa kebocoran, revisi, dan eskalasi Supervisor.',
+      tone: 'bg-rose-50 border-rose-100 text-rose-900'
     }
   ];
 
   return (
     <div className="space-y-3">
+      <FinanceAlertListener onOpenBoard={() => setOpen('audit')} />
       <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Financial Control</p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {cards.map((c) => (
@@ -164,7 +173,7 @@ export default function FinanceWorkspacePanel() {
       {open && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-end md:items-center justify-center p-3" onClick={() => setOpen(null)}>
           <div
-            className="bg-white w-full max-w-2xl max-h-[88vh] overflow-y-auto rounded-2xl p-4 shadow-xl"
+            className={`bg-white w-full ${open === 'audit' ? 'max-w-3xl' : 'max-w-2xl'} max-h-[88vh] overflow-y-auto rounded-2xl p-4 shadow-xl`}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex justify-between items-center mb-3">
@@ -269,6 +278,8 @@ export default function FinanceWorkspacePanel() {
                 </div>
               </div>
             )}
+
+            {open === 'audit' && <FinanceReconBoard embedded />}
 
             {open === 'roi' && (
               <div className="overflow-x-auto">
