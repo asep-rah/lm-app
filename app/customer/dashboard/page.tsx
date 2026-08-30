@@ -72,7 +72,6 @@ import {
   Truck,
   User,
   Wallet,
-  Bot,
   X
 } from 'lucide-react';
 
@@ -2516,55 +2515,62 @@ export default function CustomerDashboardPage() {
       {/* LIVE CHAT — WhatsApp-style full screen */}
       {activeChatOrderId && (
         <div className="fixed inset-0 z-[60] h-full w-full flex flex-col bg-[#ece5dd]">
-          <div className="shrink-0 bg-[#075e54] text-white px-1.5 pt-[max(0.5rem,env(safe-area-inset-top))] pb-2.5 flex items-center gap-1 shadow-md">
+          <div className="shrink-0 bg-[#075e54] text-white pl-0.5 pr-1.5 pt-[max(0.45rem,env(safe-area-inset-top))] pb-2 flex items-center gap-0.5 shadow-md">
             <button
               type="button"
               onClick={() => setActiveChatOrderId(null)}
-              className="w-11 h-11 flex items-center justify-center rounded-full hover:bg-white/10"
+              className="shrink-0 w-10 h-10 flex items-center justify-center rounded-full hover:bg-white/10"
               aria-label="Kembali"
             >
               <ArrowLeft className="w-6 h-6" strokeWidth={2.2} />
             </button>
-            <div className="relative shrink-0">
-              <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center">
-                <Headphones className="w-5 h-5" />
-              </div>
-              <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-400 border-2 border-[#075e54] rounded-full" />
-            </div>
-            <div className="flex-1 min-w-0 pl-2">
-              <p className="font-semibold text-sm leading-tight truncate">
-                {activeSupportTab === 'ai' ? 'Asisten AI Laundrivery' : 'Customer Service'}
+            <div className="flex-1 min-w-0 pr-1.5">
+              <p className="font-semibold text-[12px] sm:text-[13px] leading-snug flex flex-wrap items-center gap-x-1 gap-y-0">
+                <span>Customer Service Care</span>
+                <span className="inline-flex items-center gap-0.5">
+                  BERANI
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="15"
+                    height="15"
+                    className="shrink-0"
+                    aria-label="Akun terverifikasi"
+                    role="img"
+                  >
+                    <circle cx="12" cy="12" r="11" fill="#1DA1F2" />
+                    <path
+                      d="M7.1 12.2l3.1 3.1 6.7-6.7"
+                      fill="none"
+                      stroke="#fff"
+                      strokeWidth="2.35"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </span>
               </p>
-              <p className="text-[11px] text-emerald-200">Online</p>
+              <p className="text-[10px] text-emerald-200 leading-tight">Online</p>
             </div>
-            <div className="flex bg-black/20 p-0.5 rounded-lg mr-0.5">
+            <div className="shrink-0 flex bg-black/20 p-0.5 rounded-md">
               <button
                 type="button"
                 onClick={() => setActiveSupportTab('cs')}
-                className={`px-2 py-1 text-[10px] font-bold rounded-md transition inline-flex items-center gap-1 ${
-                  activeSupportTab === 'cs' ? 'bg-white text-[#075e54]' : 'text-white/80 hover:text-white'
+                className={`px-1.5 py-1 text-[9px] font-bold rounded transition whitespace-nowrap ${
+                  activeSupportTab === 'cs' ? 'bg-white text-[#075e54]' : 'text-white/85 hover:text-white'
                 }`}
               >
-                <Headphones className="w-3 h-3" /> Live CS
+                Live CS
               </button>
               <button
                 type="button"
                 onClick={() => setActiveSupportTab('ai')}
-                className={`px-2 py-1 text-[10px] font-bold rounded-md transition inline-flex items-center gap-1 ${
-                  activeSupportTab === 'ai' ? 'bg-white text-[#075e54]' : 'text-white/80 hover:text-white'
+                className={`px-1.5 py-1 text-[9px] font-bold rounded transition whitespace-nowrap ${
+                  activeSupportTab === 'ai' ? 'bg-white text-[#075e54]' : 'text-white/85 hover:text-white'
                 }`}
               >
-                <Bot className="w-3 h-3" /> Tanya AI
+                Tanya AI
               </button>
             </div>
-            <button
-              type="button"
-              onClick={() => setActiveChatOrderId(null)}
-              className="w-11 h-11 flex items-center justify-center rounded-full hover:bg-white/10"
-              aria-label="Tutup"
-            >
-              <X className="w-5 h-5" strokeWidth={2.4} />
-            </button>
           </div>
 
           <div
