@@ -4,6 +4,45 @@ import { useEffect, useMemo, useState } from 'react';
 import TransactionGrowthModal from '@/components/analytics/TransactionGrowthModal';
 import { idr, type CopilotInsight, type CopilotMetrics, type CopilotPeriod } from '@/lib/aiCopilotAnalytics';
 
+const QUICK_PROMPTS = [
+  '💡 Outlet mana yang paling profit?',
+  '📉 Analisis pengeluaran OPEX bulan ini',
+  '🚀 Strategi tingkatkan repeat order'
+];
+
+const renderAskMarkdown = (text: string) => {
+  const cleaned = String(text || '')
+    .replace(/^#{1,6}\s*/gm, '')
+    .replace(/\*{3,}/g, '**');
+  return cleaned.split('\n').map((line, i) => {
+    const bullet = line.match(/^\s*[-*]\s+(.*)$/);
+    const content = bullet ? bullet[1] : line;
+    const parts = content.split(/(\*\*.*?\*\*)/g);
+    const nodes = parts.map((part, j) => {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        return (
+          <strong key={j} className="font-bold text-amber-300">
+            {part.slice(2, -2)}
+          </strong>
+        );
+      }
+      return <span key={j}>{part}</span>;
+    });
+    if (bullet) {
+      return (
+        <p key={i} className="text-[12px] text-slate-100 leading-relaxed pl-3 mb-1.5 before:content-['•'] before:mr-2 before:text-amber-300">
+          {nodes}
+        </p>
+      );
+    }
+    return (
+      <p key={i} className="text-[12px] text-slate-100 leading-relaxed min-h-[1.1em] mb-1.5">
+        {nodes}
+      </p>
+    );
+  });
+};
+
 type Props = {
   scope?: 'owner' | 'supervisor';
   outletId?: string;
@@ -24,6 +63,10 @@ export default function AICopilotCard({
   const [insights, setInsights] = useState<CopilotInsight[]>([]);
   const [metrics, setMetrics] = useState<Partial<CopilotMetrics> | null>(null);
   const [open, setOpen] = useState(false);
+  const [ask, setAsk] = useState('');
+  const [asking, setAsking] = useState(false);
+  const [askQuestion, setAskQuestion] = useState('');
+  const [askReply, setAskReply] = useState('');
 
   const payload = useMemo(
     () => ({
@@ -65,6 +108,28 @@ export default function AICopilotCard({
       cancelled = true;
     };
   }, [payload]);
+
+  const sendAsk = async (text?: string) => {
+    const question = String(text ?? ask).trim();
+    if (!question || asking) return;
+    setAsking(true);
+    setAskQuestion(question);
+    setAskReply('');
+    try {
+      const res = await fetch('/api/ai/ask-owner', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, question })
+      });
+      const json = await res.json().catch(() => ({}));
+      setAskReply(json.reply || json.error || 'AI belum bisa menjawab. Coba lagi.');
+      setAsk('');
+    } catch {
+      setAskReply('Koneksi AI terputus. Coba kirim ulang pertanyaannya.');
+    } finally {
+      setAsking(false);
+    }
+  };
 
   return (
     <>
@@ -114,6 +179,60 @@ export default function AICopilotCard({
         )}
 
         {summary && !loading && <p className="text-[11px] text-slate-300 leading-relaxed">{summary}</p>}
+
+        <div className="rounded-2xl border border-white/10 bg-slate-950/60 p-3 space-y-2.5">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-sky-300">Tanya AI Copilot</p>
+          <div className="flex flex-wrap gap-1.5">
+            {QUICK_PROMPTS.map((chip) => (
+              <button
+                key={chip}
+                type="button"
+                disabled={asking}
+                onClick={() => sendAsk(chip.replace(/^[^\s]+\s/, ''))}
+                className="text-[10px] font-bold px-2.5 py-1.5 rounded-lg bg-white/5 border border-white/10 text-slate-200 hover:bg-white/10 disabled:opacity-50"
+              >
+                {chip}
+              </button>
+            ))}
+          </div>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              sendAsk();
+            }}
+            className="flex gap-2"
+          >
+            <input
+              value={ask}
+              onChange={(e) => setAsk(e.target.value)}
+              placeholder="Tanyakan apapun tentang bisnis Anda (misal: 'Cabang mana yang paling boros OPEX?' atau 'Bagaimana cara menaikkan omset Malioboro?')..."
+              className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-[11px] text-white placeholder:text-slate-500 focus:outline-none focus:border-sky-500"
+            />
+            <button
+              type="submit"
+              disabled={asking || !ask.trim()}
+              className="shrink-0 bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-slate-900 font-black text-[11px] px-3.5 rounded-xl min-w-[72px] flex items-center justify-center"
+            >
+              {asking ? (
+                <span className="inline-block w-3.5 h-3.5 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
+              ) : (
+                'Kirim'
+              )}
+            </button>
+          </form>
+          {(askQuestion || askReply || asking) && (
+            <div className="rounded-xl border border-slate-800 bg-slate-900/80 px-3 py-2.5 max-h-56 overflow-y-auto">
+              {askQuestion && (
+                <p className="text-[10px] font-bold text-slate-400 mb-2">Anda: {askQuestion}</p>
+              )}
+              {asking && !askReply ? (
+                <p className="text-[11px] text-slate-400">Menyusun jawaban dari data live…</p>
+              ) : (
+                renderAskMarkdown(askReply)
+              )}
+            </div>
+          )}
+        </div>
 
         <button
           type="button"

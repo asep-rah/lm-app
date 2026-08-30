@@ -454,6 +454,304 @@ export async function loadAnalyticsBundle(
   return { txs, historyTxs, expenses, tasks, start, end };
 }
 
+export type ExecutiveContext = {
+  overall: {
+    omset: number;
+    netProfit: number;
+    aov: number;
+    opex: number;
+    opexRatioPct: number;
+    txCount: number;
+    uniqueCustomers: number;
+    repeatRatePct: number;
+    slaScore: number;
+    slaOpenOverdue: number;
+    washFrequencyDays: number;
+    peakHourLabel: string;
+    passiveCustomers: number;
+  };
+  outlets: {
+    name: string;
+    omset: number;
+    transactions: number;
+    opex: number;
+    profit: number;
+    slaScore: number;
+    supervisor: string;
+  }[];
+  opexCategories: { category: string; amount: number }[];
+  supervisors: { name: string; outlets: number; omset: number; opex: number; profit: number }[];
+};
+
+export function buildExecutiveContext(
+  metrics: CopilotMetrics,
+  txs: any[],
+  expenses: any[],
+  tasks: any[],
+  outlets: { id: string; name?: string }[],
+  mapping: Record<string, string>,
+  historyTxs: any[]
+): ExecutiveContext {
+  const nameOf = (id: string) => {
+    const hit = (outlets || []).find((o) => String(o.id) === String(id));
+    return String(hit?.name || '').trim() || 'Outlet';
+  };
+
+  const byId: Record<
+    string,
+    { name: string; omset: number; transactions: number; opex: number; slaDone: number; slaOver: number; supervisor: string }
+  > = {};
+  (outlets || []).forEach((o) => {
+    byId[o.id] = {
+      name: nameOf(o.id),
+      omset: 0,
+      transactions: 0,
+      opex: 0,
+      slaDone: 0,
+      slaOver: 0,
+      supervisor: String(mapping[o.id] || 'Belum diatur')
+    };
+  });
+
+  (txs || []).filter((t) => !isVoidTransaction(t)).forEach((t) => {
+    const id = String(t.outlet_id || '');
+    if (!id) return;
+    if (!byId[id]) {
+      byId[id] = {
+        name: nameOf(id),
+        omset: 0,
+        transactions: 0,
+        opex: 0,
+        slaDone: 0,
+        slaOver: 0,
+        supervisor: String(mapping[id] || 'Belum diatur')
+      };
+    }
+    byId[id].omset += Number(t.amount ?? t.price) || 0;
+    byId[id].transactions += 1;
+  });
+
+  (expenses || []).forEach((e) => {
+    const id = String(e.outlet_id || '');
+    if (!id) return;
+    if (!byId[id]) {
+      byId[id] = {
+        name: nameOf(id),
+        omset: 0,
+        transactions: 0,
+        opex: 0,
+        slaDone: 0,
+        slaOver: 0,
+        supervisor: String(mapping[id] || 'Belum diatur')
+      };
+    }
+    byId[id].opex += Number(e.amount) || 0;
+  });
+
+  (tasks || []).forEach((t) => {
+    const id = String(t.outlet_id || '');
+    if (!id || !byId[id]) return;
+    if (isTaskCompleted(t.status)) byId[id].slaDone += 1;
+    if (isTaskOverdueOpen(t)) byId[id].slaOver += 1;
+  });
+
+  const outletRows = Object.values(byId)
+    .map((o) => {
+      const scored = o.slaDone + o.slaOver;
+      return {
+        name: o.name,
+        omset: Math.round(o.omset),
+        transactions: o.transactions,
+        opex: Math.round(o.opex),
+        profit: Math.round(o.omset - o.opex),
+        slaScore: scored ? Math.max(0, Math.min(100, Math.round((o.slaDone / scored) * 100))) : metrics.slaScore,
+        supervisor: o.supervisor
+      };
+    })
+    .sort((a, b) => b.profit - a.profit);
+
+  const catMap = new Map<string, number>();
+  (expenses || []).forEach((e) => {
+    const cat = String(e.category || e.notes || 'Lainnya').trim() || 'Lainnya';
+    catMap.set(cat, (catMap.get(cat) || 0) + (Number(e.amount) || 0));
+  });
+  const opexCategories = Array.from(catMap.entries())
+    .map(([category, amount]) => ({ category, amount: Math.round(amount) }))
+    .sort((a, b) => b.amount - a.amount)
+    .slice(0, 8);
+
+  const supMap: Record<string, { name: string; outlets: number; omset: number; opex: number; profit: number }> = {};
+  outletRows.forEach((o) => {
+    const name = o.supervisor || 'Belum diatur';
+    if (!supMap[name]) supMap[name] = { name, outlets: 0, omset: 0, opex: 0, profit: 0 };
+    supMap[name].outlets += 1;
+    supMap[name].omset += o.omset;
+    supMap[name].opex += o.opex;
+    supMap[name].profit += o.profit;
+  });
+
+  return {
+    overall: {
+      omset: Math.round(metrics.grossRevenue),
+      netProfit: Math.round(metrics.netProfit),
+      aov: Math.round(metrics.aov),
+      opex: Math.round(metrics.opex),
+      opexRatioPct: Math.round(metrics.opexRatio * 100),
+      txCount: metrics.txCount,
+      uniqueCustomers: metrics.uniqueCustomers,
+      repeatRatePct: Math.round(metrics.repeatRate),
+      slaScore: metrics.slaScore,
+      slaOpenOverdue: metrics.slaOpenOverdue,
+      washFrequencyDays: Number(metrics.washFrequencyDays.toFixed(1)),
+      peakHourLabel: metrics.peakHourLabel,
+      passiveCustomers: buildPassiveCustomers(historyTxs || txs).length
+    },
+    outlets: outletRows.slice(0, 20),
+    opexCategories,
+    supervisors: Object.values(supMap).sort((a, b) => b.profit - a.profit)
+  };
+}
+
+export const OWNER_ASK_SYSTEM = `You are an expert Executive Business Advisor & Data Analyst for Laundrivery ERP. Answer the owner's question precisely using ONLY the provided real-time app data context. Keep answers clear, structured with bullet points, concise (under 200 words), and highly actionable.
+
+Rules:
+- Use outlet names, never database UUIDs.
+- Answer in Bahasa Indonesia unless the question is in English.
+- Bold the key number or recommendation with **like this**.
+- Do not invent outlets, amounts, or customers that are not in the context.`;
+
+export function fallbackOwnerAsk(question: string, ctx: ExecutiveContext): string {
+  const q = question.toLowerCase();
+  const topProfit = ctx.outlets[0];
+  const worstOpex = [...ctx.outlets].sort((a, b) => b.opex - a.opex || a.omset - b.omset)[0];
+  const opexHeavy = [...ctx.outlets]
+    .filter((o) => o.omset > 0)
+    .sort((a, b) => b.opex / Math.max(b.omset, 1) - a.opex / Math.max(a.omset, 1))[0];
+  const topCat = ctx.opexCategories[0];
+  const topSup = ctx.supervisors[0];
+
+  if (/profit|untung|paling untung/.test(q)) {
+    return [
+      `**Outlet paling profit:** ${topProfit ? `${topProfit.name} (${idr(topProfit.profit)})` : 'belum ada data'}.`,
+      topProfit ? `- Omset ${idr(topProfit.omset)} · OPEX ${idr(topProfit.opex)} · ${topProfit.transactions} transaksi` : '',
+      `- Repeat order jaringan ${ctx.overall.repeatRatePct}% · SLA ${ctx.overall.slaScore}/100`,
+      `- Aksi: salin script upsell Express & Bedcover dari cabang ini ke outlet profit terendah.`
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+  if (/opex|pengeluaran|boros/.test(q)) {
+    return [
+      `**OPEX periode ini ${idr(ctx.overall.opex)}** (${ctx.overall.opexRatioPct}% dari omset).`,
+      topCat ? `- Kategori terbesar: **${topCat.category}** ${idr(topCat.amount)}` : '- Belum ada rincian kategori.',
+      opexHeavy ? `- Rasio OPEX tertinggi: **${opexHeavy.name}**` : '',
+      worstOpex ? `- Nominal OPEX terbesar: ${worstOpex.name} ${idr(worstOpex.opex)}` : '',
+      `- Aksi: tahan belanja non-inti di cabang tersebut dan audit nota ${topCat?.category || 'OPEX'} minggu ini.`
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+  if (/repeat|retensi|langganan|kembali/.test(q)) {
+    return [
+      `**Repeat order ${ctx.overall.repeatRatePct}%** dari ${ctx.overall.uniqueCustomers} pelanggan.`,
+      `- Frekuensi cuci rata-rata ${ctx.overall.washFrequencyDays} hari.`,
+      `- ${ctx.overall.passiveCustomers} pelanggan pasif (>21 hari) siap di-WA.`,
+      `- Aksi: reminder hari ke-12 + promo bundle Bedcover untuk yang sudah 21 hari absen.`
+    ].join('\n');
+  }
+
+  return [
+    `**Omset ${idr(ctx.overall.omset)} · Profit ${idr(ctx.overall.netProfit)} · AOV ${idr(ctx.overall.aov)}.**`,
+    topProfit ? `- Cabang terkuat: **${topProfit.name}** profit ${idr(topProfit.profit)}` : '',
+    topSup ? `- Supervisor teratas: **${topSup.name}** (${topSup.outlets} cabang)` : '',
+    `- Repeat ${ctx.overall.repeatRatePct}% · SLA ${ctx.overall.slaScore}/100 · jam puncak ${ctx.overall.peakHourLabel}`,
+    `- Aksi minggu ini: upsell Express di jam puncak + WA ${ctx.overall.passiveCustomers} pelanggan pasif.`
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+async function generateOwnerAskText(prompt: string): Promise<string> {
+  const geminiKey = (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  const openaiKey = (process.env.OPENAI_API_KEY || '').trim();
+
+  if (geminiKey) {
+    const models = Array.from(
+      new Set([process.env.GEMINI_MODEL, 'gemini-2.0-flash', 'gemini-flash-latest'].filter(Boolean) as string[])
+    ).slice(0, 2);
+    for (const model of models) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8000);
+      try {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+            signal: ctrl.signal
+          }
+        );
+        if (!res.ok) continue;
+        const json = await res.json().catch(() => ({}));
+        const text = String(json?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+        if (text) return text;
+      } catch {
+        /* next */
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+  }
+
+  if (openaiKey) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    try {
+      const res = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${openaiKey}`
+        },
+        body: JSON.stringify({
+          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          temperature: 0.3,
+          max_tokens: 350,
+          messages: [
+            { role: 'system', content: OWNER_ASK_SYSTEM },
+            { role: 'user', content: prompt }
+          ]
+        }),
+        signal: ctrl.signal
+      });
+      const json = await res.json().catch(() => ({}));
+      const text = String(json?.choices?.[0]?.message?.content || '').trim();
+      if (text) return text;
+    } catch {
+      /* fallback */
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  return '';
+}
+
+export async function answerOwnerQuestion(question: string, ctx: ExecutiveContext): Promise<{ reply: string; source: 'ai' | 'rules' }> {
+  const prompt = `${OWNER_ASK_SYSTEM}
+
+REAL-TIME DATA CONTEXT (JSON):
+${JSON.stringify(ctx)}
+
+OWNER QUESTION:
+${question}`;
+
+  const ai = await generateOwnerAskText(prompt);
+  if (ai) return { reply: ai.slice(0, 1600), source: 'ai' };
+  return { reply: fallbackOwnerAsk(question, ctx), source: 'rules' };
+}
+
 export async function enhanceGrowthWithGemini(
   report: TransactionGrowthReport,
   apiKey: string
