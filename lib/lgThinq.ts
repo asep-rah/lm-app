@@ -87,18 +87,68 @@ export const isBedcoverLike = (item?: CartMachineItem | null) => {
   return /bedcover|selimut|sprei|gordyn|karpet/.test(name);
 };
 
+/** King / Double / Bedcover Big — never allowed on LG 15kg. */
+export const isBedcoverDouble = (item?: CartMachineItem | null) => {
+  const hay = [item?.name, item?.category, item?.service_type, item?.service_name]
+    .map((v) => String(v || '').toLowerCase())
+    .join(' ');
+  return (
+    /bedcover\s*(double|king|big|besar|queen)/.test(hay) ||
+    /bedcover\s*big/.test(hay) ||
+    (hay.includes('bedcover') && /(double|king|besar|queen)/.test(hay))
+  );
+};
+
+export const BEDCOVER_DOUBLE_BADGE = '🔒 Wajib LG 24kg (Ukuran Bedcover Double)';
+
+export const isLargeWasher = (washer?: Pick<WasherRow, 'capacity_kg'> | null) =>
+  Number(washer?.capacity_kg) >= 20;
+
 export const inferMachineMode = (item: CartMachineItem): MachineMode => {
   if (isNoMachineService(item)) return 'NO_MACHINE_REQUIRED';
+  if (isBedcoverDouble(item)) return 'LG_24';
   if (item.machineMode === 'LG_24' || item.machineMode === 'LG_15') return item.machineMode;
   return recommendModeForWeight(itemWeightKg(item), item);
 };
 
 export const recommendModeForWeight = (weightKg: number, item?: CartMachineItem | null): MachineMode => {
   if (item && isNoMachineService(item)) return 'NO_MACHINE_REQUIRED';
+  if (isBedcoverDouble(item)) return 'LG_24';
   const w = Number(weightKg) || 0;
   if (isBedcoverLike(item) || (w > OP_LIMIT_LG15_KG && w <= OP_LIMIT_LG24_KG)) return 'LG_24';
   if (w > OP_LIMIT_LG24_KG) return 'LG_24';
   return 'LG_15';
+};
+
+export const WORKLOAD_BALANCING_THRESHOLD_MINUTES = 30;
+
+export const pendingCycleMinutes = (cycle?: { duration_minutes?: number | null }, washer?: WasherRow | null) => {
+  const logged = Number(cycle?.duration_minutes);
+  if (logged > 0) return logged;
+  return Math.round(estimatedCycleMs(washer || { capacity_kg: 15 }) / 60000);
+};
+
+export const machineWorkloadMinutes = (
+  washer: WasherRow,
+  pendingCycles: Array<{ washer_id?: string | null; status?: string; duration_minutes?: number | null }> = [],
+  now = Date.now()
+) => {
+  const running = remainingMs(washer, now) / 60000;
+  const queued = (pendingCycles || [])
+    .filter((c) => String(c.washer_id) === String(washer.id))
+    .filter((c) => ['PENDING', 'QUEUED'].includes(String(c.status || '').toUpperCase()))
+    .reduce((s, c) => s + pendingCycleMinutes(c, washer), 0);
+  return running + queued;
+};
+
+export const workloadByWasherId = (
+  washers: WasherRow[],
+  pendingCycles: Array<{ washer_id?: string | null; status?: string; duration_minutes?: number | null }> = [],
+  now = Date.now()
+) => {
+  const map = new Map<string, number>();
+  (washers || []).forEach((w) => map.set(String(w.id), machineWorkloadMinutes(w, pendingCycles, now)));
+  return map;
 };
 
 export const exceedsOpLimit = (weightKg: number) => Number(weightKg) > OP_LIMIT_LG24_KG;
@@ -111,8 +161,20 @@ export const splitPayloadKg = (
   item?: CartMachineItem | null
 ): Array<{ qty: number; machineMode: MachineMode }> => {
   const w = Math.round((Number(weightKg) || 0) * 10) / 10;
-  const bed = isBedcoverLike(item);
+  const hard24 = isBedcoverDouble(item);
+  const bed = hard24 || isBedcoverLike(item);
   if (w <= 0) return [{ qty: 0, machineMode: bed ? 'LG_24' : 'LG_15' }];
+  if (hard24) {
+    if (w <= OP_LIMIT_LG24_KG) return [{ qty: w, machineMode: 'LG_24' }];
+    const parts: Array<{ qty: number; machineMode: MachineMode }> = [];
+    let remain = w;
+    while (remain > OP_LIMIT_LG24_KG) {
+      parts.push({ qty: OP_LIMIT_LG24_KG, machineMode: 'LG_24' });
+      remain = Math.round((remain - OP_LIMIT_LG24_KG) * 10) / 10;
+    }
+    if (remain > 0) parts.push({ qty: remain, machineMode: 'LG_24' });
+    return parts;
+  }
   if (w <= OP_LIMIT_LG15_KG && !bed) return [{ qty: w, machineMode: 'LG_15' }];
   if (w <= OP_LIMIT_LG24_KG) return [{ qty: w, machineMode: 'LG_24' }];
   const parts: Array<{ qty: number; machineMode: MachineMode }> = [];
@@ -201,9 +263,11 @@ export const washerDisplayName = (washer?: WasherRow | null, peers: WasherRow[] 
 export function suggestWasher(
   weightKg: number,
   washers: WasherRow[],
-  prefer?: MachineMode | null
+  prefer?: MachineMode | null,
+  excludeIds?: Iterable<string>
 ): WasherRow | null {
-  const list = washers || [];
+  const taken = new Set(excludeIds || []);
+  const list = (washers || []).filter((w) => !taken.has(String(w.id)));
   if (!list.length) return null;
   const need24 = prefer === 'LG_24' || Number(weightKg) > OP_LIMIT_LG15_KG;
   const typed = list.filter((w) => (need24 ? washerCapKg(w) === 24 : washerCapKg(w) === 15));
@@ -217,22 +281,137 @@ export function suggestWasher(
   return pool.sort((a, b) => score(a) - score(b))[0] || null;
 }
 
+export type BalancedAssign = {
+  index: number;
+  washer: WasherRow | null;
+  machineMode: MachineMode;
+  loadBalanced: boolean;
+  queueDiverted: boolean;
+};
+
+const pickIdleOf = (washers: WasherRow[], taken: Set<string>, mode: MachineMode) => {
+  const drum = mode === 'LG_24' ? 24 : 15;
+  return (
+    washers
+      .filter((w) => !taken.has(String(w.id)) && isWasherIdle(w) && washerCapKg(w) === drum)
+      .sort((a, b) => String(a.id).localeCompare(String(b.id)))[0] || null
+  );
+};
+
+const pickIdleLarge = (washers: WasherRow[], taken: Set<string>) =>
+  washers
+    .filter((w) => !taken.has(String(w.id)) && isWasherIdle(w) && isLargeWasher(w))
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)))[0] || null;
+
+/**
+ * Distinct IDLE washers first. Bedcover Double → 24kg only.
+ * If the target 15kg already has ≥30 min global queue, divert ≤7kg to an idle 24kg.
+ */
+export function balanceWasherAssignments(
+  items: CartMachineItem[],
+  washers: WasherRow[],
+  reservedIds?: Iterable<string>,
+  workloads?: Map<string, number>
+): BalancedAssign[] {
+  const taken = new Set<string>([...(reservedIds || [])].map(String));
+  const loadOf = (w?: WasherRow | null) => (w ? Number(workloads?.get(String(w.id)) || 0) : 0);
+  const lg15Busy =
+    (washers || [])
+      .filter((w) => washerCapKg(w) === 15)
+      .some((w) => loadOf(w) >= WORKLOAD_BALANCING_THRESHOLD_MINUTES);
+
+  return (items || []).map((item, index) => {
+    if (!needsWasherCycle(item)) {
+      return {
+        index,
+        washer: null,
+        machineMode: 'NO_MACHINE_REQUIRED' as MachineMode,
+        loadBalanced: false,
+        queueDiverted: false
+      };
+    }
+    const weight = itemWeightKg(item);
+    const hard24 = isBedcoverDouble(item);
+    const prefer = hard24 ? 'LG_24' : recommendModeForWeight(weight, item);
+    let washer: WasherRow | null = null;
+    let loadBalanced = false;
+    let queueDiverted = false;
+
+    if (hard24) {
+      washer = pickIdleLarge(washers, taken) || (washers || []).find((w) => !taken.has(String(w.id)) && isLargeWasher(w)) || null;
+    } else {
+      washer = pickIdleOf(washers, taken, prefer);
+      const target15 = prefer === 'LG_15' ? washer || (washers || []).find((w) => washerCapKg(w) === 15) : null;
+      const fifteenOverloaded =
+        prefer === 'LG_15' &&
+        weight <= OP_LIMIT_LG15_KG &&
+        (lg15Busy || loadOf(target15) >= WORKLOAD_BALANCING_THRESHOLD_MINUTES);
+      if (fifteenOverloaded) {
+        const divert = pickIdleLarge(washers, taken) || pickIdleOf(washers, taken, 'LG_24');
+        if (divert) {
+          washer = divert;
+          queueDiverted = true;
+        }
+      }
+      if (!washer && prefer === 'LG_15' && weight <= OP_LIMIT_LG24_KG && !hard24) {
+        washer = pickIdleOf(washers, taken, 'LG_24');
+        if (washer) loadBalanced = true;
+      }
+      if (!washer && prefer === 'LG_24' && weight <= OP_LIMIT_LG15_KG && !hard24) {
+        washer = pickIdleOf(washers, taken, 'LG_15');
+        if (washer) loadBalanced = true;
+      }
+      if (!washer) {
+        washer = (washers || []).find((w) => !taken.has(String(w.id)) && isWasherIdle(w) && (!hard24 || isLargeWasher(w))) || null;
+        if (washer && washerCapKg(washer) !== (prefer === 'LG_24' ? 24 : 15)) loadBalanced = true;
+      }
+      if (!washer) washer = suggestWasher(weight, hard24 ? (washers || []).filter(isLargeWasher) : washers, prefer, taken);
+      if (!washer && !hard24) washer = suggestWasher(weight, washers, prefer);
+      if (!washer && hard24) washer = (washers || []).find(isLargeWasher) || null;
+    }
+
+    if (washer) taken.add(String(washer.id));
+    return {
+      index,
+      washer,
+      machineMode: washer ? (isLargeWasher(washer) ? 'LG_24' : 'LG_15') : prefer,
+      loadBalanced,
+      queueDiverted
+    };
+  });
+}
+
 export const washerOptionLabel = (
   washer: WasherRow,
   peers: WasherRow[] = [],
-  opts?: { recommended?: boolean }
+  opts?: { recommended?: boolean; loadBalanced?: boolean; queueDiverted?: boolean }
 ) => {
   const cap = washerCapKg(washer);
   const max = cap >= 24 ? OP_LIMIT_LG24_KG : OP_LIMIT_LG15_KG;
   const status = isWasherIdle(washer) ? 'Kosong' : remainingLabel(washer);
+  const name = washerDisplayName(washer, peers);
+  if (opts?.queueDiverted) return `${name} - ${status} (Distribusi Antrean Cepat - Beban 15kg >= 30m)`;
+  if (opts?.loadBalanced) return `${name} - ${status} (Load Balancing Paralel)`;
   const rec = opts?.recommended ? ` (Rekomendasi - Maks ${max}kg)` : ` (Maks ${max}kg)`;
-  return `${washerDisplayName(washer, peers)} - ${status}${rec}`;
+  return `${name} - ${status}${rec}`;
 };
 
-export const suggestBadge = (washer: WasherRow | null, peers: WasherRow[] = []) => {
+export const suggestBadge = (
+  washer: WasherRow | null,
+  peers: WasherRow[] = [],
+  opts?: { loadBalanced?: boolean; queueDiverted?: boolean }
+) => {
   if (!washer) return '🟢 Rekomendasi POS: menunggu status mesin';
-  return `🟢 ${washerOptionLabel(washer, peers, { recommended: true })}`;
+  return `🟢 ${washerOptionLabel(washer, peers, { recommended: true, ...opts })}`;
 };
+
+export const eligibleWashersForItem = (item: CartMachineItem, washers: WasherRow[]) => {
+  if (isBedcoverDouble(item)) return (washers || []).filter(isLargeWasher);
+  return washers || [];
+};
+
+export const PARALLEL_WASH_NOTICE =
+  '⚡ POS Recommendation: Optimal parallel washing configured using both LG 15kg & LG 24kg to minimize total wait time.';
 
 export const OVER_LIMIT_BADGE = '⚠️ Melebihi Maks 10kg (Bagi ke 2 Mesin/Kloter)';
 
@@ -425,12 +604,15 @@ export async function createWasherCycles(opts: {
   for (const batch of batches) {
     const drum = batch.machineMode === 'LG_24' ? 24 : 15;
     if (batch.machineMode === 'NO_MACHINE_REQUIRED' || batch.machineTag === 'NO_MACHINE') continue;
-    const preferred = (washers || []).find((w: any) => batch.washerId && String(w.id) === String(batch.washerId));
+    const pool = batch.machineMode === 'LG_24' ? (washers || []).filter(isLargeWasher) : washers || [];
+    const preferred = pool.find((w: any) => batch.washerId && String(w.id) === String(batch.washerId) && (batch.machineMode !== 'LG_24' || isLargeWasher(w)));
+    const usedIds = cycles.map((c: any) => c.washer_id).filter(Boolean);
     const washer =
       preferred ||
-      suggestWasher(Number(batch.qty) || capacityOf(batch.machineMode), washers || [], batch.machineMode) ||
-      (washers || []).find((w: any) => Number(w.capacity_kg) === drum && String(w.status || 'IDLE') === 'IDLE') ||
-      (washers || []).find((w: any) => Number(w.capacity_kg) === drum);
+      suggestWasher(Number(batch.qty) || capacityOf(batch.machineMode), pool, batch.machineMode, usedIds) ||
+      pool.find((w: any) => !usedIds.includes(w.id) && Number(w.capacity_kg) === drum && String(w.status || 'IDLE') === 'IDLE') ||
+      pool.find((w: any) => !usedIds.includes(w.id) && isWasherIdle(w)) ||
+      pool.find((w: any) => Number(w.capacity_kg) === drum);
 
     const status = 'PENDING';
     const { data, error } = await insertWithFallback('washer_cycle_logs', [
