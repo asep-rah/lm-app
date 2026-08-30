@@ -1,14 +1,20 @@
 import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
 import { uuidOrNull } from '@/lib/outletUuid';
 
-export type MachineMode = 'LG_24' | 'LG_15' | 'MANUAL';
+export type MachineMode = 'LG_24' | 'LG_15' | 'MANUAL' | 'NO_MACHINE_REQUIRED';
 
 export type CartMachineItem = {
+  id?: string;
+  cart_item_id?: string;
+  service_name?: string;
   name?: string;
   qty?: number;
   type?: string;
   weight?: number;
-  machineMode?: MachineMode;
+  pcs?: number;
+  category?: string;
+  service_type?: string;
+  machineMode?: MachineMode | null;
   note?: string;
 };
 
@@ -23,19 +29,56 @@ export type WasherBatch = {
 
 export const MACHINE_OPTIONS: { value: MachineMode; label: string }[] = [
   { value: 'LG_24', label: 'LG ThinQ 24 kg' },
-  { value: 'LG_15', label: 'LG ThinQ 15 kg' },
-  { value: 'MANUAL', label: 'Tanpa Mesin / Process Manual (Dry Clean / Hand Wash / Satuan)' }
+  { value: 'LG_15', label: 'LG ThinQ 15 kg' }
 ];
 
-export const machineTagOf = (mode: MachineMode) =>
-  mode === 'LG_24' ? 'LG-24KG' : mode === 'LG_15' ? 'LG-15KG' : 'MANUAL';
+export const isNoMachineService = (item: CartMachineItem) => {
+  if (item.machineMode === 'NO_MACHINE_REQUIRED') return true;
+  const hay = [item.name, item.category, item.service_type].map((v) => String(v || '').toLowerCase()).join(' ');
+  return /jasa\s*setrika|only\s*ironing|dry\s*clean\s*manual|dry.?clean|ironing|\biron\b|setrika|gosok\s*saja|setrika\s*saja/.test(
+    hay
+  );
+};
+
+export const needsWasherCycle = (item: CartMachineItem) => !isNoMachineService(item);
+
+export const machineTagOf = (mode?: MachineMode | null) => {
+  if (mode === 'LG_24') return 'LG-24KG';
+  if (mode === 'LG_15') return 'LG-15KG';
+  if (mode === 'NO_MACHINE_REQUIRED' || !mode) return 'NO_MACHINE';
+  return 'MANUAL';
+};
 
 export const inferMachineMode = (item: CartMachineItem): MachineMode => {
-  if (item.machineMode) return item.machineMode;
-  const name = String(item.name || '').toLowerCase();
-  if (/dry.?clean|hand.?wash|satuan|setrika|sepatu/.test(name)) return 'MANUAL';
+  if (isNoMachineService(item)) return 'NO_MACHINE_REQUIRED';
+  if (item.machineMode === 'LG_24' || item.machineMode === 'LG_15') return item.machineMode;
+  const name = String(item.name || item.category || '').toLowerCase();
   if (/bedcover|selimut|sprei|gordyn|karpet/.test(name)) return 'LG_24';
   return 'LG_15';
+};
+
+export const assignmentBadge = (item: CartMachineItem, rowIndex: number) => {
+  const name = String(item.name || 'Layanan').trim() || 'Layanan';
+  const kg =
+    item.type === 'kg' || Number(item.weight) > 0
+      ? `${Number(item.qty ?? item.weight) || 0} Kg`
+      : '';
+  const pcs =
+    Number(item.pcs) > 0
+      ? `${Number(item.pcs)} Pcs`
+      : item.type === 'pcs'
+        ? `${Number(item.qty) || 0} Pcs`
+        : '';
+  const qtyLabel = [kg, pcs].filter(Boolean).join(' - ');
+  const note = String(item.note || '')
+    .replace(/\s*\d+\s*pcs\s*/gi, ' ')
+    .replace(/\s*·\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (note) {
+    return `${name}${qtyLabel ? ` (${qtyLabel})` : ''} — [Catatan: ${note}]`;
+  }
+  return `#Baris ${rowIndex}: ${name}${qtyLabel ? ` (${qtyLabel.replace(' - ', '/')})` : ''}`;
 };
 
 export const capacityOf = (mode: MachineMode) => (mode === 'LG_24' ? 24 : mode === 'LG_15' ? 15 : 0);
@@ -44,7 +87,9 @@ export function planWasherBatches(
   items: CartMachineItem[],
   opts: { splitPerBag?: boolean; bagCount?: number }
 ): WasherBatch[] {
-  const list = items?.length ? items : [{ name: 'Cucian', qty: 1, type: 'kg', machineMode: 'LG_15' as MachineMode }];
+  const raw = items?.length ? items : [{ name: 'Cucian', qty: 1, type: 'kg', machineMode: 'LG_15' as MachineMode }];
+  const list = raw.filter((it) => needsWasherCycle(it) && inferMachineMode(it) !== 'NO_MACHINE_REQUIRED');
+  if (!list.length) return [];
   const split = Boolean(opts.splitPerBag);
   const bags = Math.max(1, Number(opts.bagCount) || list.length || 1);
   const batches: WasherBatch[] = [];
@@ -54,6 +99,7 @@ export function planWasherBatches(
     for (let i = 0; i < physical; i += 1) {
       const item = list[i] || list[list.length - 1];
       const mode = inferMachineMode(item);
+      if (mode === 'NO_MACHINE_REQUIRED') continue;
       batches.push({
         batchIndex: i + 1,
         bagLabel: `KANTONG ${i + 1} DARI ${physical}`,
@@ -75,21 +121,9 @@ export function planWasherBatches(
   });
 
   groups.forEach((group, mode) => {
+    if (mode === 'NO_MACHINE_REQUIRED' || mode === 'MANUAL') return;
     const names = group.map((g) => g.name).filter(Boolean).join(' + ') || 'Cucian';
     const weight = group.reduce((s, g) => s + (Number(g.qty) || 0), 0);
-    if (mode === 'MANUAL') {
-      group.forEach((g, i) => {
-        batches.push({
-          batchIndex: batches.length + 1,
-          bagLabel: `MANUAL ${i + 1}`,
-          machineMode: 'MANUAL',
-          machineTag: 'MANUAL',
-          itemName: String(g.name || 'Manual'),
-          qty: Number(g.qty) || 1
-        });
-      });
-      return;
-    }
     const cap = capacityOf(mode);
     const chunks = cap > 0 ? Math.max(1, Math.ceil(weight / cap)) : 1;
     for (let i = 0; i < chunks; i += 1) {
@@ -139,13 +173,12 @@ export async function createWasherCycles(opts: {
 
   for (const batch of batches) {
     const cap = capacityOf(batch.machineMode);
+    if (batch.machineMode === 'NO_MACHINE_REQUIRED' || batch.machineTag === 'NO_MACHINE') continue;
     const washer =
-      batch.machineMode === 'MANUAL'
-        ? null
-        : (washers || []).find((w: any) => Number(w.capacity_kg) === cap && String(w.status || 'IDLE') === 'IDLE') ||
-          (washers || []).find((w: any) => Number(w.capacity_kg) === cap);
+      (washers || []).find((w: any) => Number(w.capacity_kg) === cap && String(w.status || 'IDLE') === 'IDLE') ||
+      (washers || []).find((w: any) => Number(w.capacity_kg) === cap);
 
-    const status = batch.machineMode === 'MANUAL' ? 'COMPLETED' : 'RUNNING';
+    const status = 'RUNNING';
     const { data, error } = await insertWithFallback('washer_cycle_logs', [
       {
         washer_id: washer?.id || null,

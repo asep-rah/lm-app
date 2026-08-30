@@ -1,3 +1,5 @@
+import { assignmentBadge, inferMachineMode, machineTagOf, type CartMachineItem } from '@/lib/lgThinq';
+
 export const printDirectThermal = async (receiptData: {
     storeName: string;
     receiptNo: string;
@@ -51,21 +53,22 @@ export type BagSticker = {
 export function buildBagStickers(
   orderId: string,
   totalBags: number,
-  items: Array<{ name?: string; machineTag?: string; machineMode?: string; note?: string }>,
+  items: CartMachineItem[],
   meta?: { receipt?: string; customerName?: string }
 ): BagSticker[] {
   const n = Math.max(1, Number(totalBags) || items?.length || 1);
   const receipt = String(meta?.receipt || orderId || 'ORD');
   const customer = String(meta?.customerName || 'Pelanggan');
   return Array.from({ length: n }, (_, i) => {
-    const item = items?.[i] || items?.[0] || {};
+    const item = (items?.[i] || items?.[0] || {}) as CartMachineItem;
+    const mode = inferMachineMode(item);
     return {
       receipt,
       bagIndex: i + 1,
       totalBags: n,
       customerName: customer,
-      service: String(item.name || item.note || 'Cucian'),
-      machineTag: String(item.machineTag || item.machineMode || 'MESIN')
+      service: assignmentBadge(item, i + 1),
+      machineTag: String((item as any).machineTag || machineTagOf(mode))
     };
   });
 }
@@ -74,7 +77,7 @@ export function buildBagStickers(
 export async function printBagStickers(
   orderId: string,
   totalBags: number,
-  items: Array<{ name?: string; machineTag?: string; machineMode?: string; note?: string }>,
+  items: CartMachineItem[],
   meta?: { receipt?: string; customerName?: string; storeName?: string }
 ) {
   const stickers = buildBagStickers(orderId, totalBags, items, meta);

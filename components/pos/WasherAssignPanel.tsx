@@ -1,8 +1,12 @@
 'use client';
 
-import { MACHINE_OPTIONS, type MachineMode } from '@/lib/lgThinq';
-
-type Item = { id?: string; name?: string; machineMode?: MachineMode };
+import {
+  MACHINE_OPTIONS,
+  assignmentBadge,
+  needsWasherCycle,
+  type CartMachineItem,
+  type MachineMode
+} from '@/lib/lgThinq';
 
 export default function WasherAssignPanel({
   items,
@@ -11,17 +15,23 @@ export default function WasherAssignPanel({
   onSplitChange,
   bagCount
 }: {
-  items: Item[];
+  items: CartMachineItem[];
   onChangeItem: (index: number, mode: MachineMode) => void;
   splitPerBag: boolean;
   onSplitChange: (next: boolean) => void;
   bagCount?: number | string;
 }) {
+  const washRows = (items || [])
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => needsWasherCycle(item));
+
+  if (!washRows.length) return null;
+
   return (
     <div className="rounded-2xl border border-cyan-100 bg-cyan-50/70 p-3 space-y-2.5">
       <div>
         <p className="text-[10px] font-black uppercase tracking-widest text-cyan-800">LG ThinQ · Assignment Mesin</p>
-        <p className="text-[10px] text-cyan-900/80">Pilih LG 24 kg, LG 15 kg, atau proses manual per baris nota.</p>
+        <p className="text-[10px] text-cyan-900/80">Hanya item cuci mesin. Setrika / dry clean manual tidak ditampilkan.</p>
       </div>
       <label className="flex items-start gap-2 text-[11px] font-bold text-slate-800">
         <input
@@ -38,13 +48,16 @@ export default function WasherAssignPanel({
         </span>
       </label>
       <div className="space-y-1.5">
-        {items.map((item, idx) => (
-          <div key={item.id || idx} className="bg-white border border-cyan-100 rounded-xl px-2.5 py-2">
-            <p className="text-[11px] font-bold text-slate-800 truncate">{item.name || `Item ${idx + 1}`}</p>
+        {washRows.map(({ item, index }, row) => (
+          <div
+            key={item.id || item.cart_item_id || item.service_name || item.name || index}
+            className="bg-white border border-cyan-100 rounded-xl px-2.5 py-2"
+          >
+            <p className="text-[11px] font-bold text-slate-800 leading-snug">{assignmentBadge(item, row + 1)}</p>
             <select
-              value={item.machineMode || 'LG_15'}
-              onChange={(e) => onChangeItem(idx, e.target.value as MachineMode)}
-              className="mt-1 w-full border border-slate-200 rounded-lg px-2 py-1.5 text-[10px] font-bold bg-slate-50"
+              value={item.machineMode === 'LG_24' || item.machineMode === 'LG_15' ? item.machineMode : 'LG_15'}
+              onChange={(e) => onChangeItem(index, e.target.value as MachineMode)}
+              className="mt-1.5 w-full border border-slate-200 rounded-lg px-2 py-1.5 text-[10px] font-bold bg-slate-50"
             >
               {MACHINE_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
@@ -54,9 +67,6 @@ export default function WasherAssignPanel({
             </select>
           </div>
         ))}
-        {items.length === 0 && (
-          <p className="text-[10px] text-slate-500 italic">Tambah item ke nota dulu, lalu pilih mesin.</p>
-        )}
       </div>
     </div>
   );

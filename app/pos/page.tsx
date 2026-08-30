@@ -624,7 +624,18 @@ const handleApplyLoan = async (e: React.FormEvent) => {
 
   // STATE KERANJANG MULTI-ITEM BARU
   const [cartItems, setCartItems] = useState<
-    Array<{ id: string; name: string; type: 'kg' | 'pcs'; basePrice: number; price: number; qty: number; note: string; machineMode?: MachineMode }>
+    Array<{
+      id: string;
+      name: string;
+      type: 'kg' | 'pcs';
+      basePrice: number;
+      price: number;
+      qty: number;
+      note: string;
+      pcs?: number;
+      category?: string;
+      machineMode?: MachineMode | null;
+    }>
   >([]);
   const [serviceQuery, setServiceQuery] = useState('');
   const [serviceCat, setServiceCat] = useState<'all' | 'kg' | 'pcs'>('all');
@@ -771,6 +782,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       return alert('⚠️ Isi berat (Kg) hasil timbangan terlebih dahulu sebelum menambahkan ke keranjang!');
     }
 
+    const pcsExtra = !isPcs ? Number(inputQtyPcs) || Number(pcsCount) || 0 : 0;
     const newItem = {
       id: Math.random().toString(),
       name: targetService,
@@ -778,8 +790,14 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       basePrice: basePrice,
       price: finalUnitPrice,
       qty: qty,
+      pcs: isPcs ? qty : pcsExtra || undefined,
+      category: activeSvc?.category || activeSvc?.type || '',
       note: [inputItemNote, pcsNote].filter(Boolean).join(' · '),
-      machineMode: inferMachineMode({ name: targetService, machineMode: defaultMachineMode })
+      machineMode: inferMachineMode({
+        name: targetService,
+        category: activeSvc?.category || activeSvc?.type || '',
+        machineMode: defaultMachineMode
+      })
     };
 
     setCartItems(prev => [...prev, newItem]);
@@ -1403,8 +1421,14 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       notes: combinedNotes,
       amount: totalPay,
       items: cartItems.length > 0
-        ? cartItems.map((it) => ({ ...it, machineMode: it.machineMode || inferMachineMode(it), splitPerBag }))
-        : [{ name: primaryServiceLabel, qty: totalPcsSum || 1, weight: totalKgSum || 0, machineMode: defaultMachineMode, splitPerBag }],
+        ? cartItems.map((it) => ({ ...it, machineMode: inferMachineMode(it), splitPerBag }))
+        : [{
+            name: primaryServiceLabel,
+            qty: totalPcsSum || 1,
+            weight: totalKgSum || 0,
+            machineMode: inferMachineMode({ name: primaryServiceLabel, machineMode: defaultMachineMode }),
+            splitPerBag
+          }],
       payment_method: finalPaymentMethodLabel,
       status: isNonCashVerifyMethod(finalPaymentMethodLabel) ? PENDING_PAY_STATUS : 'Diterima',
       by_sortir: employeeName
@@ -1484,11 +1508,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       const stickers = buildBagStickers(
         newTx.receipt_number || generatedResi,
         Number(bagCount) || cycleItems.length || 1,
-        cycleItems.map((it: any) => ({
-          name: it.name,
-          machineMode: it.machineMode,
-          machineTag: it.machineMode
-        })),
+        cycleItems,
         { receipt: newTx.receipt_number || generatedResi, customerName: customerName || 'Pelanggan' }
       );
       setBagStickers(stickers);
