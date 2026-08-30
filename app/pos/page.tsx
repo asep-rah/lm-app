@@ -26,11 +26,17 @@ import ThirdPartyDispatchForm from '@/components/ThirdPartyDispatchForm';
 import ThirdPartyDeliveryCard from '@/components/ThirdPartyDeliveryCard';
 import CashDepositQrisPanel from '@/components/CashDepositQrisPanel';
 import WasherAssignPanel from '@/components/pos/WasherAssignPanel';
+import MachineLoadVerifyModal from '@/components/pos/MachineLoadVerifyModal';
+import LayFlatPhotoModal from '@/components/pos/LayFlatPhotoModal';
+import { intakePcsOf, PCS_MISMATCH_ALERT } from '@/lib/layFlatProof';
 import { buildBagStickers, printBagStickers } from '@/utils/thermalPrinter';
 import {
   createWasherCycles,
-  hasOpenMachineCycles,
+  hasIncompleteWashCycles,
   inferMachineMode,
+  needsWasherCycle,
+  startVerifiedWasherCycle,
+  washerDisplayName,
   type MachineMode
 } from '@/lib/lgThinq';
 import {
@@ -635,6 +641,8 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       pcs?: number;
       category?: string;
       machineMode?: MachineMode | null;
+      washerId?: string | null;
+      washerName?: string | null;
     }>
   >([]);
   const [serviceQuery, setServiceQuery] = useState('');
@@ -677,16 +685,26 @@ const handleApplyLoan = async (e: React.FormEvent) => {
   const [rackNotes, setRackNotes] = useState('');
   const [rackPhotoFile, setRackPhotoFile] = useState<File | null>(null);
   const [stageProof, setStageProof] = useState<{ order: any; targetStatus: string } | null>(null);
-  const [stageProofFile, setStageProofFile] = useState<File | null>(null);
   const [stageProofNotes, setStageProofNotes] = useState('');
+  const [editMachineItems, setEditMachineItems] = useState<any[]>([]);
+  const [editSplitPerBag, setEditSplitPerBag] = useState(false);
   const [queueSearch, setQueueSearch] = useState('');
   const [completedPickups, setCompletedPickups] = useState<any[]>([]);
   const [printMode, setPrintMode] = useState<'receipt' | 'payslip' | 'bag-sticker'>('receipt');
   const [bagStickers, setBagStickers] = useState<
-    Array<{ receipt: string; bagIndex: number; totalBags: number; customerName: string; service: string; machineTag: string }>
+    Array<{ receipt: string; bagIndex: number; totalBags: number; customerName: string; service: string; machineTag: string; qrPayload?: string }>
   >([]);
   const [splitPerBag, setSplitPerBag] = useState(false);
   const [defaultMachineMode, setDefaultMachineMode] = useState<MachineMode>('LG_15');
+  const [loadVerify, setLoadVerify] = useState<{
+    order: any;
+    targetStatus: string;
+    washerId?: string;
+    washerName?: string;
+    cycleId?: string;
+    receipt?: string;
+    bagLabel?: string;
+  } | null>(null);
 
   // MODAL DETAIL TRANSAKSI & FORM EDIT KASIR
   const [selectedTxDetail, setSelectedTxDetail] = useState<any>(null);
@@ -854,6 +872,19 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     const computedAmt = (kg * basePrice) + fee;
 
     setEditAmount(tx.amount && Number(tx.amount) > 0 ? String(tx.amount) : String(computedAmt));
+    const items = parseOrderItems(tx.items);
+    setEditMachineItems(
+      items.length
+        ? items
+        : [{
+            name: tx.service_type || 'Cucian',
+            qty: Number(tx.weight_kg) || 0,
+            type: 'kg',
+            pcs: Number(tx.pcs_count) || 0,
+            machineMode: inferMachineMode({ name: tx.service_type })
+          }]
+    );
+    setEditSplitPerBag(Boolean(items[0]?.splitPerBag));
   };
 
   useEffect(() => {
@@ -1421,12 +1452,20 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       notes: combinedNotes,
       amount: totalPay,
       items: cartItems.length > 0
-        ? cartItems.map((it) => ({ ...it, machineMode: inferMachineMode(it), splitPerBag }))
+        ? cartItems.map((it) => ({
+            ...it,
+            machineMode: inferMachineMode(it),
+            washerId: it.washerId || null,
+            washerName: it.washerName || null,
+            splitPerBag
+          }))
         : [{
             name: primaryServiceLabel,
             qty: totalPcsSum || 1,
             weight: totalKgSum || 0,
             machineMode: inferMachineMode({ name: primaryServiceLabel, machineMode: defaultMachineMode }),
+            washerId: null,
+            washerName: null,
             splitPerBag
           }],
       payment_method: finalPaymentMethodLabel,
@@ -1496,7 +1535,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
         created_at: newTx.created_at 
       });
       const cycleItems = (orderData.items as any[]) || [];
-      await createWasherCycles({
+      const createdCycles = await createWasherCycles({
         db: supabase as any,
         orderId: newTx.id,
         outletId: selectedOutlet,
@@ -1506,10 +1545,15 @@ const handleApplyLoan = async (e: React.FormEvent) => {
         startedBy: employeeId
       });
       const stickers = buildBagStickers(
-        newTx.receipt_number || generatedResi,
+        newTx.id,
         Number(bagCount) || cycleItems.length || 1,
         cycleItems,
-        { receipt: newTx.receipt_number || generatedResi, customerName: customerName || 'Pelanggan' }
+        {
+          receipt: newTx.receipt_number || generatedResi,
+          customerName: customerName || 'Pelanggan',
+          orderId: newTx.id,
+          cycles: createdCycles.cycles
+        }
       );
       setBagStickers(stickers);
       
@@ -1556,7 +1600,8 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       delivery_fee: Number(editDeliveryFee) || 0,
       notes: editNotes,
       amount: Number(editAmount) || 0,
-      status: nextStatus
+      status: nextStatus,
+      items: editMachineItems.map((it) => ({ ...it, splitPerBag: editSplitPerBag }))
     };
 
     const { error } = await supabase.from('transactions').update(payload).eq('id', selectedTxDetail.id);
@@ -1564,6 +1609,16 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     if (!error) {
       const updatedTx = { ...selectedTxDetail, ...payload };
       setSelectedTxDetail(updatedTx);
+      for (let i = 0; i < editMachineItems.length; i += 1) {
+        const wid = editMachineItems[i]?.washerId;
+        if (!wid) continue;
+        await supabase
+          .from('washer_cycle_logs')
+          .update({ washer_id: wid, machine_tag: editMachineItems[i]?.machineMode === 'LG_24' ? 'LG-24KG' : 'LG-15KG' })
+          .eq('order_id', selectedTxDetail.id)
+          .eq('batch_index', i + 1)
+          .in('status', ['PENDING', 'QUEUED']);
+      }
       alert(needsCustomerApproval ? '⚠️ Disimpan & dikirim ke CS!' : '✅ Transaksi diperbarui!');
       refreshData();
     } else alert('❌ Gagal memperbarui: ' + error.message);
@@ -1666,7 +1721,11 @@ const statusKeyOf = (order: any) =>
 // tidak dibanjiri popup, tapi tetap tahu kalau upah tahap tidak ikut tercatat.
 let workLogWarningShown = false;
 
-const handleStatusChange = async (order: any, targetStatus: string, proof?: { photoUrl?: string; notes?: string }) => {
+const handleStatusChange = async (
+  order: any,
+  targetStatus: string,
+  proof?: { photoUrl?: string; photoUrls?: string[]; notes?: string; scanVerified?: boolean; pcs?: number }
+) => {
   if (!order?.id) {
     alert('Gagal mengubah status: data pesanan tidak valid.');
     return;
@@ -1685,18 +1744,63 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
   const nextStage = stageKeyOf(targetStatus);
   if (nextStage === 'kering' || nextStage === 'setrika' || nextStage === 'packing' || nextStage === 'siap') {
     const { data: cycles } = await supabase.from('washer_cycle_logs').select('status').eq('order_id', order.id);
-    if (hasOpenMachineCycles(cycles || [])) {
-      alert('⏳ Order tetap IN_PROGRESS: masih ada batch mesin LG yang RUNNING. Tunggu semua siklus COMPLETED.');
+    if (hasIncompleteWashCycles(cycles || [])) {
+      alert('⏳ Order tetap IN_PROGRESS: masih ada batch mesin LG yang PENDING/RUNNING. Scan stiker lalu selesaikan siklus.');
+      return;
+    }
+  }
+
+  if (nextStage === 'cuci' && !proof?.scanVerified) {
+    const { data: washCycles } = await supabase
+      .from('washer_cycle_logs')
+      .select('id, washer_id, status, bag_label, batch_index, machine_tag')
+      .eq('order_id', order.id)
+      .order('batch_index', { ascending: true });
+    const items = parseOrderItems(order.items);
+    const needsScan =
+      (washCycles || []).some((c: any) => ['PENDING', 'QUEUED', 'RUNNING'].includes(String(c.status || '').toUpperCase())) ||
+      items.some((it: any) => needsWasherCycle(it));
+    if (needsScan) {
+      const pending =
+        (washCycles || []).find((c: any) => ['PENDING', 'QUEUED'].includes(String(c.status || '').toUpperCase())) ||
+        (washCycles || [])[0];
+      let washerName = String(pending?.machine_tag || items.find((it: any) => it.washerName)?.washerName || '');
+      const washerId = String(pending?.washer_id || items.find((it: any) => it.washerId)?.washerId || '');
+      if (washerId) {
+        const { data: w } = await supabase.from('washers').select('*').eq('id', washerId).maybeSingle();
+        if (w) washerName = washerDisplayName(w as any, [w as any]);
+      }
+      setLoadVerify({
+        order,
+        targetStatus,
+        washerId,
+        washerName: washerName || 'mesin yang ditugaskan',
+        cycleId: pending?.id,
+        receipt: order.receipt_number,
+        bagLabel: pending?.bag_label
+      });
       return;
     }
   }
 
   const targetKey = stageKeyOf(targetStatus);
-  if ((targetKey === 'sortir' || targetKey === 'packing') && !proof?.photoUrl) {
+  const proofPhotos =
+    proof?.photoUrls?.filter(Boolean)?.length
+      ? (proof.photoUrls as string[]).filter(Boolean)
+      : proof?.photoUrl
+        ? [proof.photoUrl]
+        : [];
+  if ((targetKey === 'sortir' || targetKey === 'packing') && !proofPhotos.length) {
     setStageProof({ order, targetStatus });
-    setStageProofFile(null);
     setStageProofNotes('');
     return;
+  }
+  if (targetKey === 'packing' && proof?.pcs != null) {
+    const intake = intakePcsOf(order);
+    if (intake > 0 && Number(proof.pcs) !== intake) {
+      alert(PCS_MISMATCH_ALERT);
+      return;
+    }
   }
 
   // Packing -> Siap Diambil wajib lewat modal rak (nomor rak + jumlah pack).
@@ -1736,12 +1840,19 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
       const updatedItems = currentItems.map((it: any, idx: number) => {
         if (idx !== order.item_index) return it;
         const next = { ...it, status: targetStatus };
-        if (proof?.photoUrl && targetKey === 'sortir') {
-          next.sortir_photo_url = proof.photoUrl;
-          next.photo_url = proof.photoUrl;
+        if (proofPhotos.length && targetKey === 'sortir') {
+          next.sortir_photo_url = proofPhotos[0];
+          next.sortir_photo_urls = proofPhotos;
+          next.photo_url = proofPhotos[0];
+          if (proof?.pcs != null) {
+            next.intake_pcs = proof.pcs;
+            next.total_pcs = proof.pcs;
+          }
         }
-        if (proof?.photoUrl && targetKey === 'packing') {
-          next.packing_photo_url = proof.photoUrl;
+        if (proofPhotos.length && targetKey === 'packing') {
+          next.packing_photo_url = proofPhotos[0];
+          next.packing_photo_urls = proofPhotos;
+          if (proof?.pcs != null) next.output_pcs = proof.pcs;
         }
         return next;
       });
@@ -1753,9 +1864,30 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
       updateError = error;
     } else {
       // 2. Transaksi tunggal biasa.
+      const parsedItems = safeParse(order.items, []);
+      const stampedItems = Array.isArray(parsedItems) && proofPhotos.length
+        ? parsedItems.map((it: any) => {
+            const next = { ...it };
+            if (targetKey === 'sortir') {
+              next.sortir_photo_url = proofPhotos[0];
+              next.sortir_photo_urls = proofPhotos;
+              next.photo_url = proofPhotos[0];
+              if (proof?.pcs != null) {
+                next.intake_pcs = proof.pcs;
+                next.total_pcs = proof.pcs;
+              }
+            }
+            if (targetKey === 'packing') {
+              next.packing_photo_url = proofPhotos[0];
+              next.packing_photo_urls = proofPhotos;
+              if (proof?.pcs != null) next.output_pcs = proof.pcs;
+            }
+            return next;
+          })
+        : null;
       const { error } = await supabase
         .from('transactions')
-        .update({ status: targetStatus })
+        .update(stampedItems ? { status: targetStatus, items: stampedItems } : { status: targetStatus })
         .eq('id', order.id);
       updateError = error;
     }
@@ -1815,37 +1947,50 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
       }
     }
 
-    if ((targetKey === 'sortir' || targetKey === 'packing') && proof?.photoUrl) {
-      await insertWithFallback('work_logs', [
-        {
-          transaction_id: order.id,
-          employee_name: employeeName || 'Kasir',
-          stage: targetStatus,
-          service_type: subItem?.name || order.service_type || '',
-          weight_kg: Number(subItem?.weight ?? order.weight_kg) || 0,
-          pcs_count: Number(subItem?.qty ?? order.pcs_count) || 0,
-          notes: proof.notes || undefined,
-          photo_url: proof.photoUrl,
-          created_at: new Date().toISOString()
-        },
-        {
-          transaction_id: order.id,
-          employee_name: employeeName || 'Kasir',
-          stage: targetStatus,
-          service_type: subItem?.name || order.service_type || '',
-          weight_kg: Number(subItem?.weight ?? order.weight_kg) || 0,
-          pcs_count: Number(subItem?.qty ?? order.pcs_count) || 0,
-          notes: proof.notes || undefined,
-          photo_url: proof.photoUrl
-        }
-      ]);
-      if (targetKey === 'sortir') {
-        await updateWithFallback(
-          'transactions',
-          [{ sortir_photo_url: proof.photoUrl }],
-          { column: 'id', value: order.id }
-        );
+    if ((targetKey === 'sortir' || targetKey === 'packing') && proofPhotos.length) {
+      const pcsLogged = Number(proof?.pcs ?? subItem?.qty ?? order.pcs_count) || 0;
+      for (const url of proofPhotos) {
+        await insertWithFallback('work_logs', [
+          {
+            transaction_id: order.id,
+            employee_name: employeeName || 'Kasir',
+            stage: targetStatus,
+            service_type: subItem?.name || order.service_type || '',
+            weight_kg: Number(subItem?.weight ?? order.weight_kg) || 0,
+            pcs_count: pcsLogged,
+            notes: proof?.notes || undefined,
+            photo_url: url,
+            created_at: new Date().toISOString()
+          },
+          {
+            transaction_id: order.id,
+            employee_name: employeeName || 'Kasir',
+            stage: targetStatus,
+            service_type: subItem?.name || order.service_type || '',
+            weight_kg: Number(subItem?.weight ?? order.weight_kg) || 0,
+            pcs_count: pcsLogged,
+            notes: proof?.notes || undefined,
+            photo_url: url
+          }
+        ]);
       }
+      const txPatch =
+        targetKey === 'sortir'
+          ? [
+              {
+                sortir_photo_url: proofPhotos[0],
+                intake_pcs: proof?.pcs ?? null,
+                total_pcs: proof?.pcs ?? null,
+                pcs_count: proof?.pcs ?? order.pcs_count
+              },
+              { sortir_photo_url: proofPhotos[0], pcs_count: proof?.pcs ?? order.pcs_count },
+              { sortir_photo_url: proofPhotos[0] }
+            ]
+          : [
+              { packing_photo_url: proofPhotos[0], output_pcs: proof?.pcs ?? null },
+              { packing_photo_url: proofPhotos[0] }
+            ];
+      await updateWithFallback('transactions', txPatch, { column: 'id', value: order.id });
     }
 
     // 5. Potong stok bahan kimia (best-effort, tidak boleh membatalkan perubahan status)
@@ -1865,7 +2010,15 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
     setActiveOrders((prev) =>
       prev.map((o) => {
         if (o.id !== order.id) return o;
-        if (!isSubItem) return { ...o, status: targetStatus };
+        if (!isSubItem) {
+          return {
+            ...o,
+            status: targetStatus,
+            intake_pcs: targetKey === 'sortir' ? proof?.pcs ?? o.intake_pcs : o.intake_pcs,
+            output_pcs: targetKey === 'packing' ? proof?.pcs ?? o.output_pcs : o.output_pcs,
+            pcs_count: targetKey === 'sortir' && proof?.pcs != null ? proof.pcs : o.pcs_count
+          };
+        }
         const parsed = safeParse(o.items, []);
         if (!Array.isArray(parsed)) return o;
         return {
@@ -1873,12 +2026,16 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
           items: parsed.map((it: any, idx: number) => {
             if (idx !== order.item_index) return it;
             const next = { ...it, status: targetStatus };
-            if (proof?.photoUrl && targetKey === 'sortir') {
-              next.sortir_photo_url = proof.photoUrl;
-              next.photo_url = proof.photoUrl;
+            if (proofPhotos.length && targetKey === 'sortir') {
+              next.sortir_photo_url = proofPhotos[0];
+              next.sortir_photo_urls = proofPhotos;
+              next.photo_url = proofPhotos[0];
+              if (proof?.pcs != null) next.intake_pcs = proof.pcs;
             }
-            if (proof?.photoUrl && targetKey === 'packing') {
-              next.packing_photo_url = proof.photoUrl;
+            if (proofPhotos.length && targetKey === 'packing') {
+              next.packing_photo_url = proofPhotos[0];
+              next.packing_photo_urls = proofPhotos;
+              if (proof?.pcs != null) next.output_pcs = proof.pcs;
             }
             return next;
           })
@@ -2071,22 +2228,26 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
     }
   };
 
-  const handleSubmitStageProof = async () => {
+  const handleSubmitStageProof = async (payload: { files: File[]; pcs: number }) => {
     if (!stageProof) return;
-    if (!stageProofFile) {
-      alert('⚠️ Foto tahap Sortir/Dikemas wajib diunggah.');
+    if (!payload.files.length) {
+      alert('⚠️ Foto lay-flat Sortir/Kemas wajib diambil.');
       return;
     }
     setIsSubmitting(true);
     try {
       const key = stageKeyOf(stageProof.targetStatus);
-      const url = await uploadProofFile(stageProofFile, `stage_${key}_${stageProof.order?.id || 'tx'}`);
+      const urls: string[] = [];
+      for (let i = 0; i < payload.files.length; i += 1) {
+        urls.push(await uploadProofFile(payload.files[i], `stage_${key}_${stageProof.order?.id || 'tx'}_${i + 1}`));
+      }
       const { order, targetStatus } = stageProof;
       setStageProof(null);
-      setStageProofFile(null);
       await handleStatusChange(order, targetStatus, {
-        photoUrl: url,
-        notes: stageProofNotes.trim() || undefined
+        photoUrl: urls[0],
+        photoUrls: urls,
+        notes: stageProofNotes.trim() || undefined,
+        pcs: payload.pcs
       });
       setStageProofNotes('');
     } catch (err: any) {
@@ -2365,10 +2526,21 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
     if (!src) return;
     const items = Array.isArray(src.items) ? src.items : Array.isArray(src.cartItems) ? src.cartItems : [];
     const n = Math.max(1, Number(src.bag_count) || Number(bagCount) || items.length || bagStickers.length || 1);
+    let cycles: any[] = [];
+    if (src.id) {
+      const { data } = await supabase
+        .from('washer_cycle_logs')
+        .select('id, washer_id, batch_index, machine_tag, bag_label')
+        .eq('order_id', src.id)
+        .order('batch_index', { ascending: true });
+      cycles = data || [];
+    }
     const stickers = await printBagStickers(src.id || src.receipt_number, n, items, {
       receipt: src.receipt_number,
       customerName: src.customer_name || editCustomerName || customerName,
-      storeName: src.outletName || outletName
+      storeName: src.outletName || outletName,
+      orderId: src.id,
+      cycles
     });
     setBagStickers(stickers);
     setPrintMode('bag-sticker');
@@ -2481,6 +2653,16 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
                 <div className="text-center font-bold mt-1">KANTONG {s.bagIndex} DARI {s.totalBags}</div>
                 <div className="mt-2">{s.customerName}</div>
                 <div className="font-bold">{s.service} / {s.machineTag}</div>
+                {s.qrPayload && (
+                  <div className="mt-2 text-center">
+                    <img
+                      alt="QR kantong"
+                      src={`https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${encodeURIComponent(s.qrPayload)}`}
+                      className="mx-auto w-[28mm] h-[28mm]"
+                    />
+                    <div className="text-[7px] font-mono break-all mt-1">{s.qrPayload}</div>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -2580,51 +2762,49 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
         </div>
       )}
 
-      {stageProof && (
-        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl">
-            <h3 className="text-lg font-black mb-1 text-slate-800">
-              📸 Foto {stageKeyOf(stageProof.targetStatus) === 'sortir' ? 'Sortir' : 'Dikemas'}
-            </h3>
-            <p className="text-xs text-slate-500 mb-4">
-              Milik: <span className="font-bold text-emerald-600">{stageProof.order?.customer_name}</span>
-            </p>
-            <div className="space-y-3 mb-6">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Foto tahap <span className="text-rose-500">*</span></label>
-                <FileProofInput file={stageProofFile} onFile={setStageProofFile} capture="environment" />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Catatan staf <span className="text-slate-400 font-semibold">(opsional)</span></label>
-                <input
-                  type="text"
-                  value={stageProofNotes}
-                  onChange={(e) => setStageProofNotes(e.target.value)}
-                  placeholder="Contoh: Noda kerah, 2 hanger terpisah"
-                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-sm text-slate-800 focus:outline-none"
-                />
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => { setStageProof(null); setStageProofFile(null); setStageProofNotes(''); }}
-                className="flex-1 bg-slate-100 font-bold py-3 rounded-xl text-slate-600 text-sm"
-              >
-                Kembali
-              </button>
-              <button
-                type="button"
-                onClick={handleSubmitStageProof}
-                disabled={isSubmitting || !stageProofFile}
-                className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl text-sm disabled:opacity-50"
-              >
-                {isSubmitting ? 'Mengunggah…' : 'Lanjut'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <MachineLoadVerifyModal
+        open={Boolean(loadVerify)}
+        target={
+          loadVerify
+            ? {
+                washerId: loadVerify.washerId,
+                washerName: loadVerify.washerName,
+                orderId: loadVerify.order?.id,
+                receipt: loadVerify.receipt,
+                cycleId: loadVerify.cycleId,
+                bagLabel: loadVerify.bagLabel
+              }
+            : null
+        }
+        onCancel={() => setLoadVerify(null)}
+        onVerified={async () => {
+          if (!loadVerify) return;
+          await startVerifiedWasherCycle({
+            db: supabase as any,
+            cycleId: loadVerify.cycleId,
+            washerId: loadVerify.washerId,
+            orderId: loadVerify.order?.id,
+            startedBy: employeeId
+          });
+          const next = loadVerify;
+          setLoadVerify(null);
+          await handleStatusChange(next.order, next.targetStatus, { scanVerified: true });
+        }}
+      />
+
+      <LayFlatPhotoModal
+        open={Boolean(stageProof)}
+        stage={stageKeyOf(stageProof?.targetStatus) === 'packing' ? 'kemas' : 'sortir'}
+        order={stageProof?.order}
+        notes={stageProofNotes}
+        onNotes={setStageProofNotes}
+        busy={isSubmitting}
+        onCancel={() => {
+          setStageProof(null);
+          setStageProofNotes('');
+        }}
+        onSubmit={handleSubmitStageProof}
+      />
 
       {thirdPartyOrder && (
         <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4">
@@ -2833,6 +3013,17 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
               </div>
             </div>
 
+            <WasherAssignPanel
+              items={editMachineItems}
+              splitPerBag={editSplitPerBag}
+              onSplitChange={setEditSplitPerBag}
+              bagCount={editPcsCount || bagCount}
+              outletId={selectedTxDetail.outlet_id || selectedOutlet}
+              onChangeItem={(idx, patch) => {
+                setEditMachineItems((prev) => prev.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
+              }}
+            />
+
             <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
               <StageTimeline logs={txWorkLogs} transaction={selectedTxDetail} />
             </div>
@@ -2908,6 +3099,12 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
               ))}
             </select>
           )}
+          <Link
+            href="/pos/queue"
+            className="bg-cyan-50 hover:bg-cyan-600 border border-cyan-200 text-cyan-800 hover:text-white text-xs font-bold px-3 py-2.5 rounded-xl transition-all"
+          >
+            Antrian Mesin
+          </Link>
           <button 
             onClick={handleLogout} 
             className="bg-rose-50 hover:bg-rose-500 border border-rose-200 text-rose-600 hover:text-white active:scale-95 text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
@@ -3259,9 +3456,10 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
             splitPerBag={splitPerBag}
             onSplitChange={setSplitPerBag}
             bagCount={bagCount}
-            onChangeItem={(idx, mode) => {
-              setDefaultMachineMode(mode);
-              setCartItems((prev) => prev.map((it, i) => (i === idx ? { ...it, machineMode: mode } : it)));
+            outletId={selectedOutlet}
+            onChangeItem={(idx, patch) => {
+              if (patch.machineMode) setDefaultMachineMode(patch.machineMode);
+              setCartItems((prev) => prev.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
             }}
           />
 
@@ -3370,7 +3568,9 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
             <div className="space-y-3">
               <div className="flex justify-between items-center border-b pb-2">
                 <h3 className="text-[10px] md:text-xs font-black text-slate-800 uppercase tracking-wider">📋 Sedang Diproses ({activeOrders.length})</h3>
-                <span className="text-[10px] text-slate-400">Klik kartu untuk detail & edit</span>
+                <Link href="/pos/queue" className="text-[10px] font-black text-cyan-700 hover:underline">
+                  Papan Antrian Mesin →
+                </Link>
               </div>
               <input
                 type="search"

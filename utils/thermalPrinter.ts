@@ -1,4 +1,4 @@
-import { assignmentBadge, inferMachineMode, machineTagOf, type CartMachineItem } from '@/lib/lgThinq';
+import { assignmentBadge, encodeBagQr, inferMachineMode, machineTagOf, type CartMachineItem } from '@/lib/lgThinq';
 
 export const printDirectThermal = async (receiptData: {
     storeName: string;
@@ -48,27 +48,39 @@ export type BagSticker = {
   customerName: string;
   service: string;
   machineTag: string;
+  qrPayload?: string;
+  washerId?: string;
+  washerName?: string;
+  orderId?: string;
 };
 
 export function buildBagStickers(
   orderId: string,
   totalBags: number,
   items: CartMachineItem[],
-  meta?: { receipt?: string; customerName?: string }
+  meta?: { receipt?: string; customerName?: string; orderId?: string; cycles?: any[] }
 ): BagSticker[] {
   const n = Math.max(1, Number(totalBags) || items?.length || 1);
   const receipt = String(meta?.receipt || orderId || 'ORD');
   const customer = String(meta?.customerName || 'Pelanggan');
+  const uuid = String(meta?.orderId || (/^[0-9a-f-]{36}$/i.test(orderId) ? orderId : ''));
   return Array.from({ length: n }, (_, i) => {
     const item = (items?.[i] || items?.[0] || {}) as CartMachineItem;
+    const cycle = meta?.cycles?.[i] || meta?.cycles?.find((c: any) => Number(c.batch_index) === i + 1);
     const mode = inferMachineMode(item);
+    const washerId = String(item.washerId || cycle?.washer_id || '');
+    const washerName = String(item.washerName || cycle?.machine_tag || '');
     return {
       receipt,
       bagIndex: i + 1,
       totalBags: n,
       customerName: customer,
       service: assignmentBadge(item, i + 1),
-      machineTag: String((item as any).machineTag || machineTagOf(mode))
+      machineTag: String((item as any).machineTag || machineTagOf(mode)),
+      qrPayload: encodeBagQr({ orderId: uuid || orderId, washerId, bagIndex: i + 1, receipt }),
+      washerId,
+      washerName,
+      orderId: uuid || orderId
     };
   });
 }
@@ -78,7 +90,7 @@ export async function printBagStickers(
   orderId: string,
   totalBags: number,
   items: CartMachineItem[],
-  meta?: { receipt?: string; customerName?: string; storeName?: string }
+  meta?: { receipt?: string; customerName?: string; storeName?: string; orderId?: string; cycles?: any[] }
 ) {
   const stickers = buildBagStickers(orderId, totalBags, items, meta);
   try {
@@ -94,6 +106,7 @@ export async function printBagStickers(
         text += `KANTONG ${s.bagIndex} DARI ${s.totalBags}\n`;
         text += `${s.customerName}\n`;
         text += `${s.service} / ${s.machineTag}\n`;
+        if (s.qrPayload) text += `QR ${s.qrPayload}\n`;
         text += `--------------------------------\n\n`;
         text += `\x1D\x56\x41`;
       });

@@ -170,10 +170,12 @@ const itemsOf = (transaction: any): any[] => {
 const itemPhotosForStage = (transaction: any, stageKey: string): string[] => {
   return itemsOf(transaction).flatMap((it) => {
     if (stageKey === 'sortir') {
-      return [it?.sortir_photo_url, it?.photo_url].filter(Boolean);
+      const extra = Array.isArray(it?.sortir_photo_urls) ? it.sortir_photo_urls : [];
+      return [...extra, it?.sortir_photo_url, it?.photo_url].filter(Boolean);
     }
     if (stageKey === 'packing') {
-      return [it?.packing_photo_url, it?.dikemas_photo_url].filter(Boolean);
+      const extra = Array.isArray(it?.packing_photo_urls) ? it.packing_photo_urls : [];
+      return [...extra, it?.packing_photo_url, it?.dikemas_photo_url].filter(Boolean);
     }
     return [];
   });
@@ -236,7 +238,12 @@ export const buildStageTimeline = (
     const rackPhoto = stage.key === 'siap' ? transaction?.rack_photo_url || null : null;
     const photoUrls = uniqPhotoUrls([
       ...matches.map((l) => l?.photo_url),
-      ...(stage.key === 'sortir' ? [transaction?.sortir_photo_url] : []),
+      ...(stage.key === 'sortir'
+        ? [transaction?.sortir_photo_url, ...(Array.isArray(transaction?.sortir_photo_urls) ? transaction.sortir_photo_urls : [])]
+        : []),
+      ...(stage.key === 'packing'
+        ? [transaction?.packing_photo_url, ...(Array.isArray(transaction?.packing_photo_urls) ? transaction.packing_photo_urls : [])]
+        : []),
       ...itemPhotosForStage(transaction, stage.key),
       rackPhoto
     ]);

@@ -22,6 +22,7 @@ import { toast } from '@/lib/toast';
 import { updateWithFallback } from '@/lib/safeWrite';
 import AICopilotCard from '@/components/analytics/AICopilotCard';
 import WasherFraudAlertListener from '@/components/WasherFraudAlertListener';
+import OperatorQueueBoard from '@/components/pos/OperatorQueueBoard';
 import { parseIdList } from '@/lib/aiCopilotAnalytics';
 import {
   SUPERVISOR_DECISIONS,
@@ -256,6 +257,9 @@ export default function StaffWorkspace() {
             <Link href="/history" className="text-[11px] font-semibold px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50">
               Transaksi
             </Link>
+            <Link href="/pos/queue" className="text-[11px] font-semibold px-3 py-1.5 rounded-lg border border-cyan-200 bg-cyan-50 text-cyan-800 hover:bg-cyan-100">
+              Antrian Mesin
+            </Link>
             {canAccessKpiSettings(role) && (
               <Link href="/owner/kpi-settings" className="text-[11px] font-semibold px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50">
                 KPI Settings
@@ -280,6 +284,11 @@ export default function StaffWorkspace() {
 
       <main className="max-w-6xl mx-auto px-4 py-5 space-y-4">
         {role === 'supervisor' && <WasherFraudAlertListener />}
+        {(role === 'supervisor' || role === 'admin_ops' || role === 'admin' || role === 'head' || role === 'head_management') && session.outletId && (
+          <section className="bg-white border border-cyan-100 rounded-2xl p-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+            <OperatorQueueBoard outletId={session.outletId} actorId={session.id} compact />
+          </section>
+        )}
         {(role === 'supervisor' || role === 'finance' || role === 'head_finance' || role === 'head' || role === 'head_management') && (
           <AICopilotCard
             scope="supervisor"

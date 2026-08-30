@@ -1,6 +1,6 @@
 import { toast, type ToastTone } from '@/lib/toast';
 
-export type OpsNotifyKind = 'chat' | 'payment' | 'complaint';
+export type OpsNotifyKind = 'chat' | 'payment' | 'complaint' | 'scan_ok' | 'scan_err';
 
 let audioCtx: AudioContext | null = null;
 let unlocked = false;
@@ -19,6 +19,8 @@ export const unlockOpsAudio = () => {
 };
 
 const tone = (kind: OpsNotifyKind): { freq: number; dur: number; vol: number; repeats: number } => {
+  if (kind === 'scan_err') return { freq: 220, dur: 0.28, vol: 0.16, repeats: 4 };
+  if (kind === 'scan_ok') return { freq: 880, dur: 0.12, vol: 0.1, repeats: 2 };
   if (kind === 'complaint') return { freq: 1046, dur: 0.18, vol: 0.12, repeats: 3 };
   if (kind === 'payment') return { freq: 784, dur: 0.22, vol: 0.1, repeats: 2 };
   return { freq: 880, dur: 0.16, vol: 0.08, repeats: 1 };
@@ -36,7 +38,7 @@ export const playOpsSound = (kind: OpsNotifyKind = 'chat') => {
     for (let i = 0; i < spec.repeats; i++) {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      osc.type = kind === 'complaint' ? 'square' : 'sine';
+      osc.type = kind === 'complaint' || kind === 'scan_err' ? 'square' : 'sine';
       osc.frequency.value = spec.freq + i * 80;
       const t0 = ctx.currentTime + i * 0.22;
       gain.gain.setValueAtTime(spec.vol, t0);
@@ -63,8 +65,11 @@ export const notifyOps = (
   if (now - (lastAt[kind] || 0) < 800) return;
   lastAt[kind] = now;
   playOpsSound(kind);
-  const toastTone: ToastTone = kind === 'complaint' ? 'err' : kind === 'payment' ? 'warn' : 'ok';
+  const toastTone: ToastTone =
+    kind === 'complaint' || kind === 'scan_err' ? 'err' : kind === 'payment' ? 'warn' : 'ok';
   toast(text, toastTone, { persist, kind, onClick: extra?.onClick });
 };
 
 export const isOpsAudioUnlocked = () => unlocked;
+
+export const playScanFeedback = (ok: boolean) => playOpsSound(ok ? 'scan_ok' : 'scan_err');
