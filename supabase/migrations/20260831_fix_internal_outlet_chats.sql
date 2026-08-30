@@ -26,6 +26,20 @@ WITH CHECK (auth.role() = 'authenticated' OR auth.role() = 'anon');
 
 GRANT ALL ON public.internal_outlet_chats TO anon, authenticated;
 
+-- Do not fail inserts when session ids are not outlets/profiles UUIDs.
+DO $$
+DECLARE r record;
+BEGIN
+  FOR r IN
+    SELECT conname
+    FROM pg_constraint
+    WHERE conrelid = 'public.internal_outlet_chats'::regclass
+      AND contype = 'f'
+  LOOP
+    EXECUTE format('ALTER TABLE public.internal_outlet_chats DROP CONSTRAINT IF EXISTS %I', r.conname);
+  END LOOP;
+END $$;
+
 ALTER TABLE public.internal_outlet_chats REPLICA IDENTITY FULL;
 
 DO $$
@@ -35,3 +49,6 @@ EXCEPTION
   WHEN duplicate_object THEN NULL;
   WHEN undefined_object THEN NULL;
 END $$;
+
+-- Force PostgREST / Supabase schema cache reload
+NOTIFY pgrst, 'reload schema';

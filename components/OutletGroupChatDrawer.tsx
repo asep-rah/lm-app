@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { getStaffSession } from '@/lib/staffSession';
 import { canAccessOutletGroupChat, canSwitchOutletGroupChat } from '@/lib/outletGroupChat';
-import { insertWithFallback } from '@/lib/safeWrite';
+import { matchOutletUuid, resolveOutletUuid, uuidOrNull } from '@/lib/outletUuid';
 import { toast } from '@/lib/toast';
 
 type ChatRow = {
@@ -14,6 +14,17 @@ type ChatRow = {
   sender_role?: string;
   message: string;
   created_at: string;
+};
+
+const friendlyChatSendError = (raw?: string) => {
+  const msg = String(raw || '').toLowerCase();
+  if (msg.includes('schema cache') || msg.includes('could not find') || msg.includes('does not exist')) {
+    return 'Room chat belum siap. Muat ulang halaman, lalu coba kirim lagi.';
+  }
+  if (msg.includes('invalid input syntax') || msg.includes('foreign key') || msg.includes('violates')) {
+    return 'Pesan tidak terkirim karena ID sesi tidak cocok. Coba lagi tanpa meninggalkan room.';
+  }
+  return 'Pesan belum terkirim. Coba lagi sebentar.';
 };
 
 export default function OutletGroupChatDrawer() {
@@ -53,7 +64,7 @@ export default function OutletGroupChatDrawer() {
       .then(({ data }) => {
         const list = data || [];
         setOutlets(list);
-        setOutletId((cur) => cur || list[0]?.id || '');
+        setOutletId((cur) => matchOutletUuid(list, cur) || uuidOrNull(cur) || cur || list[0]?.id || '');
       });
   }, [canUse]);
 
@@ -64,19 +75,32 @@ export default function OutletGroupChatDrawer() {
     }
     let cancelled = false;
     const load = async () => {
-      const { data, error } = await supabase
-        .from('internal_outlet_chats')
-        .select('id, outlet_id, sender_name, sender_role, message, created_at')
-        .eq('outlet_id', outletId)
-        .order('created_at', { ascending: true })
-        .limit(200);
-      if (cancelled) return;
-      if (error) {
-        console.warn('internal_outlet_chats:', error.message);
-        setRows([]);
-        return;
+      try {
+        const roomId =
+          uuidOrNull(outletId) ||
+          matchOutletUuid(outlets, outletId) ||
+          (await resolveOutletUuid(supabase, outletId, outlets));
+        if (!roomId) {
+          if (!cancelled) setRows([]);
+          return;
+        }
+        const { data, error } = await supabase
+          .from('internal_outlet_chats')
+          .select('id, outlet_id, sender_name, sender_role, message, created_at')
+          .eq('outlet_id', roomId)
+          .order('created_at', { ascending: true })
+          .limit(200);
+        if (cancelled) return;
+        if (error) {
+          console.warn('internal_outlet_chats:', error.message);
+          setRows([]);
+          return;
+        }
+        setRows((data || []) as ChatRow[]);
+      } catch (e) {
+        console.warn('internal_outlet_chats load:', e);
+        if (!cancelled) setRows([]);
       }
-      setRows((data || []) as ChatRow[]);
     };
     load();
     const ch = supabase
@@ -96,19 +120,68 @@ export default function OutletGroupChatDrawer() {
   const send = async (e: React.FormEvent) => {
     e.preventDefault();
     const msg = text.trim();
-    if (!msg || !outletId) return;
+    if (!msg || sending) return;
     setSending(true);
-    const { error } = await insertWithFallback('internal_outlet_chats', [
-      { outlet_id: outletId, sender_name: name, sender_role: role, message: msg },
-      { outlet_id: outletId, sender_name: name, message: msg },
-      { outlet_id: outletId, message: msg }
-    ]);
-    setSending(false);
-    if (error) {
-      toast('Gagal kirim: ' + error.message, 'err');
-      return;
+    try {
+      const session = getStaffSession();
+      const outletUuid =
+        uuidOrNull(outletId) ||
+        matchOutletUuid(outlets, outletId) ||
+        (await resolveOutletUuid(supabase, outletId, outlets));
+      const senderUuid = uuidOrNull(session.id);
+
+      const attempts: Record<string, unknown>[] = [
+        {
+          ...(outletUuid ? { outlet_id: outletUuid } : {}),
+          ...(senderUuid ? { sender_id: senderUuid } : {}),
+          sender_name: name || session.name || 'Staf',
+          sender_role: role || session.role || 'kasir',
+          message: msg
+        },
+        {
+          ...(outletUuid ? { outlet_id: outletUuid } : {}),
+          sender_name: name || session.name || 'Staf',
+          sender_role: role || session.role || 'kasir',
+          message: msg
+        },
+        {
+          sender_name: name || session.name || 'Staf',
+          sender_role: role || session.role || 'kasir',
+          message: msg
+        }
+      ];
+
+      let inserted: ChatRow | null = null;
+      let lastMsg = '';
+      for (const row of attempts) {
+        try {
+          const { data, error } = await supabase
+            .from('internal_outlet_chats')
+            .insert([row])
+            .select('id, outlet_id, sender_name, sender_role, message, created_at');
+          if (!error && data?.[0]) {
+            inserted = data[0] as ChatRow;
+            break;
+          }
+          lastMsg = error?.message || lastMsg;
+          if (/schema cache|could not find the table|does not exist/i.test(lastMsg)) break;
+        } catch (inner: unknown) {
+          lastMsg = inner instanceof Error ? inner.message : String(inner || lastMsg);
+        }
+      }
+
+      if (!inserted) {
+        toast(friendlyChatSendError(lastMsg), 'err');
+        return;
+      }
+
+      setRows((prev) => (prev.some((r) => r.id === inserted!.id) ? prev : [...prev, inserted!]));
+      setText('');
+    } catch {
+      toast('Pesan belum terkirim. Coba lagi sebentar.', 'err');
+    } finally {
+      setSending(false);
     }
-    setText('');
   };
 
   if (!ready || !canUse) return null;
