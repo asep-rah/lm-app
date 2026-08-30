@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { simulateMayarAutoPay } from '@/lib/mayar';
 import { isCashDepositBalanced, netDepositOf } from '@/lib/cashDepositQris';
+import { resolveActorUuid, resolveOutletUuid } from '@/lib/outletUuid';
 import { toast } from '@/lib/toast';
 
 const QR_TTL_SEC = 10 * 60;
@@ -86,12 +87,16 @@ export default function CashDepositQrisPanel({
     setBusy(true);
     setBalanced(false);
     try {
+      const outletUuid = await resolveOutletUuid(supabase, outletId);
+      if (!outletUuid) {
+        throw new Error('Outlet ID tidak valid (bukan UUID). Pilih cabang ulang dari daftar outlet.');
+      }
       const res = await fetch('/api/mayar/create-deposit-qris', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          outlet_id: outletId,
-          kasir_id: kasirId || undefined,
+          outlet_id: outletUuid,
+          kasir_id: resolveActorUuid(kasirId) || undefined,
           net_deposit_amount: net,
           physical_cash: physicalCash,
           admin_fee: adminFee,

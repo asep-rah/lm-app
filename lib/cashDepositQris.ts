@@ -1,4 +1,5 @@
 import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
+import { isUuidString, uuidOrNull } from '@/lib/outletUuid';
 
 export const CASH_DEPOSIT_OPEX = 'Biaya Admin Setoran Cash (OPEX)';
 
@@ -53,10 +54,13 @@ const cashDepositPayloads = (row: {
   shift_date?: string;
   proof_url?: string;
 }) => {
+  const outletId = isUuidString(row.outlet_id) ? String(row.outlet_id) : null;
+  const cashierUuid = uuidOrNull(row.cashier_id) || uuidOrNull(row.kasir_id);
+  const kasirText = cashierUuid || (row.kasir_id && !isUuidString(row.kasir_id) ? String(row.kasir_id) : cashierUuid);
   const full = {
-    outlet_id: row.outlet_id || null,
-    cashier_id: row.cashier_id || row.kasir_id || null,
-    kasir_id: row.kasir_id || row.cashier_id || null,
+    outlet_id: outletId,
+    cashier_id: cashierUuid,
+    kasir_id: kasirText,
     amount_cash: row.amount_cash,
     admin_fee: row.admin_fee,
     net_deposit_amount: row.net_deposit_amount,
@@ -94,6 +98,9 @@ const cashDepositPayloads = (row: {
 };
 
 export async function insertPendingCashDepositDb(db: Db, row: Parameters<typeof cashDepositPayloads>[0]) {
+  if (row.outlet_id && !isUuidString(row.outlet_id)) {
+    return { data: null, error: { message: `invalid outlet_id (bukan UUID): "${row.outlet_id}"` } };
+  }
   let lastErr: { message: string } | null = null;
   for (const attempt of cashDepositPayloads(row)) {
     const clean = Object.fromEntries(Object.entries(attempt).filter(([, v]) => v !== undefined && v !== null && v !== ''));

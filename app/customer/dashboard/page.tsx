@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 import StageTimeline from '@/components/StageTimeline';
 import { fetchThreadMessages, insertChatMessage, isStaffOnlyMessage, phoneVariants, threadKeyOf } from '@/lib/csChat';
@@ -48,30 +49,46 @@ import PromoBannerCarousel from '@/components/customer/PromoBannerCarousel';
 import NearbyOutlets from '@/components/customer/NearbyOutlets';
 import OutletProfileDrawer from '@/components/customer/OutletProfileDrawer';
 import { bannerSlidesOf, nearbyActiveOutlets, type ShowcasePromo } from '@/lib/outletShowcase';
+import ActivitySegmentTabs from '@/components/customer/ActivitySegmentTabs';
+import {
+  formatScheduleLabel,
+  isOngoingOrder,
+  isOrderFinished,
+  isScheduledOrder,
+  parseActivityTab,
+  scheduleAtOf,
+  withScheduleNote,
+  type ActivitySubTab
+} from '@/lib/customerActivity';
+import { updatePickupOrder } from '@/lib/pickupUpdates';
+import { updateWithFallback } from '@/lib/safeWrite';
 import {
   AlertTriangle,
   ArrowLeft,
   Box,
+  Calendar,
   CheckCircle2,
   ChevronRight,
   ClipboardList,
+  Clock,
   Gift,
   Headphones,
   History,
   Home,
   Image as ImageIcon,
   Info,
+  ListTodo,
   MapPin,
   MessageSquare,
   Package,
   Paperclip,
   Pencil,
   Phone,
-  Receipt,
   Save,
   Search,
   Send,
   Sparkles,
+  Star,
   Store,
   Truck,
   User,
@@ -88,42 +105,6 @@ const safeParse = (data: any, fallback: any) => {
   if (!data) return fallback;
   if (typeof data === 'object') return data;
   try { return JSON.parse(data); } catch (e) { return fallback; }
-};
-
-// Tetap di Beranda sepanjang proses. Pindah Riwayat hanya setelah diserahkan
-// (Selesai / Delivered / Terkirim) — bukan saat nota POS dibuat atau Siap Diambil.
-const isOrderFinished = (order: any) => {
-  const st = String(order?.status || '').toLowerCase().trim();
-  if (!st) return false;
-  if (st.includes('batal') || st.includes('cancel')) return true;
-  if (st.includes('siap')) return false;
-  if (st.includes('selesai jemput')) return false;
-  if (
-    st.includes('packing') ||
-    st.includes('cuci') ||
-    st.includes('setrika') ||
-    st.includes('sortir') ||
-    st.includes('jemput') ||
-    st.includes('tiba') ||
-    st.includes('diterima') ||
-    st.includes('kasir') ||
-    st.includes('proses') ||
-    st.includes('ering') ||
-    st.includes('emas') ||
-    st.includes('menunggu') ||
-    st.includes('baru') ||
-    st.includes('request')
-  ) {
-    return false;
-  }
-  return (
-    st === 'selesai' ||
-    st.includes('delivered') ||
-    st.includes('terkirim') ||
-    st === 'diambil' ||
-    st.includes('sudah diambil') ||
-    st.includes('telah diambil')
-  );
 };
 
 const isDeliveryInProgress = (order: any) => {
@@ -221,10 +202,30 @@ const calculateDistanceKm = (lat1: number, lon1: number, lat2: number, lon2: num
 
 const paymentMethod: any = "CASH";
 
-export default function CustomerDashboardPage() {
+function CustomerDashboardPage() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [detailOrder, setDetailOrder] = useState<any>(null);
   const [detailWorkLogs, setDetailWorkLogs] = useState<any[]>([]);
-  const [activeTab, setActiveTab] = useState<'home' | 'order' | 'deposit' | 'history' | 'profile'>('home');
+  const pathIsActivity =
+    (pathname || '').includes('/customer/activity') || (pathname || '').includes('/customer/history');
+  const urlActivityTab = parseActivityTab(searchParams.get('tab')) || (pathIsActivity ? 'berlangsung' : null);
+  const [activeTab, setActiveTab] = useState<'home' | 'order' | 'deposit' | 'activity' | 'profile'>(
+    pathIsActivity || urlActivityTab ? 'activity' : 'home'
+  );
+  const [activitySub, setActivitySub] = useState<ActivitySubTab>(urlActivityTab || 'berlangsung');
+  const [pickupLater, setPickupLater] = useState(false);
+  const [pickupDate, setPickupDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().split('T')[0];
+  });
+  const [pickupTime, setPickupTime] = useState('09:00');
+  const [scheduleBusyId, setScheduleBusyId] = useState<string | null>(null);
+  const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
+  const [editScheduleDate, setEditScheduleDate] = useState('');
+  const [editScheduleTime, setEditScheduleTime] = useState('09:00');
   const [activeSupportTab, setActiveSupportTab] = useState<'cs' | 'ai'>('cs');
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerData, setCustomerData] = useState<any>(null);
@@ -374,6 +375,48 @@ export default function CustomerDashboardPage() {
       document.body.style.overflow = prev;
     };
   }, [activeChatOrderId, complaintTicketOpen]);
+
+  useEffect(() => {
+    const path = pathname || '';
+    const parsed = parseActivityTab(searchParams.get('tab'));
+    if (path.includes('/customer/history')) {
+      setActiveTab('activity');
+      setActivitySub('riwayat');
+      return;
+    }
+    if (path.includes('/customer/activity')) {
+      setActiveTab('activity');
+      if (parsed) setActivitySub(parsed);
+      return;
+    }
+    if (parsed) {
+      setActiveTab('activity');
+      setActivitySub(parsed);
+    }
+  }, [pathname, searchParams]);
+
+  const goActivity = (sub: ActivitySubTab = activitySub) => {
+    setActivitySub(sub);
+    setActiveTab('activity');
+    const path = pathname || '';
+    if (path.includes('/customer/activity') || path.includes('/customer/history')) {
+      router.replace(`/customer/activity?tab=${sub}`, { scroll: false });
+    } else {
+      router.replace(`/customer/dashboard?tab=${sub}`, { scroll: false });
+    }
+  };
+
+  const goHome = () => {
+    setActiveTab('home');
+    const path = pathname || '';
+    const hasActivityUrl =
+      path.includes('/customer/activity') ||
+      path.includes('/customer/history') ||
+      !!parseActivityTab(searchParams.get('tab'));
+    if (hasActivityUrl) {
+      router.replace('/customer/dashboard', { scroll: false });
+    }
+  };
 
   useEffect(() => {
     if (!depositCheckout || depositCheckout.paid) return;
@@ -1286,9 +1329,12 @@ export default function CustomerDashboardPage() {
 
     const nowIso = new Date().toISOString();
     const todayDateStr = nowIso.split('T')[0];
+    const scheduleAt = pickupLater && pickupDate && pickupTime ? new Date(`${pickupDate}T${pickupTime}:00`) : null;
+    const isFuturePickup = !!(scheduleAt && !Number.isNaN(scheduleAt.getTime()) && scheduleAt.getTime() > Date.now() + 30 * 60 * 1000);
 
     const detailInfo = `[INFO CUCIAN] Kantong: ${bagCount} | Cuci: ${washProcess} | Luntur: ${hasFading} | Brg Berharga: ${hasValuables}`;
-    const finalNotes = notesCombined ? `${detailInfo} | ${notesCombined}` : detailInfo;
+    const baseNotes = notesCombined ? `${detailInfo} | ${notesCombined}` : detailInfo;
+    const finalNotes = isFuturePickup ? withScheduleNote(baseNotes, pickupDate, pickupTime) : baseNotes;
 
     // Rincian item satuan dikirim terstruktur agar POS bisa memuatnya langsung ke
     // keranjang nota. Kiloan tidak dimasukkan karena beratnya baru pasti setelah ditimbang kasir.
@@ -1329,8 +1375,9 @@ export default function CustomerDashboardPage() {
       items: itemsPayload,
       delivery_fee: Number(finalOngkir) || 0,
       notes: finalNotes,
-      pickup_date: todayDateStr,
-      status: 'Menunggu Kurir',
+      pickup_date: isFuturePickup ? pickupDate : todayDateStr,
+      pickup_time: isFuturePickup ? pickupTime : undefined,
+      status: isFuturePickup ? 'Terjadwal' : 'Menunggu Kurir',
       courier_type: courierType || 'INTERNAL',
       created_at: nowIso
     };
@@ -1338,12 +1385,14 @@ export default function CustomerDashboardPage() {
     const { data: insertedData, error } = await insertPickupOrder(payload);
 
     if (!error && insertedData && insertedData.length > 0) {
-      await createPickupRoleTasks({
-        id: insertedData[0].id,
-        customer_name: payload.customer_name as string,
-        customer_phone: normPhone,
-        outlet_id: selectedOutlet
-      });
+      if (!isFuturePickup) {
+        await createPickupRoleTasks({
+          id: insertedData[0].id,
+          customer_name: payload.customer_name as string,
+          customer_phone: normPhone,
+          outlet_id: selectedOutlet
+        });
+      }
       if (claimedPromo?.id && !String(claimedPromo.id).startsWith('settings-')) {
         const nextUsed = (Number(claimedPromo.used_count) || 0) + 1;
         await supabase.from('promos').update({ used_count: nextUsed }).eq('id', claimedPromo.id);
@@ -1362,9 +1411,9 @@ export default function CustomerDashboardPage() {
       setKiloanDuration('Reguler (3 Hari)');
       setIsKiloanChecked(false);
       setIsSatuanChecked(false);
-      
-      // Smooth Switch ke tab Beranda
-      setActiveTab('home');
+      setPickupLater(false);
+
+      goActivity(isFuturePickup ? 'terjadwal' : 'berlangsung');
       fetchCustomerProfile(normPhone);
     } else {
       alert('Gagal membuat pesanan: ' + (error?.message || 'Koneksi bermasalah'));
@@ -1372,11 +1421,57 @@ export default function CustomerDashboardPage() {
     setIsSubmitting(false);
   };
 
+  const persistSchedule = async (order: any, date: string, time: string) => {
+    if (!order?.id) return false;
+    if (!date || !time) {
+      toast('Isi tanggal dan jam jemput.', 'warn');
+      return false;
+    }
+    setScheduleBusyId(order.id);
+    const notes = withScheduleNote(String(order.notes || ''), date, time);
+    const { error } = await updateWithFallback(
+      'pickup_orders',
+      [
+        { pickup_date: date, pickup_time: time, status: 'Terjadwal', notes },
+        { pickup_date: date, status: 'Terjadwal', notes },
+        { status: 'Terjadwal', notes }
+      ],
+      { column: 'id', value: order.id }
+    );
+    setScheduleBusyId(null);
+    if (error) {
+      toast('Gagal mengubah jadwal. Coba lagi.', 'err');
+      return false;
+    }
+    toast('Jadwal penjemputan diperbarui.', 'ok');
+    setEditingScheduleId(null);
+    if (customerPhone) fetchCustomerProfile(cleanPhone(customerPhone));
+    return true;
+  };
+
+  const cancelScheduledOrder = async (order: any) => {
+    if (!order?.id) return;
+    if (!confirm('Batalkan jadwal penjemputan ini?')) return;
+    setScheduleBusyId(order.id);
+    const { error } = await updatePickupOrder(order.id, { status: 'Batal' });
+    setScheduleBusyId(null);
+    if (error) {
+      toast('Gagal membatalkan jadwal.', 'err');
+      return;
+    }
+    toast('Jadwal dibatalkan.', 'ok');
+    if (customerPhone) fetchCustomerProfile(cleanPhone(customerPhone));
+  };
+
   const kiloanServicesList = dynamicServices.filter(s => s.type !== 'pcs');
   const satuanServicesList = dynamicServices.filter(s => s.type === 'pcs');
 
   const currentOutletObj = outletsList.find(o => o.id === selectedOutlet);
   const targetAdminWa = getAdminWaNumber(currentOutletObj?.name || '');
+  const ongoingOrders = activeOrders.filter((o: any) => isOngoingOrder(o));
+  const scheduledOrders = activeOrders.filter((o: any) => isScheduledOrder(o));
+  const ongoingCount = ongoingOrders.length;
+  const scheduledCount = scheduledOrders.length;
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 p-4 md:p-6 pb-28 max-w-md mx-auto relative font-sans">
@@ -1532,191 +1627,26 @@ export default function CustomerDashboardPage() {
                 onRequestLocation={requestNearbyLocation}
               />
 
-              <div className="space-y-3 pt-1">
-      {/* Header Section */}
-      <div className="flex justify-between items-center mb-1">
-        <div className="flex items-center gap-1.5">
-          <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-          <h3 className="text-xs font-bold text-slate-800 tracking-wide uppercase">
-            {activeTab === 'home'
-              ? `Pesanan Berlangsung (${activeOrders.filter((o: any) => !isOrderFinished(o)).length})`
-              : 'Riwayat Pesanan Selesai'}
-          </h3>
-        </div>
-        <button
-          onClick={() => setActiveTab(activeTab === 'home' ? 'history' : 'home')}
-          className="text-[11px] font-bold text-indigo-600 hover:text-indigo-700"
-        >
-          {activeTab === 'home' ? 'Lihat Riwayat Selesai' : 'Kembali ke Beranda'}
-        </button>
-      </div>
-
-      {/* Render Pesanan */}
-      {(() => {
-        const berandaOrders = activeOrders.filter((o: any) => !isOrderFinished(o));
-        const riwayatOrders = activeOrders.filter((o: any) => isOrderFinished(o));
-        const displayOrders = activeTab === 'home' ? berandaOrders : riwayatOrders;
-
-        if (displayOrders.length === 0) {
-          return (
-            <div className="bg-white border border-slate-100 p-6 rounded-2xl text-center text-xs text-slate-400 shadow-sm">
-              {activeTab === 'home'
-                ? 'Belum ada cucian yang sedang diproses.'
-                : 'Belum ada riwayat pesanan selesai.'}
-            </div>
-          );
-        }
-
-        return displayOrders.map((order: any) => {
-          const currentStatus = (order.status || '').toLowerCase();
-          const stages = TRACKER_STAGES;
-
-          let activeIndex = stages.findIndex(s => s.match.some(m => currentStatus.includes(m)));
-          if (activeIndex === -1) activeIndex = 0;
-
-          return (
-            <div
-              key={order.id}
-              onClick={() => setSelectedOrder(order)}
-              className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 flex flex-col gap-3 transition-all hover:shadow-md cursor-pointer active:scale-[0.98] mb-3"
-            >
-              {/* Header Kartu */}
-              <div className="flex justify-between items-start border-b border-slate-50 pb-2 gap-2">
-                <div className="min-w-0 space-y-0.5">
-                  <p className="text-[11px] font-black text-slate-800">
-                    ID Transaksi: {formatTrxId(order)}
-                  </p>
-                  <p className="text-[10px] font-semibold text-slate-500">
-                    Estimasi Selesai: {formatEstSelesai(order)}
-                  </p>
-                  <p className="text-[10px] font-semibold text-slate-500">
-                    Status Cucian: {displayStatusLabel(order.status, order) || 'Menunggu'}
-                  </p>
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <SlaBadge duration={order.duration || order.service_type} createdAt={order.created_at} />
-                  <StatusPill status={order.status || 'Menunggu Kurir'} />
-                </div>
-              </div>
-
-              {/* Body Kartu */}
-              <div className="flex justify-between items-center">
-                <div className="pr-2">
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setDetailOrder(order);
-                    }}
-                    className="text-[11px] text-indigo-600 font-semibold line-clamp-1 mt-0.5 flex items-center gap-1 hover:underline cursor-pointer focus:outline-none"
-                  >
-                    <Search className="w-3 h-3" /> Detail item & status
-                    <ChevronRight className="w-3 h-3" />
-                  </button>
-                </div>
-                <div className="text-right whitespace-nowrap">
-                  <span className="text-[10px] text-slate-400 block font-normal">Total Estimasi</span>
-                  <span className="font-extrabold text-slate-900 text-sm">
-                    Rp {(order.amount || order.total_amount || order.estimated_price || 0).toLocaleString('id-ID')}
-                  </span>
-                </div>
-              </div>
-
-              {/* Tracker Visual 6 Tahap */}
-              <div className="grid grid-cols-6 gap-1 text-center pt-2 mt-1 border-t border-slate-50">
-                {stages.map((step, idx) => {
-                  const isPassedOrActive = idx <= activeIndex;
-                  const isActiveNow = idx === activeIndex;
-                  const StageIcon = step.icon;
-                  return (
-                    <div key={idx} className="flex flex-col items-center">
-                      <div
-                        className={`w-7 h-7 rounded-full flex items-center justify-center transition-all duration-300 ${
-                          isActiveNow
-                            ? 'bg-white/70 backdrop-blur-md text-indigo-600 ring-2 ring-indigo-200 shadow-md scale-110 animate-pulse'
-                            : isPassedOrActive
-                            ? 'bg-emerald-500/90 text-white shadow-sm backdrop-blur-sm'
-                            : 'bg-white/50 backdrop-blur-sm text-slate-400 border border-white/60'
-                        }`}
-                      >
-                        <StageIcon className="w-3.5 h-3.5" strokeWidth={2.3} />
-                      </div>
-                      <span
-                        className={`text-[8px] mt-1 font-semibold ${
-                          isActiveNow
-                            ? 'text-indigo-600 font-bold'
-                            : isPassedOrActive
-                            ? 'text-slate-700'
-                            : 'text-slate-400'
-                        }`}
-                      >
-                        {step.label}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {isSiapDiambil(order) && !isThirdPartyDelivery(order) && (
+              {(ongoingCount > 0 || scheduledCount > 0) && (
                 <button
                   type="button"
-                  onClick={(e) => handleRequestDelivery(order, e)}
-                  disabled={requestingDeliveryId === order.id}
-                  className="w-full bg-sky-500 hover:bg-sky-600 text-white font-black text-xs py-3 rounded-xl shadow-sm inline-flex items-center justify-center gap-1.5"
+                  onClick={() => goActivity(ongoingCount > 0 ? 'berlangsung' : 'terjadwal')}
+                  className="w-full bg-white border border-slate-200 rounded-2xl px-4 py-3 flex items-center justify-between shadow-sm hover:border-indigo-300 hover:shadow-md active:scale-[0.99] transition"
                 >
-                  <Truck className="w-4 h-4" />
-                  {requestingDeliveryId === order.id ? 'Mengirim…' : 'Minta Pengantaran Driver'}
+                  <span className="flex items-center gap-2 text-left">
+                    <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                    <span className="text-[11px] font-extrabold text-slate-800">
+                      {ongoingCount > 0
+                        ? `${ongoingCount} cucian berlangsung`
+                        : `${scheduledCount} jemputan terjadwal`}
+                      {ongoingCount > 0 && scheduledCount > 0 ? ` · ${scheduledCount} terjadwal` : ''}
+                    </span>
+                  </span>
+                  <span className="text-[10px] font-bold text-indigo-600 inline-flex items-center gap-0.5">
+                    Lihat Aktivitas <ChevronRight className="w-3.5 h-3.5" />
+                  </span>
                 </button>
               )}
-
-              {isThirdPartyDelivery(order) && !isOrderFinished(order) && (
-                <div onClick={(e) => e.stopPropagation()}>
-                  <ThirdPartyDeliveryCard
-                    order={order}
-                    payload={thirdPartyFromOrder(order)}
-                    showConfirm
-                    confirmBusy={confirmDeliveryId === order.id}
-                    onConfirm={() => handleConfirmThirdParty(order)}
-                    onOpenPhoto={setLightboxSrc}
-                  />
-                </div>
-              )}
-
-              {/* PETA LIVE DRIVER */}
-              {order.status === 'Driver Menuju Lokasi' && order.driver_lat && (
-                <div
-                  className="bg-blue-50/80 border border-blue-100 p-3 rounded-xl space-y-1.5 text-xs mt-1"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <div className="flex justify-between items-center">
-                    <span className="font-bold text-blue-900 flex items-center gap-1 text-[11px]">
-                      <MapPin className="w-3.5 h-3.5" /> Driver Sedang Menuju Lokasi
-                    </span>
-                    <a
-                      href={`https://maps.google.com/?q=${order.driver_lat},${order.driver_lon}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="bg-blue-600 text-white font-bold text-[10px] px-2.5 py-1 rounded-lg shadow-sm inline-flex items-center gap-1"
-                    >
-                      Buka Peta Live <ChevronRight className="w-3 h-3" />
-                    </a>
-                  </div>
-                  <p className="text-[10px] text-blue-600">Posisi driver diperbarui secara otomatis.</p>
-                </div>
-              )}
-
-              {/* BUKTI FOTO: jemput → outlet → sortir → rak → antar */}
-              <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 space-y-2 mt-2" onClick={(e) => e.stopPropagation()}>
-                <p className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider inline-flex items-center gap-1">
-                  <ImageIcon className="w-3 h-3" /> Bukti Foto
-                </p>
-                <ProofPhotoGrid order={order} onOpen={setLightboxSrc} compact />
-              </div>
-            </div>
-          );
-        });
-      })()}
-              </div>
             </div>
           )}
 
@@ -2077,6 +2007,46 @@ export default function CustomerDashboardPage() {
                   </div>
                 </div>
 
+                <div className="bg-indigo-50/70 border border-indigo-100 rounded-2xl p-3.5 space-y-3">
+                  <label className="flex items-center justify-between gap-3 cursor-pointer">
+                    <span className="text-xs font-extrabold text-slate-800 inline-flex items-center gap-1.5">
+                      <Calendar className="w-3.5 h-3.5 text-indigo-600" /> Jadwalkan jemput
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={pickupLater}
+                      onChange={(e) => setPickupLater(e.target.checked)}
+                      className="w-4 h-4 accent-indigo-600 rounded"
+                    />
+                  </label>
+                  {pickupLater && (
+                    <div className="grid grid-cols-2 gap-2 pt-1 border-t border-indigo-100">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 mb-1">Tanggal</label>
+                        <input
+                          type="date"
+                          min={new Date().toISOString().split('T')[0]}
+                          value={pickupDate}
+                          onChange={(e) => setPickupDate(e.target.value)}
+                          className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-2 text-xs font-bold text-slate-800"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 mb-1">Jam</label>
+                        <input
+                          type="time"
+                          value={pickupTime}
+                          onChange={(e) => setPickupTime(e.target.value)}
+                          className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-2 text-xs font-bold text-slate-800"
+                        />
+                      </div>
+                      <p className="col-span-2 text-[10px] text-slate-500">
+                        Driver baru ditugaskan mendekati jadwal. Pesanan tampil di tab Terjadwal.
+                      </p>
+                    </div>
+                  )}
+                </div>
+
                 <input
                   type="text"
                   placeholder="Catatan Penjemputan (misal: Tolong ambil jam 2)"
@@ -2274,47 +2244,343 @@ export default function CustomerDashboardPage() {
             </div>
           )}
 
-          {activeTab === 'history' && (
+          {activeTab === 'activity' && (
             <div className="space-y-3">
-              <h3 className="text-xs font-extrabold text-slate-700 uppercase tracking-wider inline-flex items-center gap-1.5">
-                <Receipt className="w-3.5 h-3.5" /> Riwayat Pesanan Selesai
-              </h3>
-              {completedOrders.map((item: any) => (
-                <button
-                  type="button"
-                  key={item.id}
-                  onClick={() =>
-                    setDetailOrder({
-                      ...item,
-                      items: Array.isArray(item.items) ? item.items : safeParse(item.items, [])
-                    })
-                  }
-                  className="w-full text-left bg-white border border-slate-200 rounded-2xl p-4 text-xs space-y-2 shadow-sm hover:shadow-md active:scale-[0.99] transition"
-                >
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <span className="font-extrabold text-slate-900 block">{item.title}</span>
-                      <span className="text-[10px] text-slate-500 font-medium line-clamp-2">{item.detail}</span>
-                    </div>
-                    <StatusPill status={item.status} />
-                  </div>
-                  <div className="flex justify-between items-center pt-2 border-t border-slate-100 text-[10px]">
-                    <span className="text-slate-400 font-medium">{new Date(item.date).toLocaleDateString('id-ID')}</span>
-                    <span className="font-black text-blue-600 text-xs">
-                      {item.receipt_number ? 'Total' : 'Ongkir'}: Rp {Number(item.price || item.amount || 0).toLocaleString('id-ID')}
-                    </span>
-                  </div>
-                  <p className="text-[10px] font-bold text-indigo-600 inline-flex items-center gap-1">
-                    <Search className="w-3 h-3" /> Lihat timeline, foto & rincian
-                  </p>
-                </button>
-              ))}
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-extrabold text-slate-700 uppercase tracking-wider inline-flex items-center gap-1.5">
+                  <ListTodo className="w-3.5 h-3.5" /> Aktivitas
+                </h3>
+                <span className="text-[10px] font-bold text-slate-400">
+                  {activitySub === 'berlangsung' && `${ongoingCount} aktif`}
+                  {activitySub === 'terjadwal' && `${scheduledCount} jadwal`}
+                  {activitySub === 'riwayat' && `${completedOrders.length} selesai`}
+                </span>
+              </div>
+              <ActivitySegmentTabs
+                value={activitySub}
+                onChange={(tab) => goActivity(tab)}
+                counts={{ berlangsung: ongoingCount, terjadwal: scheduledCount, riwayat: completedOrders.length }}
+              />
 
-              {completedOrders.length === 0 && (
-                <div className="bg-white border border-slate-200 p-8 rounded-3xl text-center text-xs text-slate-400 shadow-sm">
-                  Belum ada riwayat transaksi selesai.
-                </div>
-              )}
+              <div key={activitySub} className="space-y-3 transition-opacity duration-200">
+                {activitySub === 'berlangsung' && (
+                  <>
+                    {ongoingOrders.length === 0 && (
+                      <div className="bg-white border border-slate-100 p-8 rounded-3xl text-center text-xs text-slate-400 shadow-sm">
+                        Belum ada cucian yang sedang diproses.
+                      </div>
+                    )}
+                    {ongoingOrders.map((order: any) => {
+                      const currentStatus = (order.status || '').toLowerCase();
+                      const stages = TRACKER_STAGES;
+                      let activeIndex = stages.findIndex((s) => s.match.some((m) => currentStatus.includes(m)));
+                      if (activeIndex === -1) activeIndex = 0;
+                      return (
+                        <div
+                          key={order.id}
+                          onClick={() => setSelectedOrder(order)}
+                          className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 flex flex-col gap-3 transition-all hover:shadow-md cursor-pointer active:scale-[0.98]"
+                        >
+                          <div className="flex justify-between items-start border-b border-slate-50 pb-2 gap-2">
+                            <div className="min-w-0 space-y-0.5">
+                              <p className="text-[11px] font-black text-slate-800">
+                                ID Transaksi: {formatTrxId(order)}
+                              </p>
+                              <p className="text-[10px] font-semibold text-slate-500">
+                                Estimasi Selesai: {formatEstSelesai(order)}
+                              </p>
+                              <p className="text-[10px] font-semibold text-slate-500">
+                                Status Cucian: {displayStatusLabel(order.status, order) || 'Menunggu'}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <SlaBadge duration={order.duration || order.service_type} createdAt={order.created_at} />
+                              <StatusPill status={order.status || 'Menunggu Kurir'} />
+                            </div>
+                          </div>
+
+                          <div className="flex justify-between items-center">
+                            <div className="pr-2">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setDetailOrder(order);
+                                }}
+                                className="text-[11px] text-indigo-600 font-semibold line-clamp-1 mt-0.5 flex items-center gap-1 hover:underline cursor-pointer focus:outline-none"
+                              >
+                                <Search className="w-3 h-3" /> Detail item & status
+                                <ChevronRight className="w-3 h-3" />
+                              </button>
+                            </div>
+                            <div className="text-right whitespace-nowrap">
+                              <span className="text-[10px] text-slate-400 block font-normal">Total Estimasi</span>
+                              <span className="font-extrabold text-slate-900 text-sm">
+                                Rp {(order.amount || order.total_amount || order.estimated_price || 0).toLocaleString('id-ID')}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-6 gap-1 text-center pt-2 mt-1 border-t border-slate-50">
+                            {stages.map((step, idx) => {
+                              const isPassedOrActive = idx <= activeIndex;
+                              const isActiveNow = idx === activeIndex;
+                              const StageIcon = step.icon;
+                              return (
+                                <div key={idx} className="flex flex-col items-center">
+                                  <div
+                                    className={`w-7 h-7 rounded-full flex items-center justify-center transition-all duration-300 ${
+                                      isActiveNow
+                                        ? 'bg-white/70 backdrop-blur-md text-indigo-600 ring-2 ring-indigo-200 shadow-md scale-110 animate-pulse'
+                                        : isPassedOrActive
+                                        ? 'bg-emerald-500/90 text-white shadow-sm backdrop-blur-sm'
+                                        : 'bg-white/50 backdrop-blur-sm text-slate-400 border border-white/60'
+                                    }`}
+                                  >
+                                    <StageIcon className="w-3.5 h-3.5" strokeWidth={2.3} />
+                                  </div>
+                                  <span
+                                    className={`text-[8px] mt-1 font-semibold ${
+                                      isActiveNow
+                                        ? 'text-indigo-600 font-bold'
+                                        : isPassedOrActive
+                                        ? 'text-slate-700'
+                                        : 'text-slate-400'
+                                    }`}
+                                  >
+                                    {step.label}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          {isSiapDiambil(order) && !isThirdPartyDelivery(order) && (
+                            <button
+                              type="button"
+                              onClick={(e) => handleRequestDelivery(order, e)}
+                              disabled={requestingDeliveryId === order.id}
+                              className="w-full bg-sky-500 hover:bg-sky-600 text-white font-black text-xs py-3 rounded-xl shadow-sm inline-flex items-center justify-center gap-1.5"
+                            >
+                              <Truck className="w-4 h-4" />
+                              {requestingDeliveryId === order.id ? 'Mengirim…' : 'Minta Pengantaran Driver'}
+                            </button>
+                          )}
+
+                          {isThirdPartyDelivery(order) && !isOrderFinished(order) && (
+                            <div onClick={(e) => e.stopPropagation()}>
+                              <ThirdPartyDeliveryCard
+                                order={order}
+                                payload={thirdPartyFromOrder(order)}
+                                showConfirm
+                                confirmBusy={confirmDeliveryId === order.id}
+                                onConfirm={() => handleConfirmThirdParty(order)}
+                                onOpenPhoto={setLightboxSrc}
+                              />
+                            </div>
+                          )}
+
+                          {order.status === 'Driver Menuju Lokasi' && order.driver_lat && (
+                            <div
+                              className="bg-blue-50/80 border border-blue-100 p-3 rounded-xl space-y-1.5 text-xs mt-1"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <div className="flex justify-between items-center">
+                                <span className="font-bold text-blue-900 flex items-center gap-1 text-[11px]">
+                                  <MapPin className="w-3.5 h-3.5" /> Driver Sedang Menuju Lokasi
+                                </span>
+                                <a
+                                  href={`https://maps.google.com/?q=${order.driver_lat},${order.driver_lon}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="bg-blue-600 text-white font-bold text-[10px] px-2.5 py-1 rounded-lg shadow-sm inline-flex items-center gap-1"
+                                >
+                                  Buka Peta Live <ChevronRight className="w-3 h-3" />
+                                </a>
+                              </div>
+                              <p className="text-[10px] text-blue-600">Posisi driver diperbarui secara otomatis.</p>
+                            </div>
+                          )}
+
+                          <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 space-y-2 mt-2" onClick={(e) => e.stopPropagation()}>
+                            <p className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider inline-flex items-center gap-1">
+                              <ImageIcon className="w-3 h-3" /> Bukti Foto
+                            </p>
+                            <ProofPhotoGrid order={order} onOpen={setLightboxSrc} compact />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </>
+                )}
+
+                {activitySub === 'terjadwal' && (
+                  <>
+                    {scheduledOrders.length === 0 && (
+                      <div className="bg-white border border-slate-100 p-8 rounded-3xl text-center space-y-3 shadow-sm">
+                        <p className="text-xs text-slate-400">Belum ada jemputan terjadwal.</p>
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab('order')}
+                          className="text-[11px] font-extrabold text-indigo-600 inline-flex items-center gap-1"
+                        >
+                          Buat jadwal baru <ChevronRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
+                    {scheduledOrders.map((order: any) => {
+                      const editing = editingScheduleId === order.id;
+                      return (
+                        <div key={order.id} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 space-y-3">
+                          <div className="flex justify-between items-start gap-2">
+                            <div className="min-w-0">
+                              <p className="text-[11px] font-black text-slate-800">
+                                {order.service_type || 'Jemput terjadwal'}
+                              </p>
+                              <p className="text-[10px] text-slate-500 font-semibold mt-0.5 inline-flex items-center gap-1">
+                                <Clock className="w-3 h-3 text-indigo-500" /> {formatScheduleLabel(order)}
+                              </p>
+                              <p className="text-[10px] text-slate-400 mt-0.5 line-clamp-2">{order.address}</p>
+                            </div>
+                            <StatusPill status={order.status || 'Terjadwal'} />
+                          </div>
+
+                          {editing ? (
+                            <div className="grid grid-cols-2 gap-2 bg-slate-50 border border-slate-100 rounded-xl p-2.5">
+                              <input
+                                type="date"
+                                min={new Date().toISOString().split('T')[0]}
+                                value={editScheduleDate}
+                                onChange={(e) => setEditScheduleDate(e.target.value)}
+                                className="bg-white border border-slate-300 rounded-lg px-2 py-1.5 text-[11px] font-bold"
+                              />
+                              <input
+                                type="time"
+                                value={editScheduleTime}
+                                onChange={(e) => setEditScheduleTime(e.target.value)}
+                                className="bg-white border border-slate-300 rounded-lg px-2 py-1.5 text-[11px] font-bold"
+                              />
+                              <button
+                                type="button"
+                                disabled={scheduleBusyId === order.id}
+                                onClick={() => persistSchedule(order, editScheduleDate, editScheduleTime)}
+                                className="col-span-1 bg-indigo-600 text-white text-[10px] font-extrabold py-2 rounded-lg"
+                              >
+                                {scheduleBusyId === order.id ? 'Menyimpan…' : 'Simpan'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEditingScheduleId(null)}
+                                className="col-span-1 bg-white border border-slate-200 text-[10px] font-extrabold py-2 rounded-lg text-slate-500"
+                              >
+                                Batal edit
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="grid grid-cols-2 gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const when = scheduleAtOf(order);
+                                  const localDate = when
+                                    ? `${when.getFullYear()}-${String(when.getMonth() + 1).padStart(2, '0')}-${String(when.getDate()).padStart(2, '0')}`
+                                    : pickupDate;
+                                  const localTime = when
+                                    ? `${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}`
+                                    : pickupTime;
+                                  setEditScheduleDate(localDate);
+                                  setEditScheduleTime(localTime);
+                                  setEditingScheduleId(order.id);
+                                }}
+                                className="bg-indigo-50 text-indigo-700 text-[10px] font-extrabold py-2.5 rounded-xl border border-indigo-100 inline-flex items-center justify-center gap-1"
+                              >
+                                <Pencil className="w-3 h-3" /> Ubah jadwal
+                              </button>
+                              <button
+                                type="button"
+                                disabled={scheduleBusyId === order.id}
+                                onClick={() => cancelScheduledOrder(order)}
+                                className="bg-rose-50 text-rose-600 text-[10px] font-extrabold py-2.5 rounded-xl border border-rose-100"
+                              >
+                                {scheduleBusyId === order.id ? 'Membatal…' : 'Batalkan'}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </>
+                )}
+
+                {activitySub === 'riwayat' && (
+                  <>
+                    {completedOrders.map((item: any) => (
+                      <div
+                        key={item.id}
+                        className="bg-white border border-slate-200 rounded-2xl p-4 text-xs space-y-2 shadow-sm"
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDetailOrder({
+                              ...item,
+                              items: Array.isArray(item.items) ? item.items : safeParse(item.items, [])
+                            })
+                          }
+                          className="w-full text-left space-y-2"
+                        >
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <span className="font-extrabold text-slate-900 block">{item.title}</span>
+                              <span className="text-[10px] text-slate-500 font-medium line-clamp-2">{item.detail}</span>
+                            </div>
+                            <StatusPill status={item.status} />
+                          </div>
+                          <div className="flex justify-between items-center pt-2 border-t border-slate-100 text-[10px]">
+                            <span className="text-slate-400 font-medium">{new Date(item.date).toLocaleDateString('id-ID')}</span>
+                            <span className="font-black text-blue-600 text-xs">
+                              {item.receipt_number ? 'Total' : 'Ongkir'}: Rp {Number(item.price || item.amount || 0).toLocaleString('id-ID')}
+                            </span>
+                          </div>
+                          <p className="text-[10px] font-bold text-indigo-600 inline-flex items-center gap-1">
+                            <Search className="w-3 h-3" /> Lihat invoice, timeline & foto
+                          </p>
+                        </button>
+                        <div className="grid grid-cols-2 gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => setActiveTab('order')}
+                            className="bg-blue-50 text-blue-700 text-[10px] font-extrabold py-2 rounded-xl border border-blue-100"
+                          >
+                            Pesan lagi
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDetailOrder({
+                                ...item,
+                                items: Array.isArray(item.items) ? item.items : safeParse(item.items, [])
+                              });
+                              setReviewStars(0);
+                              setReviewText('');
+                              setReviewOpen(true);
+                            }}
+                            className="bg-amber-50 text-amber-700 text-[10px] font-extrabold py-2 rounded-xl border border-amber-100 inline-flex items-center justify-center gap-1"
+                          >
+                            <Star className="w-3 h-3" /> Beri ulasan
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+
+                    {completedOrders.length === 0 && (
+                      <div className="bg-white border border-slate-200 p-8 rounded-3xl text-center text-xs text-slate-400 shadow-sm">
+                        Belum ada riwayat transaksi selesai.
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
           )}
 
@@ -2725,24 +2991,31 @@ export default function CustomerDashboardPage() {
               <CheckCircle2 className="w-8 h-8" />
             </div>
             <div>
-              <h3 className="text-base font-extrabold text-slate-900">Pesanan Terkirim ke Kasir!</h3>
+              <h3 className="text-base font-extrabold text-slate-900">
+                {isScheduledOrder(latestCreatedOrder) ? 'Jemputan Terjadwal!' : 'Pesanan Terkirim ke Kasir!'}
+              </h3>
               <p className="text-xs text-slate-500 mt-1.5 leading-relaxed font-medium">
                 No. Pesanan: <b className="text-slate-900">{latestCreatedOrder.order_number}</b><br/>
-                Driver & Kasir outlet kami sedang memproses penjemputan ke lokasi Anda.
+                {isScheduledOrder(latestCreatedOrder)
+                  ? `Driver belum ditugaskan. Jadwal: ${formatScheduleLabel(latestCreatedOrder)}.`
+                  : 'Driver & Kasir outlet kami sedang memproses penjemputan ke lokasi Anda.'}
               </p>
             </div>
             <button
-              onClick={() => setShowOrderSuccessModal(false)}
+              onClick={() => {
+                setShowOrderSuccessModal(false);
+                goActivity(isScheduledOrder(latestCreatedOrder) ? 'terjadwal' : 'berlangsung');
+              }}
               className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold py-3.5 rounded-2xl text-xs uppercase shadow-md transition inline-flex items-center justify-center gap-1.5"
             >
-              Lihat Status Live Tracking <ChevronRight className="w-4 h-4" />
+              {isScheduledOrder(latestCreatedOrder) ? 'Lihat Jadwal' : 'Lihat Status Live Tracking'} <ChevronRight className="w-4 h-4" />
             </button>
           </div>
         </div>
       )}
       {/* BOTTOM NAVIGATION BAR */}
       <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/95 backdrop-blur-md border-t border-slate-200 flex justify-around p-2.5 z-50 shadow-lg">
-        <button onClick={() => setActiveTab('home')} className={`flex flex-col items-center flex-1 ${activeTab === 'home' ? 'text-blue-600' : 'text-slate-400'}`}>
+        <button onClick={goHome} className={`flex flex-col items-center flex-1 ${activeTab === 'home' ? 'text-blue-600' : 'text-slate-400'}`}>
           <Home className="w-5 h-5" />
           <span className="text-[9px] font-extrabold mt-0.5">Beranda</span>
         </button>
@@ -2754,9 +3027,14 @@ export default function CustomerDashboardPage() {
           <Wallet className="w-5 h-5" />
           <span className="text-[9px] font-extrabold mt-0.5">Deposit</span>
         </button>
-        <button onClick={() => setActiveTab('history')} className={`flex flex-col items-center flex-1 ${activeTab === 'history' ? 'text-blue-600' : 'text-slate-400'}`}>
-          <History className="w-5 h-5" />
-          <span className="text-[9px] font-extrabold mt-0.5">Riwayat</span>
+        <button onClick={() => goActivity(activitySub)} className={`relative flex flex-col items-center flex-1 ${activeTab === 'activity' ? 'text-blue-600' : 'text-slate-400'}`}>
+          <ListTodo className="w-5 h-5" />
+          {ongoingCount > 0 && (
+            <span className="absolute -top-0.5 right-[18%] min-w-[15px] h-[15px] px-1 rounded-full bg-blue-600 text-white text-[8px] font-black flex items-center justify-center">
+              {ongoingCount > 99 ? '99+' : ongoingCount}
+            </span>
+          )}
+          <span className="text-[9px] font-extrabold mt-0.5">Aktivitas</span>
         </button>
         <button onClick={() => setActiveTab('profile')} className={`flex flex-col items-center flex-1 ${activeTab === 'profile' ? 'text-blue-600' : 'text-slate-400'}`}>
           <User className="w-5 h-5" />
@@ -3103,5 +3381,13 @@ export default function CustomerDashboardPage() {
       )}
       <PhotoLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
     </div>
+  );
+}
+
+export default function CustomerDashboardPageWrapped() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-slate-100" />}>
+      <CustomerDashboardPage />
+    </Suspense>
   );
 }

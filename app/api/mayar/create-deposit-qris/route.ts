@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { createMayarPayment, isMayarKeyValid } from '@/lib/mayar';
 import { cashDepositReceiptOf, insertPendingCashDepositDb, netDepositOf } from '@/lib/cashDepositQris';
+import { resolveActorUuid, resolveOutletUuid } from '@/lib/outletUuid';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,15 +16,19 @@ const supabase = createClient(
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
-    const outletId = String(body.outlet_id || body.outletId || '').trim();
-    const kasirId = String(body.kasir_id || body.kasirId || body.cashier_id || '').trim();
+    const outletRaw = String(body.outlet_id || body.outletId || '').trim();
+    const kasirRaw = String(body.kasir_id || body.kasirId || body.cashier_id || body.created_by || '').trim();
     const physical = Math.round(Number(body.physical_cash ?? body.amount_cash ?? body.net_deposit_amount) || 0);
     const adminFee = Math.max(0, Math.round(Number(body.admin_fee ?? body.adminFee) || 0));
     const net = Math.round(Number(body.net_deposit_amount ?? netDepositOf(physical, adminFee)) || 0);
     const shiftDate = String(body.shift_date || body.shiftDate || new Date().toISOString().slice(0, 10)).slice(0, 10);
 
+    const outletId = await resolveOutletUuid(supabase, outletRaw);
     if (!outletId) {
-      return NextResponse.json({ error: 'outlet_id wajib' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'outlet_id wajib UUID outlet. ID numerik lama (contoh "18") harus dipetakan ke outlets.id.' },
+        { status: 400 }
+      );
     }
     if (net < 1000) {
       return NextResponse.json({ error: 'Nominal setoran QRIS minimal Rp 1.000 (fisik minus biaya admin)' }, { status: 400 });
@@ -37,6 +42,7 @@ export async function POST(req: Request) {
     if (!outlet) {
       return NextResponse.json({ error: 'Outlet tidak ditemukan' }, { status: 404 });
     }
+    const kasirId = resolveActorUuid(kasirRaw, body);
 
     const receipt = cashDepositReceiptOf(outletId, shiftDate);
     const apiKey = isMayarKeyValid(outlet.mayar_api_key) ? String(outlet.mayar_api_key).trim() : '';

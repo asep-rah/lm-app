@@ -43,7 +43,7 @@ export default function LoginPage() {
     // Fetch data karyawan berdasarkan username
     const { data: user, error } = await supabase
       .from('employees')
-      .select('*, outlets(name)')
+      .select('*, outlets(id, name)')
       .eq('username', cleanUsername)
       .single();
 

@@ -25,6 +25,7 @@ import { dispatchThirdPartyDelivery, isThirdPartyDelivery } from '@/lib/thirdPar
 import ThirdPartyDispatchForm from '@/components/ThirdPartyDispatchForm';
 import ThirdPartyDeliveryCard from '@/components/ThirdPartyDeliveryCard';
 import CashDepositQrisPanel from '@/components/CashDepositQrisPanel';
+import { matchOutletUuid, resolveActorUuid, resolveOutletUuid, uuidOrNull } from '@/lib/outletUuid';
 import {
   classifyQueueOrder,
   coalesceProsesCards,
@@ -367,28 +368,66 @@ const handleSubmitDeposit = async () => {
 
   if (amount <= 0) return alert('⚠️ Masukkan nominal setoran cash yang valid!');
 
-  const { error: depositErr } = await supabase.from('cash_deposits').insert([
+  const outletUuid = await resolveOutletUuid(supabase, selectedOutlet, outletsList);
+  if (!outletUuid) {
+    return alert('❌ Outlet tidak valid. Pilih cabang ulang — ID numerik lama tidak bisa disimpan ke kas.');
+  }
+  if (outletUuid !== selectedOutlet) setSelectedOutlet(outletUuid);
+
+  let staff: any = null;
+  try {
+    staff = JSON.parse(localStorage.getItem('laundry_user') || 'null');
+  } catch {
+    staff = null;
+  }
+  const kasirUuid = resolveActorUuid(employeeId, staff);
+  const shiftUuid = uuidOrNull((staff as any)?.shift_id);
+
+  const depositRow: Record<string, unknown> = {
+    outlet_id: outletUuid,
+    amount_cash: amount,
+    admin_fee: fee,
+    net_deposit_amount: Math.max(0, amount - fee),
+    deposit_method: depositMethod,
+    qr_payment_status: 'pending',
+    status: 'PENDING',
+    proof_url: proofUrl || 'Setor via QRIS Meja Kasir'
+  };
+  if (kasirUuid) {
+    depositRow.cashier_id = kasirUuid;
+    depositRow.kasir_id = kasirUuid;
+    depositRow.created_by = kasirUuid;
+  } else if (employeeId) {
+    depositRow.kasir_id = String(employeeId);
+  }
+  if (shiftUuid) depositRow.shift_id = shiftUuid;
+
+  const { error: depositErr } = await insertWithFallback('cash_deposits', [
+    depositRow,
     {
-      outlet_id: selectedOutlet,
-      cashier_id: employeeId || '00000000-0000-0000-0000-000000000000',
+      outlet_id: outletUuid,
+      cashier_id: kasirUuid,
       amount_cash: amount,
       admin_fee: fee,
       deposit_method: depositMethod,
       qr_payment_status: 'pending',
-      proof_url: proofUrl || 'Setor via QRIS Meja Kasir'
-    }
+      proof_url: depositRow.proof_url
+    },
+    { outlet_id: outletUuid, amount_cash: amount, admin_fee: fee, qr_payment_status: 'pending' },
+    { outlet_id: outletUuid, amount_cash: amount }
   ]);
 
   if (depositErr) return alert('❌ Gagal menyimpan setoran: ' + depositErr.message);
 
   if (fee > 0) {
-    await supabase.from('expenses').insert([
+    await insertWithFallback('expenses', [
       {
-        outlet_id: selectedOutlet,
+        outlet_id: outletUuid,
         amount: fee,
         notes: `Biaya Admin Top-Up Setoran Cash (${depositMethod})`,
         category: 'Biaya Admin'
-      }
+      },
+      { outlet_id: outletUuid, amount: fee, notes: `Biaya Admin Top-Up Setoran Cash (${depositMethod})` }
     ]);
   }
 
@@ -406,26 +445,42 @@ const handleSubmitClosingShift = async () => {
     return alert('⚠️ Masukkan jumlah fisik uang tunai di laci secara valid!');
   }
 
+  const outletUuid = await resolveOutletUuid(supabase, selectedOutlet, outletsList);
+  if (!outletUuid) {
+    return alert('❌ Outlet tidak valid untuk closing. Pilih cabang ulang.');
+  }
+
   // Hitung total penerimaan tunai sistem hari ini untuk outlet aktif
   const { data: cashOrders } = await supabase
     .from('transactions')
     .select('total_amount, amount_paid')
-    .eq('outlet_id', selectedOutlet)
+    .eq('outlet_id', outletUuid)
     .ilike('payment_method', '%cash%');
 
   const expectedSystemCash = (cashOrders || []).reduce((acc, curr) => acc + (Number(curr.amount_paid) || Number(curr.total_amount) || 0), 0);
   const cashDifference = physicalAmount - expectedSystemCash;
 
+  let staff: any = null;
+  try {
+    staff = JSON.parse(localStorage.getItem('laundry_user') || 'null');
+  } catch {
+    staff = null;
+  }
+  const kasirUuid = resolveActorUuid(employeeId, staff);
+
   // Catat data closing ke tabel cash_closings / expenses jika ada minus
-  const { error } = await supabase.from('cash_closings').insert([
-    {
-      outlet_id: selectedOutlet,
-      cashier_id: employeeId || '00000000-0000-0000-0000-000000000000',
-      system_expected_cash: expectedSystemCash,
-      physical_actual_cash: physicalAmount,
-      cash_difference: cashDifference,
-      notes: closingNotes.trim() || 'Closing Shift Kasir Regular'
-    }
+  const closingRow: Record<string, unknown> = {
+    outlet_id: outletUuid,
+    system_expected_cash: expectedSystemCash,
+    physical_actual_cash: physicalAmount,
+    cash_difference: cashDifference,
+    notes: closingNotes.trim() || 'Closing Shift Kasir Regular'
+  };
+  if (kasirUuid) closingRow.cashier_id = kasirUuid;
+
+  const { error } = await insertWithFallback('cash_closings', [
+    closingRow,
+    { outlet_id: outletUuid, physical_actual_cash: physicalAmount, notes: closingRow.notes }
   ]);
 
   if (error) {
@@ -434,12 +489,17 @@ const handleSubmitClosingShift = async () => {
 
   // Jika terjadi selisih kas (minus), catat otomatis ke laporan selisih kas
   if (cashDifference < 0) {
-    await supabase.from('expenses').insert([
+    await insertWithFallback('expenses', [
       {
-        outlet_id: selectedOutlet,
+        outlet_id: outletUuid,
         amount: Math.abs(cashDifference),
         notes: `Selisih Minus Kas Laci Shift Kasir (${employeeName || 'Kasir'})`,
         category: 'Selisih Kas'
+      },
+      {
+        outlet_id: outletUuid,
+        amount: Math.abs(cashDifference),
+        notes: `Selisih Minus Kas Laci Shift Kasir (${employeeName || 'Kasir'})`
       }
     ]);
   }
@@ -857,9 +917,18 @@ const handleApplyLoan = async (e: React.FormEvent) => {
           setTenureMonths(Math.max(1, monthsDiff || 1));
         }
 
-        const assignedOutlet = String(
-          user.outlet_id || user.user_metadata?.outlet_id || user.raw_user_meta_data?.outlet_id || ''
+        const assignedRaw = String(
+          user.outlets?.id ||
+            user.outlet_id ||
+            user.user_metadata?.outlet_id ||
+            user.raw_user_meta_data?.outlet_id ||
+            ''
         );
+        const assignedOutlet =
+          matchOutletUuid(dbOutlets, assignedRaw) ||
+          matchOutletUuid(dbOutlets, user.outlets?.id) ||
+          (dbOutlets?.length === 1 ? matchOutletUuid(dbOutlets, dbOutlets[0]?.id) : null) ||
+          assignedRaw;
         const roleKey = String(user.role || 'kasir').toLowerCase().trim();
         const lockedToOutlet = ['kasir', 'pos'].includes(roleKey) && assignedOutlet && assignedOutlet !== 'ALL';
 
@@ -872,7 +941,8 @@ const handleApplyLoan = async (e: React.FormEvent) => {
         if (lockedToOutlet || (assignedOutlet && assignedOutlet !== 'ALL')) {
           setIsMultiOutletUser(false);
           setSelectedOutlet(assignedOutlet);
-          const found = (dbOutlets || []).find((o: any) => o.id === assignedOutlet);
+          const found = (dbOutlets || []).find((o: any) => o.id === assignedOutlet) ||
+            (dbOutlets || []).find((o: any) => matchOutletUuid([o], assignedRaw) === o.id);
           setOutletName(found?.name || user.outlets?.name || 'Cabang Outlet');
           setOutletPhone(found?.whatsapp_number || user.outlets?.whatsapp_number || '');
         } else if (!assignedOutlet || assignedOutlet === 'ALL') {
