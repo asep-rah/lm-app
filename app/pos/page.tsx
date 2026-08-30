@@ -199,6 +199,16 @@ export function POSContent() {
   const [depositMethod, setDepositMethod] = useState<'INDOMARET_ALFAMART' | 'MBANKING_PERSONAL'>('INDOMARET_ALFAMART');
   const [adminFee, setAdminFee] = useState('');
   const [proofUrl, setProofUrl] = useState('');
+  const [depositPanelKey, setDepositPanelKey] = useState(0);
+
+  const closeDepositModal = () => {
+    setShowDepositModal(false);
+    setDepositAmount('');
+    setAdminFee('');
+    setProofUrl('');
+    setDepositMethod('INDOMARET_ALFAMART');
+    setDepositPanelKey((k) => k + 1);
+  };
 
   // State Closing Shift / Blind Cash Count
   const [showClosingModal, setShowClosingModal] = useState(false);
@@ -444,10 +454,7 @@ const handleSubmitDeposit = async () => {
   }
 
   alert('✅ Setoran berhasil diajukan! Finance akan memverifikasi mutasi masuk pada QRIS.');
-  setShowDepositModal(false);
-  setDepositAmount('');
-  setAdminFee('');
-  setProofUrl('');
+  closeDepositModal();
 };
 
 // Handler Submit Closing Shift & Blind Cash Count
@@ -3501,14 +3508,25 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
             
             {/* MODAL SETORAN CASH KASIR */}
       {showDepositModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
-          <div className="bg-white border border-slate-200 w-full max-w-md rounded-3xl p-6 space-y-4 shadow-2xl">
-            <div className="flex justify-between items-center border-b pb-3">
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50" onClick={closeDepositModal}>
+          <div
+            className="bg-white border border-slate-200 w-full max-w-md rounded-3xl shadow-2xl max-h-[90vh] flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="shrink-0 bg-white flex justify-between items-center border-b px-6 pt-5 pb-3 rounded-t-3xl">
               <h3 className="font-black text-slate-900 text-sm flex items-center gap-2">
                 <span>🏧 Setoran Uang Cash Outlet</span>
               </h3>
-              <button onClick={() => setShowDepositModal(false)} className="text-slate-400 font-bold text-sm">✖</button>
+              <button
+                type="button"
+                onClick={closeDepositModal}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 font-black text-sm flex items-center justify-center"
+                aria-label="Tutup"
+              >
+                ×
+              </button>
             </div>
+            <div className="p-6 pt-4 space-y-4 overflow-y-auto flex-1 min-h-0">
 
             <div className="space-y-3">
               {/* Pilihan Metode Top Up */}
@@ -3591,6 +3609,7 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
               </div>
 
               <CashDepositQrisPanel
+                key={depositPanelKey}
                 outletId={selectedOutlet}
                 kasirId={employeeId}
                 physicalCash={parseFloat(depositAmount) || 0}
@@ -3605,12 +3624,14 @@ const handleStatusChange = async (order: any, targetStatus: string, proof?: { ph
               </div>
             </div>
 
-            <div className="flex gap-2 pt-2">
+            </div>
+            <div className="shrink-0 flex gap-2 px-6 py-3 border-t bg-white rounded-b-3xl">
               <button
-                onClick={() => setShowDepositModal(false)}
+                type="button"
+                onClick={closeDepositModal}
                 className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2.5 rounded-xl text-xs transition"
               >
-                Batal
+                Kembali / Batal
               </button>
               <button
                 onClick={handleSubmitDeposit}

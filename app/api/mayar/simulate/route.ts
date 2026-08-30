@@ -1,20 +1,45 @@
 import { NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
+import { findCashDeposit, settleCashDeposit } from '@/lib/cashDepositQris';
 
 export const dynamic = 'force-dynamic';
 
-/** Test Auto-Payment: POST the same webhook receiver with a mock paid event. */
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || 'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs'
+);
+
+/** Test Auto-Payment: settle cash deposit directly, then optionally fan-out webhook. */
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
-    const mockOn = /^(1|true|yes|on)$/i.test(
-      String(process.env.NEXT_PUBLIC_ENABLE_MOCK_PAYMENTS || process.env.ENABLE_MOCK_PAYMENTS || '')
-    );
-    const isCashDepositSim = !!(body.cashDepositId || String(body.receipt || '').toUpperCase().startsWith('SETOR-'));
-    if (process.env.NODE_ENV === 'production' && !mockOn && !isCashDepositSim) {
-      return NextResponse.json({ error: 'Simulasi dinonaktifkan di production' }, { status: 403 });
-    }
     if (!body.transactionId && !body.topupId && !body.cashDepositId && !body.receipt) {
       return NextResponse.json({ error: 'transactionId, topupId, cashDepositId, atau receipt wajib' }, { status: 400 });
+    }
+
+    const isCashDepositSim = !!(body.cashDepositId || String(body.receipt || '').toUpperCase().startsWith('SETOR-'));
+    if (isCashDepositSim) {
+      const deposit = await findCashDeposit(supabase, {
+        depositId: body.cashDepositId,
+        paymentId: body.paymentId,
+        receipt: body.receipt
+      });
+      if (!deposit) {
+        return NextResponse.json({ error: 'Setoran tidak ditemukan untuk simulasi' }, { status: 404 });
+      }
+      const { error, already } = await settleCashDeposit(supabase, deposit);
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({
+        ok: true,
+        status: 'success',
+        type: 'cash_deposit',
+        cashDepositId: deposit.id,
+        balanced: true,
+        already: !!already,
+        simulate: true
+      });
     }
 
     const origin = new URL(req.url).origin;
@@ -39,7 +64,7 @@ export async function POST(req: Request) {
       }
     };
 
-    const res = await fetch(`${origin}/api/webhooks/mayar`, {
+    const res = await fetch(`${origin}/api/mayar/webhook`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

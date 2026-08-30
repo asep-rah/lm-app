@@ -140,13 +140,37 @@ export default function CashDepositQrisPanel({
     if (!charge?.deposit_id) return;
     setBusy(true);
     try {
-      await simulateMayarAutoPay({
-        cashDepositId: charge.deposit_id,
-        receipt: charge.receipt,
-        amount: charge.net_deposit_amount,
-        paymentId: charge.mayar_transaction_id
-      });
-      toast('Simulasi berhasil. Setoran ditandai BALANCED.', 'ok');
+      try {
+        await simulateMayarAutoPay({
+          cashDepositId: charge.deposit_id,
+          receipt: charge.receipt,
+          amount: charge.net_deposit_amount,
+          paymentId: charge.mayar_transaction_id
+        });
+      } catch (first: any) {
+        const res = await fetch('/api/mayar/webhook', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            event: 'payment.received',
+            simulate: true,
+            cashDepositId: charge.deposit_id,
+            receipt: charge.receipt,
+            data: {
+              status: 'SUCCESS',
+              transactionStatus: 'paid',
+              id: charge.mayar_transaction_id,
+              cashDepositId: charge.deposit_id,
+              amount: charge.net_deposit_amount,
+              productName: charge.receipt
+            }
+          })
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json?.error || first?.message || 'Simulasi gagal');
+      }
+      setBalanced(true);
+      toast('Setoran Berhasil Diverifikasi (Mode Simulasi)', 'ok');
     } catch (e: any) {
       toast(e?.message || 'Simulasi gagal', 'err');
     } finally {
@@ -175,7 +199,7 @@ export default function CashDepositQrisPanel({
       {charge && (
         <div className="rounded-2xl border border-slate-200 p-3 space-y-2 text-center">
           {balanced ? (
-            <p className="text-sm font-black text-emerald-700 py-6">Pembayaran Berhasil! Setoran Terverifikasi Otomatis</p>
+            <p className="text-sm font-black text-emerald-700 py-6">Setoran Berhasil Diverifikasi (Mode Simulasi)</p>
           ) : (
             <>
               <p className="text-[11px] font-bold text-amber-700">Menunggu Scan QRIS...</p>
@@ -194,16 +218,14 @@ export default function CashDepositQrisPanel({
                   Buka tautan pembayaran
                 </a>
               )}
-              {(charge.mock || process.env.NEXT_PUBLIC_ENABLE_MOCK_PAYMENTS === 'true') && (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={simulate}
-                  className="w-full bg-amber-500 hover:bg-amber-600 text-white text-[11px] font-extrabold py-2.5 rounded-xl"
-                >
-                  Simulasi Bayar QRIS (Test Mode)
-                </button>
-              )}
+              <button
+                type="button"
+                disabled={busy}
+                onClick={simulate}
+                className="w-full bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-[11px] font-extrabold py-2.5 rounded-xl"
+              >
+                Simulasi Bayar QRIS (Test Mode)
+              </button>
             </>
           )}
           <p className="text-[9px] text-slate-400 font-mono">{charge.receipt}</p>
