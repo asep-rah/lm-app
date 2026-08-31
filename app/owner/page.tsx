@@ -1148,10 +1148,14 @@ export default function Dashboard() {
           <>
             {activeTab === 'settings' && (
               <div className="flex flex-col gap-6">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <Link href="/owner/settings/outlets" className="bg-white border border-sky-200 rounded-2xl p-4 shadow-sm hover:border-sky-400 transition">
                     <p className="text-sm font-black text-slate-900">Profil Outlet & Google</p>
                     <p className="text-[11px] text-slate-500 mt-0.5">Foto, jam buka, Coming Soon, Place ID, dan rating fallback.</p>
+                  </Link>
+                  <Link href="/owner/machines" className="bg-white border border-cyan-200 rounded-2xl p-4 shadow-sm hover:border-cyan-400 transition">
+                    <p className="text-sm font-black text-slate-900">Manajemen Mesin Cuci</p>
+                    <p className="text-[11px] text-slate-500 mt-0.5">Nama, kapasitas 15/24kg, payload, ThinQ ID. Mesin aktif dipakai POS.</p>
                   </Link>
                   <Link href="/owner/settings/promos" className="bg-white border border-amber-200 rounded-2xl p-4 shadow-sm hover:border-amber-400 transition">
                     <p className="text-sm font-black text-slate-900">Banner Promo Customer</p>

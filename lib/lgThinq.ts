@@ -26,6 +26,9 @@ export type WasherRow = {
   outlet_id?: string;
   machine_name?: string;
   capacity_kg?: number;
+  capacity_type?: '15kg' | '24kg' | 'custom' | string;
+  max_payload_kg?: number;
+  is_active?: boolean;
   status?: string;
   current_order_id?: string | null;
   last_started_at?: string | null;
@@ -141,8 +144,8 @@ export const BEDCOVER_ONE_PCS_BADGE =
 
 export const BEDCOVER_DOUBLE_BADGE = '🔒 Wajib LG 24kg (Ukuran Bedcover Double)';
 
-export const isLargeWasher = (washer?: Pick<WasherRow, 'capacity_kg'> | null) =>
-  Number(washer?.capacity_kg) >= 20;
+export const isLargeWasher = (washer?: Pick<WasherRow, 'capacity_kg' | 'capacity_type' | 'max_payload_kg'> | null) =>
+  washerCapKg(washer) === 24;
 
 export const inferMachineMode = (item: CartMachineItem): MachineMode => {
   if (isNoMachineService(item)) return 'NO_MACHINE_REQUIRED';
@@ -295,10 +298,25 @@ export const remainingLabel = (washer: WasherRow, now = Date.now()) => {
   return `Sisa ${mins} mnt`;
 };
 
-export const washerCapKg = (washer?: Pick<WasherRow, 'capacity_kg'> | null) =>
-  Number(washer?.capacity_kg) >= 24 ? 24 : 15;
+export const washerCapKg = (washer?: Pick<WasherRow, 'capacity_kg' | 'capacity_type' | 'max_payload_kg'> | null) => {
+  const t = String(washer?.capacity_type || '').toLowerCase();
+  if (t === '24kg' || t === '24') return 24;
+  if (t === '15kg' || t === '15') return 15;
+  if (Number(washer?.capacity_kg) >= 20 || Number(washer?.max_payload_kg) >= 10) return 24;
+  return Number(washer?.capacity_kg) >= 24 ? 24 : 15;
+};
+
+export const washerMaxPayloadKg = (washer?: Pick<WasherRow, 'capacity_kg' | 'capacity_type' | 'max_payload_kg'> | null) => {
+  const custom = Number(washer?.max_payload_kg);
+  if (custom > 0) return custom;
+  return washerCapKg(washer) === 24 ? OP_LIMIT_LG24_KG : OP_LIMIT_LG15_KG;
+};
 
 export const washerShortTag = (washer?: WasherRow | null, peers: WasherRow[] = []) => {
+  const named = String(washer?.machine_name || '')
+    .replace(/^mesin\s+/i, '')
+    .trim();
+  if (named) return named;
   if (!washer) return 'LG';
   const cap = washerCapKg(washer);
   const same = [...peers]
@@ -544,8 +562,10 @@ export const washSlotTitle = (slot: WashSlot) => {
 
 export const isWasherDisabledForItem = (item: CartMachineItem, washer: WasherRow) => {
   if (isBedcoverDouble(item) && !isLargeWasher(washer)) return true;
+  const weight = itemWeightKg(item);
+  if (weight > 0 && weight > washerMaxPayloadKg(washer)) return true;
   if (isBedcoverSingle(item)) return false;
-  return washerCapKg(washer) === 15 && itemWeightKg(item) > OP_LIMIT_LG15_KG;
+  return false;
 };
 
 export function applyCycleSlot(
@@ -758,16 +778,11 @@ export function planWasherBatches(
 
 type Db = { from: (table: string) => any };
 
+export { fetchActiveOutletWashers } from '@/lib/outletMachines';
+
 export async function ensureDefaultWashers(db: Db, outletId: string) {
-  if (!outletId) return [];
-  const { data } = await db.from('washers').select('*').eq('outlet_id', outletId);
-  if (data?.length) return data;
-  const rows = [
-    { outlet_id: outletId, machine_name: 'LG ThinQ 24 kg', capacity_kg: 24, status: 'IDLE', thinq_device_id: `lg24-${outletId.slice(0, 8)}` },
-    { outlet_id: outletId, machine_name: 'LG ThinQ 15 kg', capacity_kg: 15, status: 'IDLE', thinq_device_id: `lg15-${outletId.slice(0, 8)}` }
-  ];
-  const { data: inserted } = await db.from('washers').insert(rows).select('*');
-  return inserted || [];
+  const { fetchActiveOutletWashers } = await import('@/lib/outletMachines');
+  return fetchActiveOutletWashers(db, outletId);
 }
 
 export async function createWasherCycles(opts: {

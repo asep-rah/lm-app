@@ -7,8 +7,8 @@ import {
   SLOT_SPLIT_BANNER,
   applyCycleSlot,
   balanceWasherAssignments,
-  ensureDefaultWashers,
   expandWashSlots,
+  fetchActiveOutletWashers,
   isBedcoverDouble,
   isBedcoverItem,
   isLargeWasher,
@@ -68,7 +68,7 @@ export default function WasherAssignPanel({
     if (!outletId) return;
     let alive = true;
     const load = async () => {
-      const rows = (await ensureDefaultWashers(supabase as any, outletId)) as WasherRow[];
+      const rows = (await fetchActiveOutletWashers(supabase as any, outletId)) as WasherRow[];
       if (!alive) return;
       setWashers(rows || []);
       const ids = (rows || []).map((w) => w.id);
@@ -183,6 +183,11 @@ export default function WasherAssignPanel({
       {showSplitBanner && (
         <p className="text-[10px] font-semibold text-slate-600 leading-tight truncate">
           {SLOT_SPLIT_BANNER}
+        </p>
+      )}
+      {washers.length === 0 && (
+        <p className="text-[10px] font-semibold text-amber-700 leading-tight">
+          Belum ada mesin aktif. Owner: Pengaturan → Manajemen Mesin Cuci.
         </p>
       )}
       <label className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-500">

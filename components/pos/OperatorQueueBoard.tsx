@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import {
-  ensureDefaultWashers,
+  fetchActiveOutletWashers,
   isWasherIdle,
   progressPct,
   remainingLabel,
@@ -51,7 +51,7 @@ export default function OperatorQueueBoard({
 
   const load = useCallback(async () => {
     if (!outletId) return;
-    const rows = (await ensureDefaultWashers(supabase as any, outletId)) as WasherRow[];
+    const rows = (await fetchActiveOutletWashers(supabase as any, outletId)) as WasherRow[];
     setWashers(rows || []);
     const ids = (rows || []).map((w) => w.id);
     const { data: cycleRows } = await supabase

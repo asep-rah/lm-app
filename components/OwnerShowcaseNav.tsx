@@ -4,10 +4,11 @@ import Link from 'next/link';
 
 const ITEMS = [
   { href: '/owner/settings/outlets', id: 'outlets', label: 'Profil Outlet' },
-  { href: '/owner/settings/promos', id: 'promos', label: 'Banner Promo' }
+  { href: '/owner/settings/promos', id: 'promos', label: 'Banner Promo' },
+  { href: '/owner/machines', id: 'machines', label: 'Mesin Cuci' }
 ] as const;
 
-export default function OwnerShowcaseNav({ active }: { active: 'outlets' | 'promos' }) {
+export default function OwnerShowcaseNav({ active }: { active: 'outlets' | 'promos' | 'machines' }) {
   return (
     <nav className="flex flex-wrap items-center gap-1.5">
       <Link
