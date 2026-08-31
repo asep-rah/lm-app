@@ -1,36 +1,48 @@
-/** Akses Grup Koordinasi Outlet (`internal_outlet_chats`). */
+/** Akses Grup Koordinasi Outlet (`internal_outlet_chats`). Internal staff only. */
 
 const ALLOWED = new Set([
+  'owner',
+  'cashier',
   'kasir',
   'pos',
+  'operator',
+  'supervisor',
+  'courier',
+  'driver',
+  'kurir',
+  'admin',
+  'admin_ops',
   'cs',
   'cs_care',
   'head_cs',
-  'supervisor',
   'finance',
-  'head_finance',
-  'admin_ops',
-  'admin',
-  'owner'
+  'head_finance'
 ]);
 
-const EXCLUDED = new Set(['driver', 'courier', 'kurir']);
+const CUSTOMER_ROLES = new Set(['customer', 'pelanggan', 'member', 'guest']);
 
-const SWITCHER = new Set([
-  'cs',
-  'cs_care',
-  'head_cs',
-  'supervisor',
-  'finance',
-  'head_finance',
-  'admin_ops',
-  'admin',
-  'owner'
-]);
+const CUSTOMER_PATH_PREFIXES = [
+  '/customer',
+  '/deposit',
+  '/aktivitas',
+  '/beranda',
+  '/profil',
+  '/order'
+];
 
-export const canAccessOutletGroupChat = (role: string) => {
+export const isCustomerRole = (role: string) =>
+  CUSTOMER_ROLES.has(String(role || '').toLowerCase().trim());
+
+export const isCustomerFacingPath = (pathname?: string | null) => {
+  const p = String(pathname || '').toLowerCase().split('?')[0];
+  if (!p) return false;
+  return CUSTOMER_PATH_PREFIXES.some((prefix) => p === prefix || p.startsWith(`${prefix}/`));
+};
+
+export const canAccessOutletGroupChat = (role: string, pathname?: string | null) => {
+  if (isCustomerFacingPath(pathname)) return false;
   const r = String(role || '').toLowerCase().trim();
-  if (EXCLUDED.has(r)) return false;
+  if (!r || isCustomerRole(r)) return false;
   return ALLOWED.has(r);
 };
 
@@ -38,5 +50,5 @@ export const canAccessOutletGroupChat = (role: string) => {
 export const canSwitchOutletGroupChat = (role: string) => {
   const r = String(role || '').toLowerCase().trim();
   if (!canAccessOutletGroupChat(r)) return false;
-  return SWITCHER.has(r);
+  return ['cs', 'cs_care', 'head_cs', 'supervisor', 'finance', 'head_finance', 'admin_ops', 'admin', 'owner'].includes(r);
 };

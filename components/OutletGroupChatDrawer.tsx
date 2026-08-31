@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { usePathname } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import { getStaffSession } from '@/lib/staffSession';
-import { canAccessOutletGroupChat, canSwitchOutletGroupChat } from '@/lib/outletGroupChat';
+import { canAccessOutletGroupChat, canSwitchOutletGroupChat, isCustomerFacingPath } from '@/lib/outletGroupChat';
 import { matchOutletUuid, resolveOutletUuid, uuidOrNull } from '@/lib/outletUuid';
 import { toast } from '@/lib/toast';
 
@@ -28,6 +29,7 @@ const friendlyChatSendError = (raw?: string) => {
 };
 
 export default function OutletGroupChatDrawer() {
+  const pathname = usePathname();
   const [ready, setReady] = useState(false);
   const [open, setOpen] = useState(false);
   const [role, setRole] = useState('');
@@ -37,14 +39,19 @@ export default function OutletGroupChatDrawer() {
   const [rows, setRows] = useState<ChatRow[]>([]);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
+  const [customerOnly, setCustomerOnly] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  const canUse = canAccessOutletGroupChat(role);
+  const onCustomerSurface = isCustomerFacingPath(pathname) || customerOnly;
+  const canUse = !onCustomerSurface && canAccessOutletGroupChat(role, pathname);
   const canSwitch = canSwitchOutletGroupChat(role);
 
   useEffect(() => {
-    const raw = localStorage.getItem('laundry_owner_user') || localStorage.getItem('laundry_user');
-    if (!raw) {
+    const staffRaw = localStorage.getItem('laundry_owner_user') || localStorage.getItem('laundry_user');
+    const customerPhone = localStorage.getItem('laundry_customer_phone');
+    setCustomerOnly(Boolean(customerPhone) && !staffRaw);
+    if (!staffRaw) {
+      setRole('');
       setReady(true);
       return;
     }
@@ -53,7 +60,11 @@ export default function OutletGroupChatDrawer() {
     setName(s.name);
     setOutletId(s.outletId || '');
     setReady(true);
-  }, []);
+  }, [pathname]);
+
+  useEffect(() => {
+    if (onCustomerSurface) setOpen(false);
+  }, [onCustomerSurface]);
 
   useEffect(() => {
     if (!canUse) return;
@@ -184,7 +195,7 @@ export default function OutletGroupChatDrawer() {
     }
   };
 
-  if (!ready || !canUse) return null;
+  if (!ready || onCustomerSurface || !canUse) return null;
 
   const roomName = outlets.find((o) => o.id === outletId)?.name || 'Outlet';
 
