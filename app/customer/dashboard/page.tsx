@@ -6,7 +6,7 @@ import { createClient } from '@supabase/supabase-js';
 import StageTimeline from '@/components/StageTimeline';
 import { fetchThreadMessages, insertChatMessage, isStaffOnlyMessage, phoneVariants, threadKeyOf } from '@/lib/csChat';
 import { parseChatInvoice } from '@/lib/chatInvoice';
-import { mapDbPromo, mapSettingsPromo, promoDiscountRp, promoIsClaimable, type CatalogPromo } from '@/lib/promoCatalog';
+import { findPromoByCode, mapDbPromo, mapSettingsPromo, promoDiscountRp, promoIsClaimable, type CatalogPromo } from '@/lib/promoCatalog';
 import { createPickupRoleTasks, insertPickupOrder, requestDriverDelivery } from '@/lib/pickupDispatch';
 import { displayStatusLabel, stageKeyOf } from '@/lib/stageTimeline';
 import { laundryFallbackReply } from '@/lib/laundryFaq';
@@ -47,6 +47,7 @@ import {
 import { IconBadge, SlaBadge, StarRating, StatusPill, StepperBtn, TRACKER_STAGES } from '@/components/customer/ui';
 import PromoBannerCarousel from '@/components/customer/PromoBannerCarousel';
 import NearbyOutlets from '@/components/customer/NearbyOutlets';
+import PromoVoucherModal from '@/components/customer/PromoVoucherModal';
 import OutletProfileDrawer from '@/components/customer/OutletProfileDrawer';
 import { bannerSlidesOf, nearbyActiveOutlets, type ShowcasePromo } from '@/lib/outletShowcase';
 import ActivitySegmentTabs from '@/components/customer/ActivitySegmentTabs';
@@ -89,7 +90,6 @@ import {
   Send,
   Sparkles,
   Star,
-  Store,
   Truck,
   User,
   Wallet,
@@ -1281,12 +1281,24 @@ function CustomerDashboardPage() {
     const basket = rawSubtotal + rawOngkir;
     if (!promoIsClaimable(promo, basket)) {
       if (promo.max_quota > 0 && promo.used_count >= promo.max_quota) {
-        return alert('Kuota voucher ini sudah habis.');
+        alert('Kuota voucher ini sudah habis.');
+        return false;
       }
-      return alert(`Minimal transaksi untuk promo ini adalah Rp ${Number(promo.minTx || 0).toLocaleString('id-ID')}`);
+      alert(`Minimal transaksi untuk promo ini adalah Rp ${Number(promo.minTx || 0).toLocaleString('id-ID')}`);
+      return false;
     }
     setClaimedPromo(promo);
     setShowPromoModal(false);
+    return true;
+  };
+
+  const handleApplyPromoCode = (raw: string) => {
+    const found = findPromoByCode(availablePromos, raw);
+    if (!found) {
+      alert('Kode promo tidak ditemukan atau tidak aktif.');
+      return false;
+    }
+    return handleClaimPromo(found);
   };
 
   const handleOrderSubmit = async (e: React.FormEvent) => {
@@ -2643,64 +2655,14 @@ function CustomerDashboardPage() {
         </>
       ) : null}
 
-      {/* MODAL KLAIM VOUCHER PROMO AKTIF */}
-      {showPromoModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[90] flex items-center justify-center p-4" onClick={() => setShowPromoModal(false)}>
-          <div className="bg-white rounded-3xl p-5 max-w-sm w-full space-y-4 shadow-2xl max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-            <div className="flex justify-between items-center border-b pb-2">
-              <h3 className="text-sm font-extrabold text-slate-900 inline-flex items-center gap-1.5">
-                <Gift className="w-4 h-4 text-amber-600" /> Klaim Voucher Promo
-              </h3>
-              <button onClick={() => setShowPromoModal(false)} className="text-slate-400 hover:text-slate-600" aria-label="Tutup">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="space-y-2.5">
-              <p className="text-[10px] font-extrabold text-slate-400 uppercase">Pilih Promo Untuk Pesanan Ini:</p>
-              {availablePromos.length > 0 ? (
-                availablePromos.map((promo, idx) => {
-                  const isClaimed = claimedPromo?.id === promo.id;
-                  return (
-                    <div key={idx} className={`p-3.5 rounded-2xl border transition space-y-2 ${isClaimed ? 'bg-amber-50 border-amber-400' : 'bg-slate-50 border-slate-200'}`}>
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <h4 className="font-extrabold text-slate-900 text-xs">{promo.title}</h4>
-                          <p className="text-[10px] text-slate-500 mt-0.5">{promo.desc}</p>
-                          <p className="text-[9px] text-amber-700 font-bold mt-1">Min. Transaksi: Rp {Number(promo.minTx || 0).toLocaleString('id-ID')}</p>
-                        </div>
-                        <button
-                          onClick={() => handleClaimPromo(promo)}
-                          className={`text-[10px] font-extrabold px-3 py-1.5 rounded-xl shadow-sm transition ${isClaimed ? 'bg-emerald-600 text-white' : 'bg-amber-500 hover:bg-amber-600 text-white'}`}
-                        >
-                          {isClaimed ? 'Terpasang' : 'Klaim Promo'}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })
-              ) : (
-                <p className="text-xs text-slate-400 text-center py-4">Belum ada promo aktif saat ini.</p>
-              )}
-            </div>
-
-            <div className="space-y-2 pt-2 border-t border-slate-100">
-              <p className="text-[10px] font-extrabold text-slate-400 uppercase">Daftar Cabang Outlet Resmi ({outletsList.length}):</p>
-              {outletsList.map((o, idx) => (
-                <div key={idx} className="bg-slate-50 border border-slate-200 p-3 rounded-2xl text-xs space-y-1">
-                  <p className="font-extrabold text-slate-900 inline-flex items-center gap-1">
-                    <Store className="w-3.5 h-3.5 text-slate-500" /> {o.name}
-                  </p>
-                  <p className="text-[10px] text-slate-500">{o.address || 'Alamat cabang resmi'}</p>
-                </div>
-              ))}
-            </div>
-
-            <button onClick={() => setShowPromoModal(false)} className="w-full bg-slate-900 text-white font-extrabold py-3 rounded-2xl text-xs">
-              Kembali
-            </button>
-          </div>
-        </div>
-      )}
+      <PromoVoucherModal
+        open={showPromoModal}
+        promos={availablePromos}
+        claimedId={claimedPromo?.id}
+        onClose={() => setShowPromoModal(false)}
+        onClaim={handleClaimPromo}
+        onApplyCode={handleApplyPromoCode}
+      />
 
       {/* MODAL INFORMASI CREDENTIAL ESTIMASI TOTAL */}
       {showEstimateInfoModal && (

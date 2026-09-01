@@ -8,6 +8,7 @@ export type CatalogPromo = {
   used_count: number;
   max_quota: number;
   is_active: boolean;
+  code?: string;
 };
 
 const asType = (raw: unknown): CatalogPromo['type'] => {
@@ -31,7 +32,8 @@ export const mapDbPromo = (row: Record<string, unknown>): CatalogPromo => {
     minTx: Number(row.min_transaction ?? row.minTx) || 0,
     used_count: Number(row.used_count) || 0,
     max_quota: Number(row.max_quota ?? row.maxQuota) || 0,
-    is_active: row.is_active !== false
+    is_active: row.is_active !== false,
+    code
   };
 };
 
@@ -44,8 +46,19 @@ export const mapSettingsPromo = (row: Record<string, unknown>, idx: number): Cat
   minTx: Number(row.minTx) || 0,
   used_count: Number(row.used_count) || 0,
   max_quota: Number(row.max_quota) || 0,
-  is_active: row.is_active !== false
+  is_active: row.is_active !== false,
+  code: String(row.code || row.id || row.title || '')
 });
+
+export const findPromoByCode = (promos: CatalogPromo[], raw: string) => {
+  const needle = String(raw || '').trim().toLowerCase();
+  if (!needle) return null;
+  return (
+    (promos || []).find((p) =>
+      [p.code, p.id, p.title].some((v) => String(v || '').trim().toLowerCase() === needle)
+    ) || null
+  );
+};
 
 export const promoIsClaimable = (promo: CatalogPromo, basket: number) => {
   if (!promo.is_active) return false;
