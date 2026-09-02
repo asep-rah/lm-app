@@ -2,9 +2,9 @@ import type { MetadataRoute } from 'next'
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'Briwash Laundry',
-    short_name: 'Briwash',
-    description: 'Aplikasi Pemesanan Pickup Laundry Briwash',
+    name: 'Laundrivery - Express Laundry Delivery',
+    short_name: 'Laundrivery',
+    description: 'Express Laundry Delivery — pesan jemput cucian dari outlet terdekat.',
     start_url: '/customer/dashboard',
     display: 'standalone',
     background_color: '#ffffff',

@@ -54,7 +54,7 @@ export default function InstallPWA() {
       {deferredPrompt && (
         <div className="bg-gradient-to-r from-blue-600 to-blue-700 text-white p-4 rounded-xl shadow-md flex items-center justify-between">
           <div>
-            <p className="font-bold text-sm">Install Aplikasi Briwash</p>
+            <p className="font-bold text-sm">Install Aplikasi Laundrivery</p>
             <p className="text-xs text-blue-100">Simpan ke Layar Utama untuk akses lebih mudah.</p>
           </div>
           <button

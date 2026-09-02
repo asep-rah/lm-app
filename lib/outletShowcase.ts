@@ -20,14 +20,19 @@ export type ShowcasePromo = {
   id: string;
   title?: string | null;
   banner_url?: string | null;
+  image_url?: string | null;
   description?: string | null;
   outlet_id?: string | null;
+  target_outlet_ids?: string[] | string | null;
   is_active?: boolean | null;
+  promo_code?: string | null;
   created_at?: string | null;
 };
 
+export const ALL_OUTLET_TARGET = 'ALL';
+
 export type BannerSlide =
-  | { kind: 'promo'; id: string; title: string; subtitle: string; image: string; outletId?: string }
+  | { kind: 'promo'; id: string; title: string; subtitle: string; image: string; outletId?: string; promoCode?: string; promoId?: string }
   | { kind: 'coming_soon'; id: string; title: string; subtitle: string; image: string; outletId: string };
 
 export const haversineKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
@@ -105,6 +110,50 @@ export const googleRatingBadge = (rating: number, reviewCount: number) => {
   return `⭐ ${stars} • ${formatGoogleReviewCount(reviewCount)} Ulasan Google`;
 };
 
+export const MAX_NEARBY_RADIUS_KM = 25;
+
+export const normalizeCityName = (raw?: string | null) =>
+  String(raw || '')
+    .toLowerCase()
+    .replace(/^(kota|kabupaten|kab\.?|kecamatan|kec\.?)\s+/gi, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+export const citiesMatch = (a?: string | null, b?: string | null) => {
+  const x = normalizeCityName(a);
+  const y = normalizeCityName(b);
+  if (!x || !y) return false;
+  return x === y || x.includes(y) || y.includes(x);
+};
+
+export const outletCityOf = (outlet: ShowcaseOutlet | null | undefined) => {
+  const explicit = String(outlet?.city || '').trim();
+  if (explicit) return explicit;
+  const addr = String(outlet?.address_detail || '');
+  const parts = addr
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return parts[parts.length - 1] || '';
+};
+
+export const uniqueOutletCities = (outlets: ShowcaseOutlet[]) => {
+  const map = new Map<string, string>();
+  (outlets || []).forEach((o) => {
+    const label = outletCityOf(o);
+    const key = normalizeCityName(label);
+    if (key && !map.has(key)) map.set(key, label);
+  });
+  return [...map.values()].sort((a, b) => a.localeCompare(b, 'id'));
+};
+
+export const displayCityName = (raw?: string | null) => {
+  const t = String(raw || '').trim();
+  if (!t) return '';
+  return t.replace(/\b\w/g, (c) => c.toUpperCase());
+};
+
 export const distanceLabelKm = (km: number | null) => {
   if (km == null || !Number.isFinite(km)) return '';
   return `${km.toFixed(1)} km dari lokasi Anda`;
@@ -123,11 +172,26 @@ export const outletDistanceKm = (
 
 export const nearbyActiveOutlets = (
   outlets: ShowcaseOutlet[],
-  coords: { lat: number; lon: number } | null
+  coords: { lat: number; lon: number } | null,
+  opts?: { city?: string | null; maxKm?: number; ignoreCity?: boolean }
 ) => {
+  const maxKm = opts?.maxKm ?? MAX_NEARBY_RADIUS_KM;
+  const city = String(opts?.city || '').trim();
+  const ignoreCity = Boolean(opts?.ignoreCity) || !city;
   return (outlets || [])
     .filter((o) => !isComingSoonOutlet(o))
+    .filter((o) => {
+      if (ignoreCity || !city) return true;
+      const oc = outletCityOf(o);
+      if (!oc) return true;
+      return citiesMatch(oc, city);
+    })
     .map((o) => ({ outlet: o, km: outletDistanceKm(o, coords) }))
+    .filter(({ km }) => {
+      if (!coords) return true;
+      if (km == null) return false;
+      return km <= maxKm;
+    })
     .sort((a, b) => {
       if (a.km == null && b.km == null) return String(a.outlet.name || '').localeCompare(String(b.outlet.name || ''));
       if (a.km == null) return 1;
@@ -142,15 +206,99 @@ export const comingSoonOutlets = (outlets: ShowcaseOutlet[]) =>
 export const activePromosOf = (rows: ShowcasePromo[]) =>
   (rows || []).filter((p) => p.is_active !== false);
 
-export const bannerSlidesOf = (promos: ShowcasePromo[], outlets: ShowcaseOutlet[]): BannerSlide[] => {
-  const promoSlides: BannerSlide[] = activePromosOf(promos).map((p) => ({
-    kind: 'promo',
-    id: `promo-${p.id}`,
-    title: String(p.title || 'Promo Laundrivery'),
-    subtitle: String(p.description || '').trim(),
-    image: String(p.banner_url || '').trim(),
-    outletId: p.outlet_id || undefined
-  }));
+const splitPgTextArray = (raw: string) =>
+  raw
+    .replace(/^\{/, '')
+    .replace(/\}$/, '')
+    .split(',')
+    .map((part) => part.trim().replace(/^"(.*)"$/, '$1'))
+    .filter(Boolean);
+
+/** Normalize `target_outlet_ids` / legacy `outlet_id` into a string array. Empty → `['ALL']`. */
+export const parseTargetOutletIds = (raw: unknown, fallbackOutletId?: string | null): string[] => {
+  if (Array.isArray(raw) && raw.length) {
+    const ids = raw.map((x) => String(x || '').trim()).filter(Boolean);
+    if (ids.length) return ids;
+  }
+  if (typeof raw === 'string' && raw.trim()) {
+    const text = raw.trim();
+    if (text.startsWith('{') && text.endsWith('}')) {
+      const ids = splitPgTextArray(text);
+      if (ids.length) return ids;
+    }
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) return parseTargetOutletIds(parsed, fallbackOutletId);
+    } catch {
+      if (text) return [text];
+    }
+  }
+  if (fallbackOutletId) return [String(fallbackOutletId)];
+  return [ALL_OUTLET_TARGET];
+};
+
+export const isAllOutletTarget = (ids: string[]) =>
+  !ids.length || ids.some((id) => String(id).toUpperCase() === ALL_OUTLET_TARGET);
+
+/** Persist form checkboxes as `['ALL']` or a unique list of outlet UUIDs. */
+export const normalizeOutletIds = (ids: string[]): string[] => {
+  const cleaned = [...new Set((ids || []).map((id) => String(id || '').trim()).filter(Boolean))];
+  if (isAllOutletTarget(cleaned)) return [ALL_OUTLET_TARGET];
+  return cleaned.filter((id) => id.toUpperCase() !== ALL_OUTLET_TARGET);
+};
+
+export const promoVisibleForOutlet = (promo: ShowcasePromo, activeOutletId?: string | null) => {
+  const ids = parseTargetOutletIds(promo.target_outlet_ids, promo.outlet_id);
+  if (isAllOutletTarget(ids)) return true;
+  const active = String(activeOutletId || '').trim();
+  if (!active) return false;
+  return ids.includes(active);
+};
+
+/** Local high-quality laundry promo image when the owner has not uploaded a banner. */
+export const DEFAULT_PROMO_BANNER_IMAGE = '/images/default-promo-banner.png';
+
+export const DEFAULT_PROMO_SLIDE: BannerSlide = {
+  kind: 'promo',
+  id: 'default-promo',
+  title: 'Promo Laundrivery',
+  subtitle: 'Ketuk banner untuk melihat dan klaim promo.',
+  image: DEFAULT_PROMO_BANNER_IMAGE
+};
+
+const promoBannerUrlOf = (p: ShowcasePromo) =>
+  String(p.banner_url || p.image_url || '').trim();
+
+/** Keep the carousel visible: use the brand placeholder when no custom banner images exist. */
+export const withDefaultPromoBanner = (slides: BannerSlide[]): BannerSlide[] => {
+  const list = slides || [];
+  const withImages = list.filter((s) => String(s.image || '').trim());
+  if (withImages.length) return withImages;
+  const firstPromo = list.find((s) => s.kind === 'promo');
+  return [
+    firstPromo
+      ? { ...firstPromo, image: DEFAULT_PROMO_BANNER_IMAGE }
+      : { ...DEFAULT_PROMO_SLIDE }
+  ];
+};
+
+export const bannerSlidesOf = (
+  promos: ShowcasePromo[],
+  outlets: ShowcaseOutlet[],
+  activeOutletId?: string | null
+): BannerSlide[] => {
+  const promoSlides: BannerSlide[] = activePromosOf(promos)
+    .filter((p) => promoVisibleForOutlet(p, activeOutletId))
+    .map((p) => ({
+      kind: 'promo',
+      id: `promo-${p.id}`,
+      title: String(p.title || 'Promo Laundrivery'),
+      subtitle: String(p.description || '').trim(),
+      image: promoBannerUrlOf(p),
+      outletId: p.outlet_id || undefined,
+      promoCode: String(p.promo_code || '').trim() || undefined,
+      promoId: String(p.id)
+    }));
   const soonSlides: BannerSlide[] = comingSoonOutlets(outlets).map((o) => ({
     kind: 'coming_soon',
     id: `soon-${o.id}`,
@@ -159,7 +307,7 @@ export const bannerSlidesOf = (promos: ShowcasePromo[], outlets: ShowcaseOutlet[
     image: parseOutletImages(o.images)[0] || '',
     outletId: String(o.id)
   }));
-  return [...promoSlides, ...soonSlides];
+  return withDefaultPromoBanner([...promoSlides, ...soonSlides]);
 };
 
 export async function fetchOutletGoogleRating(outlet: ShowcaseOutlet): Promise<{

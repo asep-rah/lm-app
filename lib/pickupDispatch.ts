@@ -28,6 +28,13 @@ export async function findPickupIdByTransaction(txId: string): Promise<string | 
 export async function insertPickupOrder(
   payload: Record<string, unknown>
 ): Promise<{ data: { id: string }[] | null; error: { message: string } | null }> {
+  const omit = (row: Record<string, unknown>, keys: string[]) => {
+    const next = { ...row };
+    keys.forEach((k) => {
+      delete next[k];
+    });
+    return next;
+  };
   const core = {
     outlet_id: payload.outlet_id || null,
     customer_name: payload.customer_name || 'Pelanggan',
@@ -47,13 +54,44 @@ export async function insertPickupOrder(
     notes: core.notes,
     status: core.status
   };
+  const scheduled = {
+    pickup_date: payload.pickup_date || null,
+    pickup_time: payload.pickup_time || null,
+    scheduled_at: payload.scheduled_at || payload.pickup_at || null
+  };
 
   return insertWithFallback<{ id: string }>(
     'pickup_orders',
     [
       payload,
-      { ...payload, items: undefined, has_fading: undefined, has_valuables: undefined, wash_process: undefined, bag_count: undefined },
-      { ...core, phone_number: core.customer_phone, estimated_weight: payload.estimated_weight, delivery_fee: payload.delivery_fee, duration: payload.duration, order_number: payload.order_number },
+      omit(payload, ['created_at', 'address_id', 'driver_id', 'accepted_at', 'courier_type']),
+      omit(payload, [
+        'created_at',
+        'address_id',
+        'driver_id',
+        'accepted_at',
+        'courier_type',
+        'scheduled_at',
+        'pickup_at',
+        'items',
+        'has_fading',
+        'has_valuables',
+        'wash_process',
+        'bag_count'
+      ]),
+      {
+        ...core,
+        phone_number: core.customer_phone,
+        estimated_weight: payload.estimated_weight,
+        delivery_fee: payload.delivery_fee,
+        duration: payload.duration,
+        order_number: payload.order_number,
+        ...scheduled
+      },
+      { ...core, pickup_date: scheduled.pickup_date, pickup_time: scheduled.pickup_time, status: payload.status },
+      { ...core, pickup_date: scheduled.pickup_date, status: payload.status },
+      { ...core, status: payload.status },
+      { ...core, pickup_date: scheduled.pickup_date, pickup_time: scheduled.pickup_time, status: 'Menunggu Kurir' },
       core,
       { ...core, phone_number: core.customer_phone, transaction_id: undefined },
       coreNoTx

@@ -7,11 +7,18 @@ export const DEPOSIT_PACKAGES: {
   label: string;
   pay: number;
   credit: number;
+  bonus: number;
 }[] = [
-  { key: 'Silver', label: 'Paket Silver', pay: 300_000, credit: 320_000 },
-  { key: 'Gold', label: 'Paket Gold', pay: 500_000, credit: 550_000 },
-  { key: 'Platinum', label: 'Paket Platinum', pay: 900_000, credit: 1_000_000 }
+  { key: 'Silver', label: 'Paket Silver', pay: 300_000, credit: 320_000, bonus: 20_000 },
+  { key: 'Gold', label: 'Paket Gold', pay: 500_000, credit: 550_000, bonus: 50_000 },
+  { key: 'Platinum', label: 'Paket Platinum', pay: 900_000, credit: 1_000_000, bonus: 100_000 }
 ];
+
+export const depositBonusOf = (pkg: { pay?: number; credit?: number; bonus?: number } | null | undefined) => {
+  const explicit = Number(pkg?.bonus);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  return Math.max(0, Number(pkg?.credit || 0) - Number(pkg?.pay || 0));
+};
 
 export const depositPackageOf = (name: any) => {
   const raw = String(name || '').toLowerCase();
@@ -155,7 +162,7 @@ export async function insertPendingDepositTopup(
     payment_method?: string;
   }
 ) {
-  const bonus = Math.max(0, Number(row.balance_added || 0) - Number(row.amount || 0));
+  const bonus = depositBonusOf({ pay: row.amount, credit: row.balance_added });
   return insertAttempts(db, 'deposit_topups', [
     {
       customer_phone: row.customer_phone,

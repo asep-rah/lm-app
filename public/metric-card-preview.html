@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MetricCard — Design Preview</title>
+  <style>
+    :root {
+      --slate-50: #f8fafc;
+      --slate-200: #e2e8f0;
+      --slate-400: #94a3b8;
+      --slate-900: #0f172a;
+      --sky-500: #0ea5e9;
+      --emerald-50: #ecfdf5;
+      --emerald-500: #10b981;
+      --emerald-700: #047857;
+      --amber-500: #f59e0b;
+      --rose-50: #fff1f2;
+      --rose-500: #f43f5e;
+      --rose-700: #be123c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+      background: var(--slate-50);
+      color: var(--slate-900);
+      padding: 32px 20px 48px;
+    }
+    h1 { font-size: 18px; font-weight: 800; margin: 0 0 4px; }
+    .sub { font-size: 12px; color: var(--slate-400); margin: 0 0 24px; }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+      max-width: 720px;
+    }
+    @media (min-width: 640px) {
+      .grid { grid-template-columns: 1fr 1fr; }
+    }
+    .card {
+      background: #fff;
+      border: 1px solid rgba(226, 232, 240, 0.8);
+      border-radius: 16px;
+      padding: 20px;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+    .card:hover { box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08); }
+    .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--slate-400);
+      margin: 0;
+    }
+    .bar { height: 6px; width: 32px; border-radius: 999px; }
+    .value {
+      margin: 8px 0 0;
+      font-size: 28px;
+      font-weight: 900;
+      letter-spacing: -0.03em;
+    }
+    .meta { margin-top: 8px; display: flex; align-items: center; gap: 8px; }
+    .trend {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 6px;
+    }
+    .trend.up { background: var(--emerald-50); color: var(--emerald-700); }
+    .trend.down { background: var(--rose-50); color: var(--rose-700); }
+    .hint { font-size: 11px; color: var(--slate-400); margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <h1>MetricCard</h1>
+  <p class="sub">Owner dashboard · components/ui/MetricCard.tsx</p>
+  <div class="grid">
+    <article class="card">
+      <div class="row">
+        <p class="label">Total Omset (Gross Revenue)</p>
+        <span class="bar" style="background: var(--sky-500)"></span>
+      </div>
+      <p class="value">Rp 128.450.000</p>
+      <div class="meta">
+        <span class="trend up">▲ 12%</span>
+        <p class="hint">Off 84.200.000 · On 44.250.000</p>
+      </div>
+    </article>
+    <article class="card">
+      <div class="row">
+        <p class="label">Total Net Profit</p>
+        <span class="bar" style="background: var(--emerald-500)"></span>
+      </div>
+      <p class="value">Rp 41.320.000</p>
+      <div class="meta">
+        <span class="trend up">▲ 8%</span>
+        <p class="hint">OPEX Rp 22.100.000</p>
+      </div>
+    </article>
+    <article class="card">
+      <div class="row">
+        <p class="label">Total Net Profit</p>
+        <span class="bar" style="background: var(--rose-500)"></span>
+      </div>
+      <p class="value">Rp −3.250.000</p>
+      <div class="meta">
+        <span class="trend down">▼ 15%</span>
+        <p class="hint">OPEX Rp 18.400.000</p>
+      </div>
+    </article>
+    <article class="card">
+      <div class="row">
+        <p class="label">Outstanding</p>
+        <span class="bar" style="background: var(--amber-500)"></span>
+      </div>
+      <p class="value">Rp 9.750.000</p>
+      <div class="meta">
+        <p class="hint">Piutang belum tertagih</p>
+      </div>
+    </article>
+  </div>
+</body>
+</html>

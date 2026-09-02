@@ -52,28 +52,65 @@ export const isOrderFinished = (order: any) => {
 export const withScheduleNote = (notes: string, date: string, time: string) => {
   const line = `Jadwal jemput: ${date} ${time}`;
   const cleaned = String(notes || '')
-    .replace(/\s*\|\s*Jadwal jemput:\s*\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2})?)?/gi, '')
+    .replace(/\s*\|\s*Jadwal jemput:\s*[^\|]+/gi, '')
     .trim();
   return cleaned ? `${cleaned} | ${line}` : line;
 };
 
+/** Terima `YYYY-MM-DD` / `03/09/2026` dan `09:00` / `09.00` → ISO 8601 + pecahan date/time Postgres. */
+export const parsePickupSchedule = (dateRaw?: string | null, timeRaw?: string | null) => {
+  const date = normalizeScheduleDate(dateRaw);
+  const time = normalizeScheduleTime(timeRaw);
+  if (!date || !time) return null;
+  const at = new Date(`${date}T${time}`);
+  if (Number.isNaN(at.getTime())) return null;
+  return {
+    date,
+    time,
+    iso: at.toISOString(),
+    at
+  };
+};
+
+const normalizeScheduleDate = (raw?: string | null) => {
+  const s = String(raw || '').trim();
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const dmy = s.match(/^(\d{1,2})[/.+-](\d{1,2})[/.+-](\d{4})$/);
+  if (dmy) {
+    const dd = dmy[1].padStart(2, '0');
+    const mm = dmy[2].padStart(2, '0');
+    return `${dmy[3]}-${mm}-${dd}`;
+  }
+  return '';
+};
+
+const normalizeScheduleTime = (raw?: string | null) => {
+  const s = String(raw || '')
+    .trim()
+    .replace('.', ':')
+    .replace('：', ':');
+  const m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (!m) return '';
+  const hh = String(Math.min(23, Number(m[1]) || 0)).padStart(2, '0');
+  const mm = String(Math.min(59, Number(m[2]) || 0)).padStart(2, '0');
+  const ss = String(Math.min(59, Number(m[3]) || 0)).padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
+};
+
 export const scheduleAtOf = (order: any): Date | null => {
-  const raw =
-    order?.pickup_at ||
-    order?.scheduled_at ||
-    order?.scheduled_for ||
-    (order?.pickup_date
-      ? `${String(order.pickup_date).slice(0, 10)}T${String(order.pickup_time || '23:59:00').slice(0, 8)}`
-      : '');
+  const parsedCols = parsePickupSchedule(order?.pickup_date, order?.pickup_time || (order?.pickup_date ? '23:59' : ''));
+  if (parsedCols) return parsedCols.at;
+  const raw = order?.pickup_at || order?.scheduled_at || order?.scheduled_for || '';
   if (raw) {
     const d = new Date(raw);
     if (!Number.isNaN(d.getTime())) return d;
   }
   const notes = String(order?.notes || '');
-  const m = notes.match(/Jadwal jemput:\s*(\d{4}-\d{2}-\d{2})(?:[T\s](\d{2}:\d{2}(?::\d{2})?))?/i);
+  const m = notes.match(/Jadwal jemput:\s*([^\s]+)(?:\s+(\d{1,2}[:.]\d{2}(?::\d{2})?))?/i);
   if (m) {
-    const d = new Date(`${m[1]}T${(m[2] || '23:59').slice(0, 8)}`);
-    if (!Number.isNaN(d.getTime())) return d;
+    const parsed = parsePickupSchedule(m[1], m[2] || '23:59');
+    if (parsed) return parsed.at;
   }
   return null;
 };

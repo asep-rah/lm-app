@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 import StageTimeline from '@/components/StageTimeline';
@@ -11,7 +11,6 @@ import { createPickupRoleTasks, insertPickupOrder, requestDriverDelivery } from 
 import { displayStatusLabel, stageKeyOf } from '@/lib/stageTimeline';
 import { laundryFallbackReply } from '@/lib/laundryFaq';
 import PhotoLightbox from '@/components/PhotoLightbox';
-import DraggableChatFab from '@/components/DraggableChatFab';
 import ChatAttachment, { visibleChatText } from '@/components/ChatAttachment';
 import ChatInvoiceCard from '@/components/ChatInvoiceCard';
 import ThirdPartyDeliveryCard from '@/components/ThirdPartyDeliveryCard';
@@ -24,7 +23,7 @@ import FileProofInput from '@/components/FileProofInput';
 import { fileToCompressedDataUrl, uploadChatAttachment, uploadProofFile } from '@/lib/uploadProof';
 import { displayItemAmount, kiloanLineTotal } from '@/lib/kiloanPrice';
 import { formatEstSelesai, formatTrxId } from '@/lib/posQueue';
-import { DEPOSIT_PACKAGES, depositPackageShort } from '@/lib/depositTopup';
+import { DEPOSIT_PACKAGES, depositBonusOf, depositPackageShort } from '@/lib/depositTopup';
 import { simulateMayarAutoPay } from '@/lib/mayar';
 import {
   complaintStepOf,
@@ -44,12 +43,34 @@ import {
   maybeAutoConfirmOrder,
   readLocalFlag
 } from '@/lib/orderFeedback';
-import { IconBadge, SlaBadge, StarRating, StatusPill, StepperBtn, TRACKER_STAGES } from '@/components/customer/ui';
+import { IconBadge, SlaBadge, StarRating, StatusPill, StepperBtn } from '@/components/customer/ui';
 import PromoBannerCarousel from '@/components/customer/PromoBannerCarousel';
 import NearbyOutlets from '@/components/customer/NearbyOutlets';
 import PromoVoucherModal from '@/components/customer/PromoVoucherModal';
+import PromoBannerDetailModal from '@/components/customer/PromoBannerDetailModal';
 import OutletProfileDrawer from '@/components/customer/OutletProfileDrawer';
-import { bannerSlidesOf, nearbyActiveOutlets, type ShowcasePromo } from '@/lib/outletShowcase';
+import BottomNavbar from '@/components/customer/BottomNavbar';
+import AddressManager from '@/components/customer/AddressManager';
+import CustomerHeader from '@/components/customer/CustomerHeader';
+import {
+  MAX_NEARBY_RADIUS_KM,
+  bannerSlidesOf,
+  citiesMatch,
+  nearbyActiveOutlets,
+  uniqueOutletCities,
+  type BannerSlide,
+  type ShowcasePromo
+} from '@/lib/outletShowcase';
+import {
+  loadCustomerAddresses,
+  primaryAddressOf,
+  removeCustomerAddress,
+  setPrimaryCustomerAddress,
+  upsertCustomerAddress,
+  type SavedAddress
+} from '@/lib/customerAddresses';
+import { reverseGeocodeCity } from '@/lib/reverseGeocode';
+import { matchOutletFromQuery, persistCustomerOutlet, readStoredCustomerOutlet } from '@/lib/outletUuid';
 import ActivitySegmentTabs from '@/components/customer/ActivitySegmentTabs';
 import {
   formatScheduleLabel,
@@ -58,6 +79,7 @@ import {
   isScheduledOrder,
   parseActivityTab,
   scheduleAtOf,
+  parsePickupSchedule,
   withScheduleNote,
   type ActivitySubTab
 } from '@/lib/customerActivity';
@@ -75,20 +97,16 @@ import {
   Gift,
   Headphones,
   History,
-  Home,
   Image as ImageIcon,
   Info,
   ListTodo,
   MapPin,
-  MessageSquare,
   Package,
   Paperclip,
   Pencil,
   Phone,
-  Save,
   Search,
   Send,
-  Sparkles,
   Star,
   Truck,
   User,
@@ -202,6 +220,22 @@ const calculateDistanceKm = (lat1: number, lon1: number, lat2: number, lon2: num
 
 const paymentMethod: any = "CASH";
 
+const ensureOutletInList = (list: any[], all: any[], id: string) => {
+  if (!id) return list;
+  if ((list || []).some((o) => String(o.id) === String(id))) return list;
+  const row = (all || []).find((o) => String(o.id) === String(id));
+  return row ? [row, ...(list || [])] : list;
+};
+
+const readOutletQueryParam = () => {
+  if (typeof window === 'undefined') return '';
+  try {
+    return String(new URLSearchParams(window.location.search).get('outlet') || '').trim();
+  } catch {
+    return '';
+  }
+};
+
 function CustomerDashboardPage() {
   const router = useRouter();
   const pathname = usePathname();
@@ -209,10 +243,14 @@ function CustomerDashboardPage() {
   const [detailOrder, setDetailOrder] = useState<any>(null);
   const [detailWorkLogs, setDetailWorkLogs] = useState<any[]>([]);
   const pathIsActivity =
-    (pathname || '').includes('/customer/activity') || (pathname || '').includes('/customer/history');
+    (pathname || '').includes('/customer/activity') ||
+    (pathname || '').includes('/customer/history') ||
+    (pathname || '').includes('/aktivitas');
+  const pathIsProfile = (pathname || '').includes('/profil');
+  const pathIsOrder = (pathname || '') === '/order' || (pathname || '').startsWith('/order?');
   const urlActivityTab = parseActivityTab(searchParams.get('tab')) || (pathIsActivity ? 'berlangsung' : null);
-  const [activeTab, setActiveTab] = useState<'home' | 'order' | 'deposit' | 'activity' | 'profile'>(
-    pathIsActivity || urlActivityTab ? 'activity' : 'home'
+  const [activeTab, setActiveTab] = useState<'home' | 'order' | 'deposit' | 'activity' | 'profile' | 'chat'>(
+    pathIsActivity || urlActivityTab ? 'activity' : pathIsProfile ? 'profile' : pathIsOrder ? 'order' : 'home'
   );
   const [activitySub, setActivitySub] = useState<ActivitySubTab>(urlActivityTab || 'berlangsung');
   const [pickupLater, setPickupLater] = useState(false);
@@ -232,6 +270,22 @@ function CustomerDashboardPage() {
   const [outletsList, setOutletsList] = useState<any[]>([]);
   const [filteredOutlets, setFilteredOutlets] = useState<any[]>([]);
   const [selectedOutlet, setSelectedOutlet] = useState('');
+  const qrOutletLockRef = useRef(false);
+  const outletQuery = String(searchParams.get('outlet') || '').trim();
+
+  const chooseOutlet = (id: string, opts?: { fromQr?: boolean; clearQuery?: boolean }) => {
+    const next = String(id || '').trim();
+    if (!next) return;
+    setSelectedOutlet(next);
+    persistCustomerOutlet(next);
+    if (opts?.fromQr) qrOutletLockRef.current = true;
+    if (opts?.clearQuery && searchParams.get('outlet')) {
+      const nextParams = new URLSearchParams(searchParams.toString());
+      nextParams.delete('outlet');
+      const q = nextParams.toString();
+      router.replace(q ? `${pathname}?${q}` : pathname || '/customer/dashboard', { scroll: false });
+    }
+  };
 
   const [dynamicServices, setDynamicServices] = useState<any[]>([]);
   const [outletOverrides, setOutletOverrides] = useState<any>({});
@@ -239,8 +293,13 @@ function CustomerDashboardPage() {
 
   const [customerName, setCustomerName] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
-  const [isEditingAddress, setIsEditingAddress] = useState(false);
+  const [savedAddresses, setSavedAddresses] = useState<SavedAddress[]>([]);
+  const [addressBusy, setAddressBusy] = useState(false);
+  const [selectedBanner, setSelectedBanner] = useState<BannerSlide | null>(null);
   const [userCoords, setUserCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [gpsCity, setGpsCity] = useState('');
+  const [cityOverride, setCityOverride] = useState<string | null>(null);
+  const [showAllCities, setShowAllCities] = useState(false);
   const [showcasePromos, setShowcasePromos] = useState<ShowcasePromo[]>([]);
   const [profileOutlet, setProfileOutlet] = useState<any | null>(null);
   const [locatingGps, setLocatingGps] = useState(false);
@@ -302,7 +361,7 @@ function CustomerDashboardPage() {
         packageLabel: pkg.label,
         amount: pkg.pay,
         balanceAdded: pkg.credit,
-        bonus: pkg.credit - pkg.pay,
+        bonus: depositBonusOf(pkg),
         openedAt: Date.now()
       });
     } catch (err: any) {
@@ -317,7 +376,7 @@ function CustomerDashboardPage() {
   const [hasValuables, setHasValuables] = useState('');
   const [thirdPartyVendor, setThirdPartyVendor] = useState('');
 
-  const [courierType, setCourierType] = useState<'' | 'INTERNAL' | 'THIRD_PARTY'>('');
+  const [courierType, setCourierType] = useState<'INTERNAL' | 'THIRD_PARTY'>('INTERNAL');
   const [queueCount, setQueueCount] = useState<number>(0);
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [inputChat, setInputChat] = useState<string>('');
@@ -335,7 +394,6 @@ function CustomerDashboardPage() {
     fetchQueue();
   }, []);
   const [activeOrders, setActiveOrders] = useState<any[]>([]);
-  const [selectedOrder, setSelectedOrder] = useState<any>(null);
   const [completedOrders, setCompletedOrders] = useState<any[]>([]);
   const [depositLogs, setDepositLogs] = useState<any[]>([]);
   const [readyPopup, setReadyPopup] = useState<any>(null);
@@ -362,19 +420,19 @@ function CustomerDashboardPage() {
   ]);
 
   useEffect(() => {
-    if (!activeChatOrderId) return;
+    if (activeTab !== 'chat' && !activeChatOrderId) return;
     const el = chatScrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [activeChatOrderId, activeSupportTab, chatMessages, aiMessages]);
+  }, [activeTab, activeChatOrderId, activeSupportTab, chatMessages, aiMessages]);
 
   useEffect(() => {
-    if (!activeChatOrderId && !complaintTicketOpen) return;
+    if (!complaintTicketOpen) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
       document.body.style.overflow = prev;
     };
-  }, [activeChatOrderId, complaintTicketOpen]);
+  }, [complaintTicketOpen]);
 
   useEffect(() => {
     const path = pathname || '';
@@ -384,9 +442,21 @@ function CustomerDashboardPage() {
       setActivitySub('riwayat');
       return;
     }
-    if (path.includes('/customer/activity')) {
+    if (path.includes('/customer/activity') || path.includes('/aktivitas')) {
       setActiveTab('activity');
       if (parsed) setActivitySub(parsed);
+      return;
+    }
+    if (path.includes('/profil')) {
+      setActiveTab('profile');
+      return;
+    }
+    if (path === '/order' || path.startsWith('/order?')) {
+      setActiveTab('order');
+      return;
+    }
+    if (path.includes('/beranda')) {
+      setActiveTab('home');
       return;
     }
     if (parsed) {
@@ -399,8 +469,8 @@ function CustomerDashboardPage() {
     setActivitySub(sub);
     setActiveTab('activity');
     const path = pathname || '';
-    if (path.includes('/customer/activity') || path.includes('/customer/history')) {
-      router.replace(`/customer/activity?tab=${sub}`, { scroll: false });
+    if (path.includes('/customer/activity') || path.includes('/customer/history') || path.includes('/aktivitas')) {
+      router.replace(`${path.split('?')[0]}?tab=${sub}`, { scroll: false });
     } else {
       router.replace(`/customer/dashboard?tab=${sub}`, { scroll: false });
     }
@@ -409,13 +479,21 @@ function CustomerDashboardPage() {
   const goHome = () => {
     setActiveTab('home');
     const path = pathname || '';
-    const hasActivityUrl =
+    const hasSpecialUrl =
       path.includes('/customer/activity') ||
       path.includes('/customer/history') ||
+      path.includes('/aktivitas') ||
+      path.includes('/profil') ||
+      path === '/order' ||
       !!parseActivityTab(searchParams.get('tab'));
-    if (hasActivityUrl) {
+    if (hasSpecialUrl) {
       router.replace('/customer/dashboard', { scroll: false });
     }
+  };
+
+  const openCustomerChat = (orderId: string = 'GENERAL_CS') => {
+    setActiveChatOrderId(orderId || 'GENERAL_CS');
+    setActiveTab('chat');
   };
 
   useEffect(() => {
@@ -586,11 +664,11 @@ function CustomerDashboardPage() {
           kind: 'qris',
           onClick: () => {
             setActiveSupportTab('cs');
-            setActiveChatOrderId('GENERAL_CS');
+            openCustomerChat('GENERAL_CS');
           }
         });
         setActiveSupportTab('cs');
-        setActiveChatOrderId('GENERAL_CS');
+        openCustomerChat('GENERAL_CS');
       }
       setChatMessages((prev) => {
         if (prev.some((m) => m.id === newMsg.id)) return prev;
@@ -878,7 +956,7 @@ function CustomerDashboardPage() {
   }, [detailOrder?.id]);
 
   const loadChats = async (orderId: string | null) => {
-    setActiveChatOrderId(orderId || 'GENERAL_CS');
+    openCustomerChat(orderId || 'GENERAL_CS');
     if (customerPhone) await loadCustomerChats(customerPhone);
   };
 
@@ -898,8 +976,22 @@ function CustomerDashboardPage() {
         const visible = open.length ? open : dbOutlets;
         setOutletsList(dbOutlets);
         setFilteredOutlets(visible);
-        const pick = nearestOpenOutlet(visible, null, pendingByOutlet, calculateDistanceKm);
-        if (pick) setSelectedOutlet(pick.id);
+        const qrRaw = readOutletQueryParam();
+        const fromQr = matchOutletFromQuery(dbOutlets, qrRaw);
+        const fromStore = matchOutletFromQuery(dbOutlets, readStoredCustomerOutlet());
+        if (fromQr) {
+          qrOutletLockRef.current = true;
+          persistCustomerOutlet(fromQr);
+          setSelectedOutlet(fromQr);
+          setFilteredOutlets(ensureOutletInList(visible, dbOutlets, fromQr));
+        } else if (fromStore) {
+          persistCustomerOutlet(fromStore);
+          setSelectedOutlet(fromStore);
+          setFilteredOutlets(ensureOutletInList(visible, dbOutlets, fromStore));
+        } else {
+          const pick = nearestOpenOutlet(visible, null, pendingByOutlet, calculateDistanceKm);
+          if (pick) setSelectedOutlet(pick.id);
+        }
       }
 
       const { data: dbSettings } = await supabase.from('app_settings').select('*').eq('id', 1).single();
@@ -930,6 +1022,11 @@ function CustomerDashboardPage() {
       if (savedPhone) {
         setCustomerPhone(savedPhone);
         fetchCustomerProfile(savedPhone);
+        loadCustomerAddresses(savedPhone).then((rows) => {
+          setSavedAddresses(rows);
+          const primary = primaryAddressOf(rows);
+          if (primary) setCustomerAddress(primary);
+        });
       }
 
       if (navigator.geolocation) {
@@ -944,19 +1041,43 @@ function CustomerDashboardPage() {
               if (o.is_overcapacity) return false;
               if (!o.latitude || !o.longitude) return true;
               const dist = calculateDistanceKm(lat, lon, Number(o.latitude), Number(o.longitude));
-              return dist <= 30;
+              return dist <= MAX_NEARBY_RADIUS_KM;
             });
             const pool = nearby.length ? nearby : dbOutlets.filter((o: any) => !o.is_overcapacity && !o.is_coming_soon);
             const visible = pool.length ? pool : dbOutlets;
-            setFilteredOutlets(visible);
-            const pick = nearestOpenOutlet(visible, { lat, lon }, {}, calculateDistanceKm);
-            if (pick) setSelectedOutlet(pick.id);
+            const qrOrStored =
+              matchOutletFromQuery(dbOutlets, readOutletQueryParam()) ||
+              matchOutletFromQuery(dbOutlets, readStoredCustomerOutlet());
+            if (qrOrStored || qrOutletLockRef.current) {
+              const lockedId = qrOrStored || String(selectedOutlet || '').trim();
+              if (lockedId) {
+                setFilteredOutlets(ensureOutletInList(visible, dbOutlets, lockedId));
+                setSelectedOutlet(lockedId);
+                persistCustomerOutlet(lockedId);
+              } else {
+                setFilteredOutlets(visible);
+              }
+            } else {
+              setFilteredOutlets(visible);
+              const pick = nearestOpenOutlet(visible, { lat, lon }, {}, calculateDistanceKm);
+              if (pick) setSelectedOutlet(pick.id);
+            }
           }
         }, () => {});
       }
     }
     initPWA();
   }, []);
+
+  useEffect(() => {
+    if (!outletQuery || !outletsList.length) return;
+    const id = matchOutletFromQuery(outletsList, outletQuery);
+    if (!id) return;
+    qrOutletLockRef.current = true;
+    persistCustomerOutlet(id);
+    setSelectedOutlet(id);
+    setFilteredOutlets((prev) => ensureOutletInList(prev, outletsList, id));
+  }, [outletQuery, outletsList]);
 
   useEffect(() => {
     if (!customerAddress || customerAddress.trim().length < 5) {
@@ -983,6 +1104,35 @@ function CustomerDashboardPage() {
       setDeliveryFee(18000);
     }
   }, [customerAddress, selectedOutlet, userCoords, outletsList]);
+
+  useEffect(() => {
+    if (!userCoords) return;
+    let cancelled = false;
+    reverseGeocodeCity(userCoords.lat, userCoords.lon).then((city) => {
+      if (!cancelled && city) setGpsCity(city);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [userCoords]);
+
+  const userCity = cityOverride || gpsCity;
+  const nearbyCities = useMemo(() => {
+    const fromOutlets = uniqueOutletCities(outletsList);
+    if (gpsCity && !fromOutlets.some((c) => citiesMatch(c, gpsCity))) {
+      return [gpsCity, ...fromOutlets];
+    }
+    return fromOutlets;
+  }, [outletsList, gpsCity]);
+  const nearbyItems = useMemo(
+    () =>
+      nearbyActiveOutlets(outletsList, userCoords, {
+        city: showAllCities ? '' : userCity,
+        ignoreCity: showAllCities || !userCity,
+        maxKm: showAllCities ? Number.POSITIVE_INFINITY : MAX_NEARBY_RADIUS_KM
+      }),
+    [outletsList, userCoords, userCity, showAllCities]
+  );
 
   const fetchCustomerProfile = async (phone: string) => {
     const norm = cleanPhone(phone);
@@ -1157,18 +1307,52 @@ function CustomerDashboardPage() {
     localStorage.setItem('laundry_customer_phone', norm);
     setCustomerData({ name: 'Pelanggan Setia', deposit_balance: 0 });
     fetchCustomerProfile(norm);
+    loadCustomerAddresses(norm).then((rows) => {
+      setSavedAddresses(rows);
+      const primary = primaryAddressOf(rows);
+      if (primary) setCustomerAddress(primary);
+    });
   };
 
   const handleLogout = () => {
     localStorage.removeItem('laundry_customer_phone');
     setCustomerPhone('');
     setCustomerData(null);
+    setSavedAddresses([]);
+    setActiveTab('home');
+    setActiveChatOrderId(null);
   };
 
-  const handleSaveAddress = () => {
-    localStorage.setItem('laundry_customer_address', customerAddress);
-    setIsEditingAddress(false);
-    alert('Alamat penjemputan berhasil disimpan!');
+  const syncPrimaryAddress = (rows: SavedAddress[]) => {
+    setSavedAddresses(rows);
+    const primary = primaryAddressOf(rows);
+    if (primary) setCustomerAddress(primary);
+  };
+
+  const handleSaveAddressDraft = async (draft: {
+    id?: string;
+    label: string;
+    full_address: string;
+    is_primary?: boolean;
+  }) => {
+    setAddressBusy(true);
+    const next = await upsertCustomerAddress(cleanPhone(customerPhone), savedAddresses, draft);
+    syncPrimaryAddress(next);
+    setAddressBusy(false);
+  };
+
+  const handleDeleteAddress = async (id: string) => {
+    setAddressBusy(true);
+    const next = await removeCustomerAddress(cleanPhone(customerPhone), savedAddresses, id);
+    syncPrimaryAddress(next);
+    setAddressBusy(false);
+  };
+
+  const handleSetPrimaryAddress = async (id: string) => {
+    setAddressBusy(true);
+    const next = await setPrimaryCustomerAddress(cleanPhone(customerPhone), savedAddresses, id);
+    syncPrimaryAddress(next);
+    setAddressBusy(false);
   };
 
   const requestNearbyLocation = () => {
@@ -1269,7 +1453,8 @@ function CustomerDashboardPage() {
     });
   }
 
-  const rawOngkir = deliveryFee || 0;
+  const isInternalDriver = courierType === 'INTERNAL';
+  const rawOngkir = isInternalDriver ? 0 : deliveryFee || 0;
   const rawSubtotal = kiloanSubtotal + satuanSubtotal;
 
   const promoDiscountVal = promoDiscountRp(claimedPromo, rawSubtotal, rawOngkir);
@@ -1289,6 +1474,7 @@ function CustomerDashboardPage() {
     }
     setClaimedPromo(promo);
     setShowPromoModal(false);
+    setSelectedBanner(null);
     return true;
   };
 
@@ -1341,12 +1527,20 @@ function CustomerDashboardPage() {
 
     const nowIso = new Date().toISOString();
     const todayDateStr = nowIso.split('T')[0];
-    const scheduleAt = pickupLater && pickupDate && pickupTime ? new Date(`${pickupDate}T${pickupTime}:00`) : null;
-    const isFuturePickup = !!(scheduleAt && !Number.isNaN(scheduleAt.getTime()) && scheduleAt.getTime() > Date.now() + 30 * 60 * 1000);
+    const schedule = pickupLater ? parsePickupSchedule(pickupDate, pickupTime) : null;
+    if (pickupLater && !schedule) {
+      setIsSubmitting(false);
+      return alert('Isi tanggal dan jam jemput yang valid (contoh 03/09/2026 dan 09.00).');
+    }
+    if (schedule && schedule.at.getTime() <= Date.now()) {
+      setIsSubmitting(false);
+      return alert('Jadwal jemput harus di masa depan.');
+    }
+    const isFuturePickup = !!schedule;
 
     const detailInfo = `[INFO CUCIAN] Kantong: ${bagCount} | Cuci: ${washProcess} | Luntur: ${hasFading} | Brg Berharga: ${hasValuables}`;
     const baseNotes = notesCombined ? `${detailInfo} | ${notesCombined}` : detailInfo;
-    const finalNotes = isFuturePickup ? withScheduleNote(baseNotes, pickupDate, pickupTime) : baseNotes;
+    const finalNotes = isFuturePickup && schedule ? withScheduleNote(baseNotes, schedule.date, schedule.time.slice(0, 5)) : baseNotes;
 
     // Rincian item satuan dikirim terstruktur agar POS bisa memuatnya langsung ke
     // keranjang nota. Kiloan tidak dimasukkan karena beratnya baru pasti setelah ditimbang kasir.
@@ -1379,6 +1573,10 @@ function CustomerDashboardPage() {
       service_type: mainServiceLabel,
       estimated_weight: kiloanLines.reduce((s, k) => s + k.kg, 0) || 0,
       address: customerAddress || '',
+      address_id: (() => {
+        const id = savedAddresses.find((a) => a.full_address === customerAddress)?.id || '';
+        return /^[0-9a-f-]{36}$/i.test(id) ? id : null;
+      })(),
       duration: kiloanDuration || 'Reguler (3 Hari)',
       bag_count: Number(bagCount) || 1,
       wash_process: washProcess || 'Pisah',
@@ -1387,11 +1585,12 @@ function CustomerDashboardPage() {
       items: itemsPayload,
       delivery_fee: Number(finalOngkir) || 0,
       notes: finalNotes,
-      pickup_date: isFuturePickup ? pickupDate : todayDateStr,
-      pickup_time: isFuturePickup ? pickupTime : undefined,
+      pickup_date: isFuturePickup && schedule ? schedule.date : todayDateStr,
+      pickup_time: isFuturePickup && schedule ? schedule.time : undefined,
+      scheduled_at: isFuturePickup && schedule ? schedule.iso : undefined,
+      pickup_at: isFuturePickup && schedule ? schedule.iso : undefined,
       status: isFuturePickup ? 'Terjadwal' : 'Menunggu Kurir',
-      courier_type: courierType || 'INTERNAL',
-      created_at: nowIso
+      courier_type: isFuturePickup ? null : courierType || 'INTERNAL'
     };
 
     const { data: insertedData, error } = await insertPickupOrder(payload);
@@ -1410,7 +1609,14 @@ function CustomerDashboardPage() {
         await supabase.from('promos').update({ used_count: nextUsed }).eq('id', claimedPromo.id);
       }
       // Simpan data order terbaru & buka Modal Live Tracking Success
-      setLatestCreatedOrder(insertedData[0]);
+      setLatestCreatedOrder({
+        ...insertedData[0],
+        order_number: autoOrderNo,
+        status: payload.status,
+        pickup_date: payload.pickup_date,
+        pickup_time: payload.pickup_time,
+        scheduled_at: payload.scheduled_at
+      });
       setShowOrderSuccessModal(true);
       
       // Reset form
@@ -1439,13 +1645,19 @@ function CustomerDashboardPage() {
       toast('Isi tanggal dan jam jemput.', 'warn');
       return false;
     }
+    const sched = parsePickupSchedule(date, time);
+    if (!sched) {
+      toast('Format jadwal tidak valid. Gunakan tanggal dan jam yang benar.', 'warn');
+      return false;
+    }
     setScheduleBusyId(order.id);
-    const notes = withScheduleNote(String(order.notes || ''), date, time);
+    const notes = withScheduleNote(String(order.notes || ''), sched.date, sched.time.slice(0, 5));
     const { error } = await updateWithFallback(
       'pickup_orders',
       [
-        { pickup_date: date, pickup_time: time, status: 'Terjadwal', notes },
-        { pickup_date: date, status: 'Terjadwal', notes },
+        { pickup_date: sched.date, pickup_time: sched.time, scheduled_at: sched.iso, pickup_at: sched.iso, status: 'Terjadwal', notes },
+        { pickup_date: sched.date, pickup_time: sched.time, status: 'Terjadwal', notes },
+        { pickup_date: sched.date, status: 'Terjadwal', notes },
         { status: 'Terjadwal', notes }
       ],
       { column: 'id', value: order.id }
@@ -1486,7 +1698,7 @@ function CustomerDashboardPage() {
   const scheduledCount = scheduledOrders.length;
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-800 p-4 md:p-6 pb-28 max-w-md mx-auto relative font-sans">
+    <div className="min-h-screen bg-slate-100 text-slate-800 p-4 md:p-6 pb-32 max-w-md mx-auto relative font-sans">
       {readyPopup && (
         <div className="fixed inset-x-0 bottom-20 z-40 pointer-events-none flex justify-center px-4">
           <div className="pointer-events-auto bg-white rounded-2xl p-4 w-full max-w-sm shadow-xl border border-slate-200 space-y-2">
@@ -1516,36 +1728,16 @@ function CustomerDashboardPage() {
         </div>
       )}
       
-      {/* HEADER TOP BAR */}
-      <div className="bg-white rounded-2xl p-3.5 shadow-sm border border-slate-200/80 flex justify-between items-center mb-4">
-        <div className="flex items-center gap-2.5">
-          <div className="w-10 h-10 bg-blue-600 text-white rounded-xl flex items-center justify-center shadow-md shadow-blue-200">
-            <Sparkles className="w-5 h-5" strokeWidth={2.2} />
-          </div>
-          <div>
-            <h1 className="text-base font-extrabold text-slate-900 tracking-tight leading-none">Laundrivery</h1>
-            <p className="text-[10px] text-blue-600 font-bold tracking-wide uppercase mt-0.5">Express Laundry Delivery</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <button onClick={() => setShowPromoModal(true)} className="bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-extrabold px-2.5 py-1.5 rounded-xl hover:bg-amber-100 transition shadow-sm inline-flex items-center gap-1">
-            <Gift className="w-3.5 h-3.5" /> Promo & Vouchers
-          </button>
-          {customerData && (
-            <button onClick={handleLogout} className="bg-rose-50 border border-rose-200 text-rose-600 text-[10px] font-bold px-2.5 py-1.5 rounded-xl hover:bg-rose-100 transition">
-              Keluar
-            </button>
-          )}
-        </div>
-      </div>
+      {activeTab !== 'chat' && <CustomerHeader />}
 
       {(activeTab === 'home' || !customerData) && (
         <PromoBannerCarousel
-          slides={bannerSlidesOf(showcasePromos, outletsList)}
+          slides={bannerSlidesOf(showcasePromos, outletsList, selectedOutlet)}
           onOpenOutlet={(id) => {
             const found = outletsList.find((o) => String(o.id) === String(id));
             if (found) setProfileOutlet(found);
           }}
+          onOpenPromo={(slide) => setSelectedBanner(slide)}
         />
       )}
 
@@ -1575,10 +1767,24 @@ function CustomerDashboardPage() {
       {!customerData && (
         <div className="mt-4">
           <NearbyOutlets
-            items={nearbyActiveOutlets(outletsList, userCoords)}
+            items={nearbyItems}
             locating={locatingGps}
-            onOpen={(o) => setProfileOutlet(o)}
+            userCity={userCity}
+            cities={nearbyCities}
+            showAllCities={showAllCities}
+            onOpen={(o) => {
+              setProfileOutlet(o);
+              if (o?.id) chooseOutlet(String(o.id), { clearQuery: true });
+            }}
             onRequestLocation={requestNearbyLocation}
+            onSelectCity={(city) => {
+              setCityOverride(city);
+              setShowAllCities(false);
+            }}
+            onShowAllCities={() => {
+              setShowAllCities(true);
+              setCityOverride(null);
+            }}
           />
         </div>
       )}
@@ -1587,33 +1793,6 @@ function CustomerDashboardPage() {
         <>
           {activeTab === 'home' && (
             <div className="space-y-4">
-              <div className="bg-gradient-to-r from-blue-600 via-blue-700 to-indigo-800 rounded-3xl p-5 text-white shadow-xl shadow-blue-200/50 space-y-4 relative overflow-hidden">
-                <div className="flex justify-between items-start relative z-10">
-                  <div>
-                    <span className="text-[10px] uppercase font-bold tracking-widest text-blue-200 block">Laundrivery Wallet</span>
-                    <h2 className="text-lg font-extrabold text-white mt-0.5">{customerData.name || 'Pelanggan Setia'}</h2>
-                    <p className="text-[11px] font-mono text-blue-100 opacity-90">{customerPhone}</p>
-                  </div>
-                  <span className="bg-white/20 backdrop-blur-md px-3 py-1 rounded-full text-[10px] font-extrabold uppercase border border-white/20">
-                    VIP Member
-                  </span>
-                </div>
-
-                <div className="bg-white/10 backdrop-blur-md p-4 rounded-2xl border border-white/20 flex justify-between items-center relative z-10">
-                  <div>
-                    <span className="text-[10px] uppercase font-bold text-blue-200 block">Saldo Deposit</span>
-                    <span className="text-2xl font-black text-white">Rp {Number(customerData.deposit_balance || 0).toLocaleString('id-ID')}</span>
-                  </div>
-                  <button 
-  type="button" 
-  onClick={() => setActiveTab('deposit')} 
-  className="bg-white text-blue-700 px-4 py-2 rounded-xl text-xs font-extrabold shadow-md hover:bg-blue-50 transition cursor-pointer"
->
-  + Top-Up via Xendit
-</button>
-                </div>
-              </div>
-
               <div className="grid grid-cols-2 gap-3">
                 <button onClick={() => setActiveTab('order')} className="bg-white border border-slate-200 p-4 rounded-3xl flex items-center gap-3 hover:border-blue-500 transition shadow-sm text-left">
                   <IconBadge icon={Truck} tone="blue" size="lg" />
@@ -1623,20 +1802,37 @@ function CustomerDashboardPage() {
                   </div>
                 </button>
 
-                <button onClick={() => setActiveTab('deposit')} className="bg-white border border-slate-200 p-4 rounded-3xl flex items-center gap-3 hover:border-indigo-500 transition shadow-sm text-left">
+                <button onClick={() => setActiveTab('deposit')} className="bg-white border border-slate-200 p-4 rounded-3xl flex items-start gap-3 hover:border-indigo-500 transition shadow-sm text-left">
                   <IconBadge icon={Wallet} tone="indigo" size="lg" />
-                  <div>
+                  <div className="min-w-0">
                     <span className="text-xs font-extrabold text-slate-900 block">Paket Deposit</span>
-                    <span className="text-[10px] text-slate-500 font-medium">Bonus Saldo Extra</span>
+                    <span className="text-[10px] text-slate-500 font-medium block">Bonus Saldo Extra</span>
+                    <span className="text-[10px] text-indigo-600 font-bold mt-1 block">
+                      Sisa Saldo: Rp {Number(customerData.deposit_balance || 0).toLocaleString('id-ID')}
+                    </span>
                   </div>
                 </button>
               </div>
 
               <NearbyOutlets
-                items={nearbyActiveOutlets(outletsList, userCoords)}
+                items={nearbyItems}
                 locating={locatingGps}
-                onOpen={(o) => setProfileOutlet(o)}
+                userCity={userCity}
+                cities={nearbyCities}
+                showAllCities={showAllCities}
+                onOpen={(o) => {
+                  setProfileOutlet(o);
+                  if (o?.id) chooseOutlet(String(o.id), { clearQuery: true });
+                }}
                 onRequestLocation={requestNearbyLocation}
+                onSelectCity={(city) => {
+                  setCityOverride(city);
+                  setShowAllCities(false);
+                }}
+                onShowAllCities={() => {
+                  setShowAllCities(true);
+                  setCityOverride(null);
+                }}
               />
 
               {(ongoingCount > 0 || scheduledCount > 0) && (
@@ -1663,7 +1859,7 @@ function CustomerDashboardPage() {
           )}
 
           {activeTab === 'order' && (
-            <form onSubmit={handleOrderSubmit} className="space-y-4">
+            <form onSubmit={handleOrderSubmit} className="space-y-4 pb-32">
               <div className="bg-white border border-slate-200 p-5 rounded-3xl space-y-4 shadow-sm">
                 <div className="border-b border-slate-100 pb-3">
                   <h3 className="text-sm font-extrabold text-slate-900">Form Order Penjemputan</h3>
@@ -1674,7 +1870,7 @@ function CustomerDashboardPage() {
                   <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Outlet Terdekat di Kota Anda</label>
                   <select
                     value={selectedOutlet}
-                    onChange={(e) => setSelectedOutlet(e.target.value)}
+                    onChange={(e) => chooseOutlet(e.target.value, { clearQuery: true })}
                     className="w-full bg-slate-50 border border-slate-300 rounded-2xl px-3.5 py-3 text-xs font-bold text-slate-800"
                   >
                     {filteredOutlets.map((o) => (
@@ -1702,6 +1898,24 @@ function CustomerDashboardPage() {
                     className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3 text-xs font-bold text-slate-800 focus:outline-none"
                     rows={2}
                   />
+                  {savedAddresses.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {savedAddresses.map((addr) => (
+                        <button
+                          key={addr.id}
+                          type="button"
+                          onClick={() => setCustomerAddress(addr.full_address)}
+                          className={`text-[10px] font-extrabold px-2.5 py-1 rounded-lg border ${
+                            customerAddress === addr.full_address
+                              ? 'bg-blue-600 text-white border-blue-600'
+                              : 'bg-white text-slate-600 border-slate-200'
+                          }`}
+                        >
+                          {addr.label}{addr.is_primary ? ' · Utama' : ''}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   {userCoords && (
                     <p className="text-[9px] text-emerald-600 font-bold flex items-center gap-1">
                       <CheckCircle2 className="w-3 h-3" /> Lat: {userCoords.lat.toFixed(5)}, Lon: {userCoords.lon.toFixed(5)} (Pinpoint tersimpan)
@@ -2072,11 +2286,13 @@ function CustomerDashboardPage() {
                   <div className="flex justify-between text-slate-500 font-medium"><span>Subtotal Satuan:</span><span>Rp {satuanSubtotal.toLocaleString('id-ID')}</span></div>
                   
                   <div className="flex justify-between text-slate-700 font-bold border-t border-slate-200/80 pt-1.5">
+                    <span>Ongkir Antar-Jemput{isInternalDriver ? '' : ` Motor ${distanceKm ? `(${distanceKm} Km PP)` : 'PP'}`}:</span>
                     <span>
-                      Ongkir Antar-Jemput Motor {distanceKm ? `(${distanceKm} Km PP)` : 'PP'}:
-                    </span>
-                    <span>
-                      {deliveryFee !== null ? `Rp ${rawOngkir.toLocaleString('id-ID')}` : 'Isi alamat dahulu'}
+                      {isInternalDriver
+                        ? 'Rp 0 (FREE)'
+                        : deliveryFee !== null
+                        ? `Rp ${rawOngkir.toLocaleString('id-ID')}`
+                        : 'Isi alamat dahulu'}
                     </span>
                   </div>
 
@@ -2103,45 +2319,48 @@ function CustomerDashboardPage() {
                   </div>
                 </div>
 
-                <div className="bg-slate-900/90 border border-slate-800 p-4 rounded-2xl space-y-3 my-4">
-                  <label className="text-xs font-bold text-slate-300 block">Pilih Metode Penjemputan</label>
+                <div className="bg-white border border-slate-200 p-4 rounded-2xl space-y-3">
+                  <label className="text-xs font-extrabold text-slate-700 block">Pilih Metode Penjemputan</label>
                   
-                  <div className="grid grid-cols-2 gap-3">
-                    <div 
+                  <div className="grid grid-cols-1 gap-2.5">
+                    <button
+                      type="button"
                       onClick={() => setCourierType('INTERNAL')}
-                      className={`p-3 rounded-xl border cursor-pointer transition ${
+                      className={`p-3.5 rounded-2xl border text-left transition ${
                         courierType === 'INTERNAL' 
-                          ? 'bg-cyan-950/50 border-cyan-500 text-white' 
-                          : 'bg-slate-800/50 border-slate-700 text-slate-400'
+                          ? 'bg-emerald-50 border-emerald-400 ring-2 ring-emerald-100' 
+                          : 'bg-slate-50 border-slate-200'
                       }`}
                     >
-                      <div className="text-xs font-bold mb-1 inline-flex items-center gap-1">
-                        <Truck className="w-3.5 h-3.5" /> Driver Internal
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="text-xs font-black text-slate-900 inline-flex items-center gap-1">
+                          <Truck className="w-3.5 h-3.5" /> Driver Internal
+                        </span>
+                        <span className="bg-emerald-100 text-emerald-700 border border-emerald-200 text-[9px] font-black uppercase px-2 py-0.5 rounded-full">
+                          FREE
+                        </span>
                       </div>
-                      <div className="text-[10px] text-cyan-400 font-semibold">
-                        {queueCount === 0 ? 'Tanpa Antrian' : `${queueCount} Antrian`}
-                      </div>
-                      <div className="text-[9px] text-slate-400 mt-1">
-                        Est. Penjemputan ~{estimatedPickupMinutes} Menit
-                      </div>
-                    </div>
+                      <p className="text-[10px] text-slate-500 font-semibold leading-relaxed">
+                        {queueCount} Antrean • Est. Penjemputan ~{estimatedPickupMinutes} Menit
+                      </p>
+                    </button>
 
-                    <div 
+                    <button
+                      type="button"
                       onClick={() => setCourierType('THIRD_PARTY')}
-                      className={`p-3 rounded-xl border cursor-pointer transition ${
+                      className={`p-3.5 rounded-2xl border text-left transition ${
                         courierType === 'THIRD_PARTY' 
-                          ? 'bg-cyan-950/50 border-cyan-500 text-white' 
-                          : 'bg-slate-800/50 border-slate-700 text-slate-400'
+                          ? 'bg-amber-50 border-amber-400 ring-2 ring-amber-100' 
+                          : 'bg-slate-50 border-slate-200'
                       }`}
                     >
-                      <div className="text-xs font-bold mb-1 inline-flex items-center gap-1">
-                        <Package className="w-3.5 h-3.5" /> Pihak Ketiga
-                      </div>
-                      <div className="text-[10px] text-amber-400 font-semibold">Gojek / Grab / Lalamove</div>
-                      <div className="text-[9px] text-slate-400 mt-1">
-                        Dipesankan manual oleh CS + Link Live Track
-                      </div>
-                    </div>
+                      <span className="text-xs font-black text-slate-900 inline-flex items-center gap-1">
+                        <Package className="w-3.5 h-3.5" /> Instan (Gojek / Grab / Lalamove)
+                      </span>
+                      <p className="text-[10px] text-slate-500 font-semibold leading-relaxed mt-1">
+                        Ongkos mulai dari Rp 20.000 (Sudah Pickup & Delivery) • Waktu Tunggu 20–30 Menit • Dipesankan oleh CS
+                      </p>
+                    </button>
                   </div>
                 </div>
 
@@ -2150,7 +2369,7 @@ function CustomerDashboardPage() {
                   disabled={isSubmitting}
                   className="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-4 rounded-2xl text-xs uppercase shadow-lg shadow-blue-200 transition inline-flex items-center justify-center gap-2"
                 >
-                  <Truck className="w-4 h-4" /> Pesan Penjemputan Sekarang
+                  <Truck className="w-4 h-4" /> Pesan Sekarang
                 </button>
               </div>
             </form>
@@ -2168,13 +2387,15 @@ function CustomerDashboardPage() {
                 </div>
 
                 <div className="grid grid-cols-1 gap-3 text-left">
-                  {DEPOSIT_PACKAGES.map((pkg) => (
+                  {DEPOSIT_PACKAGES.map((pkg) => {
+                    const bonus = depositBonusOf(pkg);
+                    return (
                     <button
                       key={pkg.key}
                       type="button"
                       disabled={isSubmitting}
                       onClick={() => handleTopupMayar(pkg)}
-                      className={`w-full p-4 rounded-2xl border flex justify-between items-center text-left transition active:scale-[0.99] disabled:opacity-60 ${
+                      className={`w-full p-4 rounded-2xl border text-left transition active:scale-[0.99] disabled:opacity-60 space-y-2 ${
                         pkg.key === 'Gold'
                           ? 'bg-amber-50/30 border-amber-200'
                           : pkg.key === 'Platinum'
@@ -2182,28 +2403,26 @@ function CustomerDashboardPage() {
                           : 'bg-slate-50 border-slate-200'
                       }`}
                     >
-                      <div>
-                        <p className="font-extrabold text-slate-900 text-xs">{pkg.label}</p>
-                        <p className="text-[10px] text-slate-500 font-medium">Bayar Rp {pkg.pay.toLocaleString('id-ID')}</p>
+                      <div className="flex justify-between items-start gap-2">
+                        <div className="min-w-0">
+                          <p className="font-extrabold text-slate-900 text-xs">{pkg.label}</p>
+                          <p className="text-sm font-black text-slate-800 mt-0.5">Rp {pkg.pay.toLocaleString('id-ID')}</p>
+                        </div>
+                        <span className="shrink-0 bg-emerald-50 text-emerald-700 border border-emerald-200 font-black text-[10px] px-2.5 py-1 rounded-full">
+                          + Rp {bonus.toLocaleString('id-ID')} Saldo Extra
+                        </span>
                       </div>
-                      <span
-                        className={`font-black text-xs px-3 py-1.5 rounded-full border ${
-                          pkg.key === 'Gold'
-                            ? 'text-amber-700 bg-amber-50 border-amber-200'
-                            : pkg.key === 'Platinum'
-                            ? 'text-indigo-700 bg-indigo-50 border-indigo-200'
-                            : 'text-blue-600 bg-blue-50 border-blue-100'
-                        }`}
-                      >
-                        + Rp {pkg.credit.toLocaleString('id-ID')} Saldo
-                      </span>
+                      <p className="text-[10px] text-slate-500 font-semibold">
+                        Total Saldo Didapat: Rp {pkg.credit.toLocaleString('id-ID')}
+                      </p>
                     </button>
-                  ))}
+                    );
+                  })}
                 </div>
 
                 <button
                   type="button"
-                  onClick={() => setActiveChatOrderId('GENERAL_CS')}
+                  onClick={() => openCustomerChat('GENERAL_CS')}
                   className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-2xl text-xs shadow inline-flex items-center justify-center gap-2"
                 >
                   <Headphones className="w-4 h-4" />
@@ -2219,9 +2438,10 @@ function CustomerDashboardPage() {
                   <p className="text-[11px] text-slate-400 text-center py-4">Belum ada top up. Pilih paket di atas untuk bayar via QRIS Mayar.</p>
                 )}
                 {depositLogs.map((log, i) => {
-                  const paid = Number(log.price || log.amount || 0);
-                  const credited = Number(log.balance_added || 0);
-                  const bonus = credited > paid ? credited - paid : Number(log.bonus || 0);
+                  const pkg = DEPOSIT_PACKAGES.find((p) => depositPackageShort(log.package_name) === p.key);
+                  const paid = Number(log.price || log.amount || pkg?.pay || 0);
+                  const credited = Number(log.balance_added || 0) || pkg?.credit || paid;
+                  const bonus = depositBonusOf(pkg) || (credited > paid ? credited - paid : Number(log.bonus || 0));
                   return (
                     <div key={log.id || i} className="bg-white border border-slate-200 p-3.5 rounded-2xl text-xs shadow-sm space-y-1.5">
                       <div className="flex justify-between items-start gap-2">
@@ -2243,11 +2463,17 @@ function CustomerDashboardPage() {
                       </div>
                       <div className="flex justify-between text-[10px] text-slate-500">
                         <span>Bayar Rp {paid.toLocaleString('id-ID')}</span>
-                        <span className="font-black text-blue-600">+ Rp {credited.toLocaleString('id-ID')} saldo</span>
+                        <span className="font-black text-slate-800">
+                          Total Saldo Didapat: Rp {credited.toLocaleString('id-ID')}
+                        </span>
                       </div>
-                      <div className="flex justify-between text-[10px] text-slate-400">
+                      <div className="flex justify-between items-center text-[10px] text-slate-400">
                         <span>{log.payment_method || 'QRIS Mayar'}</span>
-                        {bonus > 0 && <span>Bonus Rp {bonus.toLocaleString('id-ID')}</span>}
+                        {bonus > 0 && (
+                          <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 font-black px-2 py-0.5 rounded-full">
+                            + Rp {bonus.toLocaleString('id-ID')} Saldo Extra
+                          </span>
+                        )}
                       </div>
                     </div>
                   );
@@ -2283,14 +2509,10 @@ function CustomerDashboardPage() {
                       </div>
                     )}
                     {ongoingOrders.map((order: any) => {
-                      const currentStatus = (order.status || '').toLowerCase();
-                      const stages = TRACKER_STAGES;
-                      let activeIndex = stages.findIndex((s) => s.match.some((m) => currentStatus.includes(m)));
-                      if (activeIndex === -1) activeIndex = 0;
                       return (
                         <div
                           key={order.id}
-                          onClick={() => setSelectedOrder(order)}
+                          onClick={() => setDetailOrder(order)}
                           className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 flex flex-col gap-3 transition-all hover:shadow-md cursor-pointer active:scale-[0.98]"
                         >
                           <div className="flex justify-between items-start border-b border-slate-50 pb-2 gap-2">
@@ -2298,17 +2520,8 @@ function CustomerDashboardPage() {
                               <p className="text-[11px] font-black text-slate-800">
                                 ID Transaksi: {formatTrxId(order)}
                               </p>
-                              <p className="text-[10px] font-semibold text-slate-500">
-                                Estimasi Selesai: {formatEstSelesai(order)}
-                              </p>
-                              <p className="text-[10px] font-semibold text-slate-500">
-                                Status Cucian: {displayStatusLabel(order.status, order) || 'Menunggu'}
-                              </p>
                             </div>
-                            <div className="flex items-center gap-1 shrink-0">
-                              <SlaBadge duration={order.duration || order.service_type} createdAt={order.created_at} />
-                              <StatusPill status={order.status || 'Menunggu Kurir'} />
-                            </div>
+                            <StatusPill status={order.status || 'Menunggu Kurir'} />
                           </div>
 
                           <div className="flex justify-between items-center">
@@ -2331,40 +2544,6 @@ function CustomerDashboardPage() {
                                 Rp {(order.amount || order.total_amount || order.estimated_price || 0).toLocaleString('id-ID')}
                               </span>
                             </div>
-                          </div>
-
-                          <div className="grid grid-cols-6 gap-1 text-center pt-2 mt-1 border-t border-slate-50">
-                            {stages.map((step, idx) => {
-                              const isPassedOrActive = idx <= activeIndex;
-                              const isActiveNow = idx === activeIndex;
-                              const StageIcon = step.icon;
-                              return (
-                                <div key={idx} className="flex flex-col items-center">
-                                  <div
-                                    className={`w-7 h-7 rounded-full flex items-center justify-center transition-all duration-300 ${
-                                      isActiveNow
-                                        ? 'bg-white/70 backdrop-blur-md text-indigo-600 ring-2 ring-indigo-200 shadow-md scale-110 animate-pulse'
-                                        : isPassedOrActive
-                                        ? 'bg-emerald-500/90 text-white shadow-sm backdrop-blur-sm'
-                                        : 'bg-white/50 backdrop-blur-sm text-slate-400 border border-white/60'
-                                    }`}
-                                  >
-                                    <StageIcon className="w-3.5 h-3.5" strokeWidth={2.3} />
-                                  </div>
-                                  <span
-                                    className={`text-[8px] mt-1 font-semibold ${
-                                      isActiveNow
-                                        ? 'text-indigo-600 font-bold'
-                                        : isPassedOrActive
-                                        ? 'text-slate-700'
-                                        : 'text-slate-400'
-                                    }`}
-                                  >
-                                    {step.label}
-                                  </span>
-                                </div>
-                              );
-                            })}
                           </div>
 
                           {isSiapDiambil(order) && !isThirdPartyDelivery(order) && (
@@ -2413,13 +2592,6 @@ function CustomerDashboardPage() {
                               <p className="text-[10px] text-blue-600">Posisi driver diperbarui secara otomatis.</p>
                             </div>
                           )}
-
-                          <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 space-y-2 mt-2" onClick={(e) => e.stopPropagation()}>
-                            <p className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider inline-flex items-center gap-1">
-                              <ImageIcon className="w-3 h-3" /> Bukti Foto
-                            </p>
-                            <ProofPhotoGrid order={order} onOpen={setLightboxSrc} compact />
-                          </div>
                         </div>
                       );
                     })}
@@ -2597,63 +2769,69 @@ function CustomerDashboardPage() {
           )}
 
           {activeTab === 'profile' && (
-            <div className="bg-white border border-slate-200 p-6 rounded-3xl space-y-4 shadow-sm text-xs">
-              <h3 className="text-sm font-extrabold text-slate-900 border-b border-slate-100 pb-2 inline-flex items-center gap-2">
-                <IconBadge icon={User} tone="slate" size="sm" /> Profil Akun
-              </h3>
-              <div>
-                <span className="text-[10px] text-slate-400 uppercase font-extrabold block">Nama Lengkap</span>
-                <p className="font-extrabold text-slate-900 text-sm mt-0.5">{customerData.name || '-'}</p>
-              </div>
-              <div>
-                <span className="text-[10px] text-slate-400 uppercase font-extrabold block">Nomor WhatsApp</span>
-                <p className="font-mono text-blue-600 font-extrabold mt-0.5">{customerPhone}</p>
-              </div>
-
-              <div className="pt-2 border-t border-slate-100">
-                <div className="flex justify-between items-center mb-1">
-                  <span className="text-[10px] text-slate-400 uppercase font-extrabold">Alamat Penjemputan Utama</span>
-                  {!isEditingAddress && (
-                    <button onClick={() => setIsEditingAddress(true)} className="text-[10px] font-extrabold text-blue-600 hover:underline inline-flex items-center gap-1">
-                      <Pencil className="w-3 h-3" /> Edit Alamat
-                    </button>
-                  )}
+            <div className="space-y-4">
+              <div className="bg-white border border-slate-200 p-6 rounded-3xl space-y-4 shadow-sm text-xs">
+                <h3 className="text-sm font-extrabold text-slate-900 border-b border-slate-100 pb-2 inline-flex items-center gap-2">
+                  <IconBadge icon={User} tone="slate" size="sm" /> Profil Akun
+                </h3>
+                <div>
+                  <span className="text-[10px] text-slate-400 uppercase font-extrabold block">Nama Lengkap</span>
+                  <p className="font-extrabold text-slate-900 text-sm mt-0.5">{customerData.name || '-'}</p>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 uppercase font-extrabold block">Nomor WhatsApp</span>
+                  <p className="font-mono text-blue-600 font-extrabold mt-0.5">{customerPhone}</p>
                 </div>
 
-                {!isEditingAddress ? (
-                  <p className="text-slate-700 font-medium bg-slate-50 p-3 rounded-2xl border border-slate-200">
-                    {customerAddress || 'Belum diatur'}
-                  </p>
-                ) : (
-                  <div className="space-y-2 mt-2">
-                    <textarea
-                      value={customerAddress}
-                      onChange={(e) => setCustomerAddress(e.target.value)}
-                      placeholder="Tulis alamat lengkap penjemputan..."
-                      className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3 text-xs text-slate-800 font-medium"
-                      rows={3}
-                    />
-                    <div className="flex gap-2">
-                      <button
-                        onClick={handleSaveAddress}
-                        className="flex-1 bg-blue-600 text-white font-extrabold py-2.5 rounded-xl text-xs shadow-sm hover:bg-blue-700 transition inline-flex items-center justify-center gap-1.5"
-                      >
-                        <Save className="w-3.5 h-3.5" /> Simpan Alamat
-                      </button>
-                      <button
-                        onClick={() => setIsEditingAddress(false)}
-                        className="bg-slate-100 text-slate-600 font-bold px-3 py-2.5 rounded-xl text-xs hover:bg-slate-200 transition"
-                      >
-                        Batal
-                      </button>
-                    </div>
-                  </div>
-                )}
+                <div className="pt-2 border-t border-slate-100">
+                  <AddressManager
+                    addresses={savedAddresses}
+                    busy={addressBusy}
+                    onSave={handleSaveAddressDraft}
+                    onDelete={handleDeleteAddress}
+                    onSetPrimary={handleSetPrimaryAddress}
+                  />
+                </div>
               </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (!confirm('Keluar dari akun pelanggan?')) return;
+                  handleLogout();
+                }}
+                className="w-full bg-rose-50 border border-rose-200 text-rose-600 font-extrabold py-3.5 rounded-2xl text-xs hover:bg-rose-100 transition"
+              >
+                Keluar
+              </button>
             </div>
           )}
         </>
       ) : null}
+
+      <PromoBannerDetailModal
+        slide={selectedBanner}
+        claimed={
+          !!claimedPromo &&
+          selectedBanner?.kind === 'promo' &&
+          [claimedPromo.code, claimedPromo.id, claimedPromo.title].some(
+            (v) => String(v || '').toLowerCase() === String(selectedBanner.promoCode || selectedBanner.title || '').toLowerCase()
+          )
+        }
+        onClose={() => setSelectedBanner(null)}
+        onClaim={() => {
+          if (!selectedBanner || selectedBanner.kind !== 'promo') return;
+          const code = selectedBanner.promoCode || selectedBanner.title;
+          const found =
+            findPromoByCode(availablePromos, code) ||
+            availablePromos.find((p) => String(p.title || '').toLowerCase() === String(selectedBanner.title || '').toLowerCase());
+          if (!found) {
+            alert('Promo ini belum terhubung ke kode voucher. Isi kode promo di form order, atau hubungkan kode di /owner/promos.');
+            return;
+          }
+          handleClaimPromo(found);
+        }}
+      />
 
       <PromoVoucherModal
         open={showPromoModal}
@@ -2706,12 +2884,17 @@ function CustomerDashboardPage() {
             </div>
             <div className="p-5 space-y-3 text-center overflow-y-auto">
               {depositCheckout.paid ? (
-                <div className="space-y-2 py-6">
+                <div className="space-y-3 py-6">
                   <CheckCircle2 className="w-12 h-12 text-emerald-600 mx-auto" />
                   <p className="font-black text-slate-900">Pembayaran Lunas</p>
                   <p className="text-xs text-slate-500">
-                    Saldo +Rp {Number(depositCheckout.balanceAdded || 0).toLocaleString('id-ID')} sudah masuk.
+                    Total saldo didapat Rp {Number(depositCheckout.balanceAdded || 0).toLocaleString('id-ID')} sudah masuk.
                   </p>
+                  {Number(depositCheckout.bonus || 0) > 0 && (
+                    <p className="mx-auto inline-flex items-center justify-center bg-emerald-50 text-emerald-700 border border-emerald-200 font-black text-[11px] px-3 py-1 rounded-full">
+                      + Rp {Number(depositCheckout.bonus).toLocaleString('id-ID')} Saldo Extra
+                    </p>
+                  )}
                   <button
                     type="button"
                     onClick={() => setDepositCheckout(null)}
@@ -2722,12 +2905,16 @@ function CustomerDashboardPage() {
                 </div>
               ) : (
                 <>
-                  <p className="text-2xl font-black text-emerald-700">
+                  <p className="text-2xl font-black text-slate-900">
                     Rp {Number(depositCheckout.amount || 0).toLocaleString('id-ID')}
                   </p>
-                  <p className="text-[11px] text-slate-500">
-                    Saldo diterima Rp {Number(depositCheckout.balanceAdded || 0).toLocaleString('id-ID')}
-                    {depositCheckout.bonus ? ` · Bonus Rp ${Number(depositCheckout.bonus).toLocaleString('id-ID')}` : ''}
+                  {Number(depositCheckout.bonus || 0) > 0 && (
+                    <p className="mx-auto inline-flex items-center justify-center bg-emerald-50 text-emerald-700 border border-emerald-200 font-black text-[11px] px-3 py-1.5 rounded-full">
+                      + Rp {Number(depositCheckout.bonus).toLocaleString('id-ID')} Saldo Extra
+                    </p>
+                  )}
+                  <p className="text-[11px] text-slate-500 font-semibold">
+                    Total Saldo Didapat: Rp {Number(depositCheckout.balanceAdded || 0).toLocaleString('id-ID')}
                   </p>
                   {depositCheckout.qrisUrl || depositCheckout.invoiceUrl ? (
                     <img
@@ -2795,13 +2982,13 @@ function CustomerDashboardPage() {
           onClose={() => setComplaintTicketOpen(false)}
         />
       )}
-      {/* LIVE CHAT — WhatsApp-style full screen */}
-      {activeChatOrderId && (
-        <div className="fixed inset-0 z-[60] h-full w-full flex flex-col bg-[#ece5dd]">
+      {/* LIVE CHAT — WhatsApp-style tab */}
+      {activeTab === 'chat' && customerData && (
+        <div className="fixed inset-x-0 top-0 bottom-[4.75rem] z-[60] max-w-md mx-auto h-auto flex flex-col bg-[#ece5dd]">
           <div className="shrink-0 bg-[#075e54] text-white pl-0.5 pr-1.5 pt-[max(0.45rem,env(safe-area-inset-top))] pb-2 flex items-center gap-0.5 shadow-md">
             <button
               type="button"
-              onClick={() => setActiveChatOrderId(null)}
+              onClick={() => goHome()}
               className="shrink-0 w-10 h-10 flex items-center justify-center rounded-full hover:bg-white/10"
               aria-label="Kembali"
             >
@@ -2975,34 +3162,15 @@ function CustomerDashboardPage() {
           </div>
         </div>
       )}
-      {/* BOTTOM NAVIGATION BAR */}
-      <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/95 backdrop-blur-md border-t border-slate-200 flex justify-around p-2.5 z-50 shadow-lg">
-        <button onClick={goHome} className={`flex flex-col items-center flex-1 ${activeTab === 'home' ? 'text-blue-600' : 'text-slate-400'}`}>
-          <Home className="w-5 h-5" />
-          <span className="text-[9px] font-extrabold mt-0.5">Beranda</span>
-        </button>
-        <button onClick={() => setActiveTab('order')} className={`flex flex-col items-center flex-1 ${activeTab === 'order' ? 'text-blue-600' : 'text-slate-400'}`}>
-          <Truck className="w-5 h-5" />
-          <span className="text-[9px] font-extrabold mt-0.5">Order</span>
-        </button>
-        <button onClick={() => setActiveTab('deposit')} className={`flex flex-col items-center flex-1 ${activeTab === 'deposit' ? 'text-blue-600' : 'text-slate-400'}`}>
-          <Wallet className="w-5 h-5" />
-          <span className="text-[9px] font-extrabold mt-0.5">Deposit</span>
-        </button>
-        <button onClick={() => goActivity(activitySub)} className={`relative flex flex-col items-center flex-1 ${activeTab === 'activity' ? 'text-blue-600' : 'text-slate-400'}`}>
-          <ListTodo className="w-5 h-5" />
-          {ongoingCount > 0 && (
-            <span className="absolute -top-0.5 right-[18%] min-w-[15px] h-[15px] px-1 rounded-full bg-blue-600 text-white text-[8px] font-black flex items-center justify-center">
-              {ongoingCount > 99 ? '99+' : ongoingCount}
-            </span>
-          )}
-          <span className="text-[9px] font-extrabold mt-0.5">Aktivitas</span>
-        </button>
-        <button onClick={() => setActiveTab('profile')} className={`flex flex-col items-center flex-1 ${activeTab === 'profile' ? 'text-blue-600' : 'text-slate-400'}`}>
-          <User className="w-5 h-5" />
-          <span className="text-[9px] font-extrabold mt-0.5">Profil</span>
-        </button>
-      </div>
+      <BottomNavbar
+        activeTab={activeTab}
+        ongoingCount={ongoingCount}
+        onHome={goHome}
+        onChat={() => (customerData ? openCustomerChat() : setActiveTab('chat'))}
+        onOrder={() => setActiveTab('order')}
+        onActivity={() => goActivity(activitySub)}
+        onProfile={() => setActiveTab('profile')}
+      />
 
 {/* ================= MODAL POPUP DETAIL ITEM & STATUS ================= */}
 {detailOrder && (
@@ -3334,12 +3502,6 @@ function CustomerDashboardPage() {
             </button>
           </div>
         </div>
-      )}
-      {customerData && (
-        <DraggableChatFab
-          hidden={!!activeChatOrderId}
-          onOpen={() => setActiveChatOrderId('GENERAL_CS')}
-        />
       )}
       <PhotoLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
     </div>

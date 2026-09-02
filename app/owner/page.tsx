@@ -1157,7 +1157,7 @@ export default function Dashboard() {
                     <p className="text-sm font-black text-slate-900">Manajemen Mesin Cuci</p>
                     <p className="text-[11px] text-slate-500 mt-0.5">Nama, kapasitas 15/24kg, payload, ThinQ ID. Mesin aktif dipakai POS.</p>
                   </Link>
-                  <Link href="/owner/settings/promos" className="bg-white border border-amber-200 rounded-2xl p-4 shadow-sm hover:border-amber-400 transition">
+                  <Link href="/owner/promos" className="bg-white border border-amber-200 rounded-2xl p-4 shadow-sm hover:border-amber-400 transition">
                     <p className="text-sm font-black text-slate-900">Banner Promo Customer</p>
                     <p className="text-[11px] text-slate-500 mt-0.5">Carousel pengumuman di beranda aplikasi pelanggan.</p>
                   </Link>

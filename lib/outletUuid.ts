@@ -27,6 +27,95 @@ export function matchOutletUuid(outlets: any[] | null | undefined, raw: unknown)
   return hit ? String(hit.id) : null;
 }
 
+export const CUSTOMER_ACTIVE_OUTLET_KEY = 'laundry_active_outlet';
+
+export const slugifyOutletKey = (raw: unknown) =>
+  String(raw || '')
+    .toLowerCase()
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+const outletQueryKeysOf = (outlet: any): string[] => {
+  const vals = [
+    outlet?.id,
+    outlet?.slug,
+    outlet?.code,
+    outlet?.outlet_code,
+    outlet?.legacy_id,
+    outlet?.outlet_no,
+    outlet?.old_id,
+    outlet?.pos_id,
+    outlet?.name
+  ];
+  const keys = new Set<string>();
+  vals.forEach((v) => {
+    const t = String(v || '').trim();
+    if (!t) return;
+    keys.add(t);
+    keys.add(t.toLowerCase());
+    const slug = slugifyOutletKey(t);
+    if (slug) keys.add(slug);
+  });
+  return [...keys];
+};
+
+/** Resolve `?outlet=slug_or_id` (UUID, numeric code, slug, or outlet name) to `outlets.id`. */
+export function matchOutletFromQuery(outlets: any[] | null | undefined, raw: unknown): string | null {
+  let s = String(raw || '').trim();
+  if (!s || s.toUpperCase() === 'ALL') return null;
+  try {
+    s = decodeURIComponent(s);
+  } catch {
+    /* already decoded */
+  }
+  s = s.trim();
+  const list = outlets || [];
+  if (!list.length) return null;
+
+  const direct = matchOutletUuid(list, s);
+  if (direct && list.some((o) => String(o?.id) === String(direct))) return String(direct);
+
+  const needle = slugifyOutletKey(s);
+  const lower = s.toLowerCase();
+  const exact = list.find((o) => {
+    const keys = outletQueryKeysOf(o);
+    return keys.includes(s) || keys.includes(lower) || (needle && keys.includes(needle));
+  });
+  if (exact?.id) return String(exact.id);
+
+  if (needle.length >= 4) {
+    const partial = list.filter((o) => outletQueryKeysOf(o).some((k) => k.includes(needle) || needle.includes(k)));
+    if (partial.length === 1 && partial[0]?.id) return String(partial[0].id);
+  }
+  return null;
+}
+
+export const readStoredCustomerOutlet = () => {
+  if (typeof window === 'undefined') return '';
+  try {
+    return String(
+      localStorage.getItem(CUSTOMER_ACTIVE_OUTLET_KEY) || localStorage.getItem('laundry_customer_outlet_id') || ''
+    ).trim();
+  } catch {
+    return '';
+  }
+};
+
+export const persistCustomerOutlet = (id: unknown) => {
+  if (typeof window === 'undefined') return;
+  const s = String(id || '').trim();
+  if (!s) return;
+  try {
+    localStorage.setItem(CUSTOMER_ACTIVE_OUTLET_KEY, s);
+    localStorage.setItem('laundry_customer_outlet_id', s);
+  } catch {
+    /* ignore quota */
+  }
+};
+
 type Db = { from: (table: string) => any };
 
 /**

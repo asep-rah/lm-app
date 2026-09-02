@@ -15,12 +15,17 @@ const supabase = createClient(
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
-    const amount = Math.round(Number(body.amount) || 0);
+    const isDeposit = String(body.type || '') === 'deposit';
+    const depositPkg = isDeposit
+      ? DEPOSIT_PACKAGES.find((p) => p.key === body.packageName || String(body.packageName || '').includes(p.key)) ||
+        DEPOSIT_PACKAGES.find((p) => p.pay === Math.round(Number(body.amount) || 0)) ||
+        null
+      : null;
+    const amount = depositPkg?.pay || Math.round(Number(body.amount) || 0);
     if (amount < 1000) {
       return NextResponse.json({ error: 'Nominal pembayaran minimal Rp 1.000' }, { status: 400 });
     }
 
-    const isDeposit = String(body.type || '') === 'deposit';
     let apiKey = String(body.apiKey || '').trim();
     let payoutAccountId = String(body.payoutAccountId || '').trim();
     if (body.outletId) {
@@ -35,10 +40,6 @@ export async function POST(req: Request) {
       if (outlet && isMayarKeyValid(outlet.mayar_api_key)) apiKey = String(outlet.mayar_api_key).trim();
       if (outlet?.mayar_payout_account_id) payoutAccountId = String(outlet.mayar_payout_account_id).trim();
     }
-    const depositPkg = isDeposit
-      ? DEPOSIT_PACKAGES.find((p) => p.key === body.packageName || String(body.packageName || '').includes(p.key)) ||
-        DEPOSIT_PACKAGES.find((p) => p.pay === amount)
-      : null;
     const depositReceipt = isDeposit ? String(body.receipt || depositReceiptOf(depositPkg?.key || 'Deposit')) : '';
 
     const charge = await createMayarPayment({
@@ -82,8 +83,8 @@ export async function POST(req: Request) {
         customer_name: body.customerName || body.name || 'Pelanggan',
         outlet_id: body.outletId || '',
         package_name: depositIncomeTitle({ package_name: pkg?.key || body.packageName || 'Deposit' }),
-        amount,
-        balance_added: Number(body.balanceAdded || pkg?.credit || amount),
+        amount: depositPkg?.pay || amount,
+        balance_added: depositPkg?.credit || Number(body.balanceAdded || amount),
         mayar_payment_id: charge.paymentId,
         mayar_invoice_url: charge.invoiceUrl,
         receipt,
@@ -103,7 +104,9 @@ export async function POST(req: Request) {
         topupId,
         receipt,
         packageName: pkg?.key || body.packageName,
-        balanceAdded: Number(body.balanceAdded || pkg?.credit || amount)
+        amount: pkg?.pay || amount,
+        balanceAdded: Number(pkg?.credit || body.balanceAdded || amount),
+        bonus: pkg ? Math.max(0, pkg.credit - pkg.pay) : Math.max(0, Number(body.balanceAdded || 0) - amount)
       });
     }
 

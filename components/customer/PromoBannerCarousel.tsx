@@ -1,80 +1,72 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { BannerSlide } from '@/lib/outletShowcase';
+import { withDefaultPromoBanner, type BannerSlide } from '@/lib/outletShowcase';
+
+const AUTO_MS = 4000;
 
 export default function PromoBannerCarousel({
   slides,
-  onOpenOutlet
+  onOpenOutlet,
+  onOpenPromo
 }: {
   slides: BannerSlide[];
   onOpenOutlet?: (outletId: string) => void;
+  onOpenPromo?: (slide: BannerSlide) => void;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const [idx, setIdx] = useState(0);
+  const [paused, setPaused] = useState(false);
+  const imageSlides = withDefaultPromoBanner(slides);
 
   useEffect(() => {
-    if (slides.length < 2) return;
+    if (paused || imageSlides.length < 2) return;
     const t = window.setInterval(() => {
-      const next = (idx + 1) % slides.length;
       const el = scroller.current;
-      if (el) {
-        const w = el.clientWidth;
-        el.scrollTo({ left: next * w, behavior: 'smooth' });
-      }
+      if (!el) return;
+      const next = (idx + 1) % imageSlides.length;
+      el.scrollTo({ left: next * el.clientWidth, behavior: 'smooth' });
       setIdx(next);
-    }, 5500);
+    }, AUTO_MS);
     return () => window.clearInterval(t);
-  }, [idx, slides.length]);
-
-  if (!slides.length) return null;
+  }, [idx, imageSlides.length, paused]);
 
   return (
     <div className="mb-4">
       <div
         ref={scroller}
+        onPointerDown={() => setPaused(true)}
+        onPointerUp={() => setPaused(false)}
+        onPointerCancel={() => setPaused(false)}
         onScroll={(e) => {
           const el = e.currentTarget;
           const next = Math.round(el.scrollLeft / Math.max(1, el.clientWidth));
           if (next !== idx) setIdx(next);
         }}
-        className="flex overflow-x-auto snap-x snap-mandatory scroll-smooth rounded-3xl hide-scrollbar"
+        className="flex overflow-x-auto snap-x snap-mandatory scroll-smooth rounded-2xl hide-scrollbar touch-pan-x"
       >
-        {slides.map((slide) => (
+        {imageSlides.map((slide) => (
           <button
             key={slide.id}
             type="button"
-            onClick={() => slide.outletId && onOpenOutlet?.(slide.outletId)}
-            className="relative min-w-full snap-center h-36 sm:h-40 overflow-hidden text-left"
+            onClick={() => {
+              if (slide.kind === 'promo') {
+                onOpenPromo?.(slide);
+                return;
+              }
+              if (slide.outletId) onOpenOutlet?.(slide.outletId);
+            }}
+            className="relative min-w-full snap-center h-36 sm:h-40 overflow-hidden rounded-2xl p-0 border-0 bg-slate-100"
+            aria-label={slide.title || 'Promo'}
           >
-            {slide.image ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={slide.image} alt="" className="absolute inset-0 w-full h-full object-cover" />
-            ) : (
-              <div
-                className={`absolute inset-0 ${
-                  slide.kind === 'coming_soon'
-                    ? 'bg-gradient-to-br from-amber-400 via-orange-500 to-rose-500'
-                    : 'bg-gradient-to-br from-sky-500 via-blue-600 to-indigo-700'
-                }`}
-              />
-            )}
-            <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/25 to-transparent" />
-            <div className="relative z-10 h-full flex flex-col justify-end p-4">
-              {slide.kind === 'coming_soon' && (
-                <span className="self-start mb-1 bg-amber-400 text-amber-950 text-[9px] font-black uppercase tracking-wide px-2 py-0.5 rounded-full">
-                  Coming Soon · Outlet Baru
-                </span>
-              )}
-              <p className="text-white text-sm font-black leading-tight">{slide.title}</p>
-              {slide.subtitle && <p className="text-white/85 text-[11px] font-medium mt-0.5 line-clamp-2">{slide.subtitle}</p>}
-            </div>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={slide.image} alt="" className="absolute inset-0 w-full h-full object-cover" />
           </button>
         ))}
       </div>
-      {slides.length > 1 && (
+      {imageSlides.length > 1 && (
         <div className="flex justify-center gap-1.5 mt-2">
-          {slides.map((s, i) => (
+          {imageSlides.map((s, i) => (
             <span key={s.id} className={`h-1.5 rounded-full transition-all ${i === idx ? 'w-5 bg-blue-600' : 'w-1.5 bg-slate-300'}`} />
           ))}
         </div>

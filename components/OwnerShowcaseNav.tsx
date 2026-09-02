@@ -4,7 +4,7 @@ import Link from 'next/link';
 
 const ITEMS = [
   { href: '/owner/settings/outlets', id: 'outlets', label: 'Profil Outlet' },
-  { href: '/owner/settings/promos', id: 'promos', label: 'Banner Promo' },
+  { href: '/owner/promos', id: 'promos', label: 'Banner Promo' },
   { href: '/owner/machines', id: 'machines', label: 'Mesin Cuci' }
 ] as const;
 
