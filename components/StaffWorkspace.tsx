@@ -8,6 +8,7 @@ import {
   canAccessKpiSettings,
   canAccessFinanceRecon,
   getStaffSession,
+  isCsRole,
   isHeadManagementRole
 } from '@/lib/staffSession';
 import { inboxRolesFor, isTaskCompleted, isTaskInProgress, isTaskOverdueOpen } from '@/lib/taskRoles';
@@ -254,12 +255,16 @@ export default function StaffWorkspace() {
                 Analytics
               </Link>
             )}
-            <Link href="/history" className="text-[11px] font-semibold px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50">
-              Transaksi
-            </Link>
-            <Link href="/pos/queue" className="text-[11px] font-semibold px-3 py-1.5 rounded-lg border border-cyan-200 bg-cyan-50 text-cyan-800 hover:bg-cyan-100">
-              Antrian Mesin
-            </Link>
+            {!isCsRole(role) && (
+              <>
+                <Link href="/history" className="text-[11px] font-semibold px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50">
+                  Transaksi
+                </Link>
+                <Link href="/pos/queue" className="text-[11px] font-semibold px-3 py-1.5 rounded-lg border border-cyan-200 bg-cyan-50 text-cyan-800 hover:bg-cyan-100">
+                  Antrian Mesin
+                </Link>
+              </>
+            )}
             {canAccessKpiSettings(role) && (
               <Link href="/owner/kpi-settings" className="text-[11px] font-semibold px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50">
                 KPI Settings

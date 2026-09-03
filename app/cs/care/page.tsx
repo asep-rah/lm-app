@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 import { Camera, CheckCircle2, Headphones, Phone, Store, User } from 'lucide-react';
 import { supabase } from '@/lib/supabaseClient';
 import { getStaffSession, homePathForRole } from '@/lib/staffSession';
@@ -199,25 +198,9 @@ export default function CsCarePage() {
               <Headphones className="w-5 h-5" strokeWidth={2.2} />
             </span>
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-rose-600">Customer Service Care</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-rose-600">CS Care</p>
               <h1 className="text-lg font-black text-slate-900">Inbox Resolusi Komplain</h1>
             </div>
-          </div>
-          <div className="flex gap-2">
-            <Link href="/cs" className="text-[11px] font-semibold px-3 py-1.5 rounded-lg bg-sky-600 text-white">
-              Live Chat
-            </Link>
-            <button
-              type="button"
-              onClick={() => {
-                localStorage.removeItem('laundry_user');
-                localStorage.removeItem('laundry_owner_user');
-                window.location.href = '/login';
-              }}
-              className="text-[11px] font-semibold px-3 py-1.5 rounded-lg text-rose-600 border border-rose-100"
-            >
-              Keluar
-            </button>
           </div>
         </div>
       </header>

@@ -1,6 +1,6 @@
 import { toast, type ToastTone } from '@/lib/toast';
 
-export type OpsNotifyKind = 'chat' | 'payment' | 'complaint' | 'scan_ok' | 'scan_err';
+export type OpsNotifyKind = 'chat' | 'payment' | 'complaint' | 'pickup' | 'scan_ok' | 'scan_err';
 
 let audioCtx: AudioContext | null = null;
 let unlocked = false;
@@ -18,16 +18,39 @@ export const unlockOpsAudio = () => {
   }
 };
 
+const lastAt: Record<string, number> = {};
+
+const playFileChime = () => {
+  if (typeof window === 'undefined') return false;
+  const playSrc = (src: string) => {
+    const el = new Audio(src);
+    el.volume = 0.45;
+    return el.play();
+  };
+  try {
+    const p = playSrc('/sounds/notification.mp3');
+    if (p && typeof p.catch === 'function') {
+      p.catch(() => playSrc('/sounds/notification.wav').catch(() => {}));
+    }
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const tone = (kind: OpsNotifyKind): { freq: number; dur: number; vol: number; repeats: number } => {
   if (kind === 'scan_err') return { freq: 220, dur: 0.28, vol: 0.16, repeats: 4 };
   if (kind === 'scan_ok') return { freq: 880, dur: 0.12, vol: 0.1, repeats: 2 };
   if (kind === 'complaint') return { freq: 1046, dur: 0.18, vol: 0.12, repeats: 3 };
-  if (kind === 'payment') return { freq: 784, dur: 0.22, vol: 0.1, repeats: 2 };
+  if (kind === 'payment' || kind === 'pickup') return { freq: 784, dur: 0.22, vol: 0.1, repeats: 2 };
   return { freq: 880, dur: 0.16, vol: 0.08, repeats: 1 };
 };
 
 export const playOpsSound = (kind: OpsNotifyKind = 'chat') => {
   if (typeof window === 'undefined') return;
+  if (kind === 'chat' || kind === 'pickup' || kind === 'complaint' || kind === 'payment') {
+    if (playFileChime()) return;
+  }
   try {
     unlockOpsAudio();
     const Ctx = window.AudioContext || (window as any).webkitAudioContext;
@@ -52,8 +75,6 @@ export const playOpsSound = (kind: OpsNotifyKind = 'chat') => {
     /* ignore */
   }
 };
-
-const lastAt: Record<string, number> = {};
 
 export const notifyOps = (
   kind: OpsNotifyKind,

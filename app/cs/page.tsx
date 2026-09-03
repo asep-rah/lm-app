@@ -908,7 +908,7 @@ export default function CsCommandCenter() {
 
   return (
     <div
-      className="h-screen bg-slate-50 text-slate-900 flex flex-col overflow-hidden"
+      className="h-[calc(100dvh-4.35rem)] bg-slate-50 text-slate-900 flex flex-col overflow-hidden"
       onPointerDown={() => {
         unlockOpsAudio();
         setAudioReady(true);
@@ -916,9 +916,9 @@ export default function CsCommandCenter() {
     >
       <header className="bg-white border-b border-slate-200/80 px-4 py-2.5 flex items-center gap-4 shrink-0">
         <div className="min-w-[160px]">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-sky-600">CS Command Center</p>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-sky-600">Live Chat</p>
           <p className="text-sm font-black text-slate-900 flex items-center gap-2">
-            {agent.name}
+            Antrean percakapan
             {unassignedCount > 0 && <StatusBadge tone="rose">{unassignedCount} antri</StatusBadge>}
             {pendingBills.length > 0 && <StatusBadge tone="amber">{pendingBills.length} bayar</StatusBadge>}
           </p>
@@ -957,15 +957,6 @@ export default function CsCommandCenter() {
             </div>
           </div>
         </div>
-        <Link href="/workspace" className="text-[11px] font-bold text-slate-500 border border-slate-200 rounded-xl px-3 py-2">
-          Workspace
-        </Link>
-        <Link href="/cs/care" className="text-[11px] font-bold text-rose-700 border border-rose-200 rounded-xl px-3 py-2">
-          CS Care
-        </Link>
-        <Link href="/cs/dashboard" className="text-[11px] font-bold text-slate-500 border border-slate-200 rounded-xl px-3 py-2">
-          Ops Dashboard
-        </Link>
       </header>
 
       {pendingBills.length > 0 && (
@@ -1279,8 +1270,8 @@ export default function CsCommandCenter() {
               >
                 WhatsApp
               </a>
-              <Link href="/cs/dashboard" className="flex-1 text-center text-[10px] font-bold bg-sky-50 text-sky-700 py-2 rounded-xl">
-                Pickup
+              <Link href="/cs/workspace" className="flex-1 text-center text-[10px] font-bold bg-sky-50 text-sky-700 py-2 rounded-xl">
+                Workspace
               </Link>
             </div>
             {pendingPayOrders.length > 0 && (

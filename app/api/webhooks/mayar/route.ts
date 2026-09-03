@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { insertChatMessage } from '@/lib/csChat';
+import { notifyCustomerPayment } from '@/lib/notifications';
 import { completePaymentVerifyTasks, gatewayPaidAttempts } from '@/lib/paymentVerify';
 import { isMayarPaidEvent, mayarWebhookRefs } from '@/lib/mayar';
 import { creditDepositTopup, depositPackageOf, findDepositTopup } from '@/lib/depositTopup';
@@ -57,6 +58,7 @@ const applyPaid = async (tx: any, agentName: string) => {
           sender_name: agentName,
           message: `Pembayaran QRIS sebesar Rp ${nominal} sudah terkonfirmasi (${agentName}). Cucian masuk antrean produksi.`
         });
+        notifyCustomerPayment(tx.customer_phone);
       }
       return { error: null };
     }

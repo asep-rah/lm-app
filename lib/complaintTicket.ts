@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabaseClient';
 import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
 import { canonicalPhone } from '@/lib/csChat';
+import { notifyCsPortal } from '@/lib/notifications';
 
 const parseIssueField = (body: string, label: string) => {
   const m = String(body || '').match(new RegExp(`${label}:\\s*(.+)`, 'i'));
@@ -119,6 +120,7 @@ export async function ensureComplaintTicketFromIssue(issue: any): Promise<Compla
     return null;
   }
   const ticket = data[0];
+  notifyCsPortal('cs_complaint', 'Tiket komplain baru. Buka CS Care.');
   await insertTicketMessage({
     ticketId: ticket.id,
     senderType: 'customer',

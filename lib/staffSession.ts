@@ -91,8 +91,7 @@ export const canCreateRequisition = (role: string) =>
 export const homePathForRole = (role: string) => {
   const r = String(role || '').toLowerCase().trim();
   if (isOwnerRole(r)) return '/owner';
-  if (r === 'cs_care') return '/cs/care';
-  if (isWorkspaceRole(r)) return '/workspace';
+  if (isCsRole(r)) return '/cs/workspace';
   if (['driver', 'courier', 'kurir'].includes(r)) return '/driver/dashboard';
   if (r === 'investor') return '/investor';
   if (r === 'kasir' || r === 'pos') return '/pos';

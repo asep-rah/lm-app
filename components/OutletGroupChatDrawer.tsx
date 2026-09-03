@@ -28,7 +28,7 @@ const friendlyChatSendError = (raw?: string) => {
   return 'Pesan belum terkirim. Coba lagi sebentar.';
 };
 
-export default function OutletGroupChatDrawer() {
+export default function OutletGroupChatDrawer({ embedded = false }: { embedded?: boolean }) {
   const pathname = usePathname();
   const [ready, setReady] = useState(false);
   const [open, setOpen] = useState(false);
@@ -42,9 +42,11 @@ export default function OutletGroupChatDrawer() {
   const [customerOnly, setCustomerOnly] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
+  const onPosPath = String(pathname || '').startsWith('/pos');
   const onCustomerSurface = isCustomerFacingPath(pathname) || customerOnly;
   const canUse = !onCustomerSurface && canAccessOutletGroupChat(role, pathname);
   const canSwitch = canSwitchOutletGroupChat(role);
+  const skipRoom = onPosPath && !embedded;
 
   useEffect(() => {
     const staffRaw = localStorage.getItem('laundry_owner_user') || localStorage.getItem('laundry_user');
@@ -67,7 +69,7 @@ export default function OutletGroupChatDrawer() {
   }, [onCustomerSurface]);
 
   useEffect(() => {
-    if (!canUse) return;
+    if (!canUse || skipRoom) return;
     supabase
       .from('outlets')
       .select('id, name')
@@ -77,10 +79,10 @@ export default function OutletGroupChatDrawer() {
         setOutlets(list);
         setOutletId((cur) => matchOutletUuid(list, cur) || uuidOrNull(cur) || cur || list[0]?.id || '');
       });
-  }, [canUse]);
+  }, [canUse, skipRoom]);
 
   useEffect(() => {
-    if (!canUse || !outletId) {
+    if (skipRoom || !canUse || !outletId) {
       setRows([]);
       return;
     }
@@ -114,19 +116,21 @@ export default function OutletGroupChatDrawer() {
       }
     };
     load();
+    const topic = `internal_outlet_chats_${outletId}_${embedded ? 'emb' : 'float'}_${Math.random().toString(36).slice(2, 8)}`;
     const ch = supabase
-      .channel('internal_outlet_chats_' + outletId)
+      .channel(topic)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'internal_outlet_chats' }, () => load())
       .subscribe();
     return () => {
       cancelled = true;
       supabase.removeChannel(ch);
     };
-  }, [canUse, outletId]);
+  }, [canUse, outletId, skipRoom, embedded]);
 
   useEffect(() => {
+    if (!embedded && !open) return;
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [rows.length, open]);
+  }, [rows.length, open, embedded]);
 
   const send = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -195,9 +199,93 @@ export default function OutletGroupChatDrawer() {
     }
   };
 
-  if (!ready || onCustomerSurface || !canUse) return null;
+  if (!ready || onCustomerSurface || !canUse || skipRoom) return null;
 
   const roomName = outlets.find((o) => o.id === outletId)?.name || 'Outlet';
+
+  const header = (
+    <div className="p-4 border-b border-slate-100 space-y-2">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-sky-600">Internal</p>
+          <h2 className="text-base font-black text-slate-900">Grup Koordinasi Outlet</h2>
+        </div>
+        {!embedded && (
+          <button type="button" onClick={() => setOpen(false)} className="text-xs font-bold text-slate-400">
+            Tutup
+          </button>
+        )}
+      </div>
+      {canSwitch ? (
+        <select
+          value={outletId}
+          onChange={(e) => setOutletId(e.target.value)}
+          className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold bg-slate-50"
+        >
+          {outlets.map((o) => (
+            <option key={o.id} value={o.id}>{o.name}</option>
+          ))}
+        </select>
+      ) : (
+        <p className="text-xs font-semibold text-slate-600 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
+          Room: {roomName}
+        </p>
+      )}
+    </div>
+  );
+
+  const messages = (
+    <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-slate-50 min-h-0">
+      {rows.length === 0 && (
+        <p className="text-center text-xs text-slate-400 py-10">Belum ada pesan di room ini.</p>
+      )}
+      {rows.map((m) => {
+        const mine = m.sender_name === name && m.sender_role === role;
+        return (
+          <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
+            <div className={`max-w-[85%] rounded-2xl px-3 py-2 text-xs ${mine ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200'}`}>
+              <p className={`text-[9px] font-bold uppercase mb-0.5 ${mine ? 'text-slate-300' : 'text-slate-400'}`}>
+                {m.sender_name || 'Staf'} · {m.sender_role || '—'}
+              </p>
+              <p className="leading-relaxed whitespace-pre-wrap">{m.message}</p>
+              <p className={`text-[9px] mt-1 ${mine ? 'text-slate-400' : 'text-slate-400'}`}>
+                {m.created_at ? new Date(m.created_at).toLocaleString('id-ID') : ''}
+              </p>
+            </div>
+          </div>
+        );
+      })}
+      <div ref={bottomRef} />
+    </div>
+  );
+
+  const composer = (
+    <form onSubmit={send} className="p-3 border-t border-slate-100 flex gap-2">
+      <input
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="Tulis koordinasi outlet…"
+        className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-xs"
+      />
+      <button
+        type="submit"
+        disabled={sending || !text.trim()}
+        className="bg-slate-900 text-white text-xs font-bold px-3 rounded-xl disabled:opacity-50"
+      >
+        Kirim
+      </button>
+    </form>
+  );
+
+  if (embedded) {
+    return (
+      <div className="flex flex-col h-[70vh] min-h-[420px] border border-slate-200 rounded-2xl overflow-hidden bg-white">
+        {header}
+        {messages}
+        {composer}
+      </div>
+    );
+  }
 
   return (
     <>
@@ -214,71 +302,9 @@ export default function OutletGroupChatDrawer() {
         <div className="fixed inset-0 z-[75] flex justify-end">
           <button type="button" className="flex-1 bg-black/30" aria-label="Tutup" onClick={() => setOpen(false)} />
           <aside className="w-full max-w-md h-full bg-white shadow-2xl flex flex-col">
-            <div className="p-4 border-b border-slate-100 space-y-2">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-sky-600">Internal</p>
-                  <h2 className="text-base font-black text-slate-900">Grup Koordinasi Outlet</h2>
-                </div>
-                <button type="button" onClick={() => setOpen(false)} className="text-xs font-bold text-slate-400">
-                  Tutup
-                </button>
-              </div>
-              {canSwitch ? (
-                <select
-                  value={outletId}
-                  onChange={(e) => setOutletId(e.target.value)}
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold bg-slate-50"
-                >
-                  {outlets.map((o) => (
-                    <option key={o.id} value={o.id}>{o.name}</option>
-                  ))}
-                </select>
-              ) : (
-                <p className="text-xs font-semibold text-slate-600 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
-                  Room: {roomName}
-                </p>
-              )}
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-3 space-y-2 bg-slate-50">
-              {rows.length === 0 && (
-                <p className="text-center text-xs text-slate-400 py-10">Belum ada pesan di room ini.</p>
-              )}
-              {rows.map((m) => {
-                const mine = m.sender_name === name && m.sender_role === role;
-                return (
-                  <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[85%] rounded-2xl px-3 py-2 text-xs ${mine ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200'}`}>
-                      <p className={`text-[9px] font-bold uppercase mb-0.5 ${mine ? 'text-slate-300' : 'text-slate-400'}`}>
-                        {m.sender_name || 'Staf'} · {m.sender_role || '—'}
-                      </p>
-                      <p className="leading-relaxed whitespace-pre-wrap">{m.message}</p>
-                      <p className={`text-[9px] mt-1 ${mine ? 'text-slate-400' : 'text-slate-400'}`}>
-                        {m.created_at ? new Date(m.created_at).toLocaleString('id-ID') : ''}
-                      </p>
-                    </div>
-                  </div>
-                );
-              })}
-              <div ref={bottomRef} />
-            </div>
-
-            <form onSubmit={send} className="p-3 border-t border-slate-100 flex gap-2">
-              <input
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                placeholder="Tulis koordinasi outlet…"
-                className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-xs"
-              />
-              <button
-                type="submit"
-                disabled={sending || !text.trim()}
-                className="bg-slate-900 text-white text-xs font-bold px-3 rounded-xl disabled:opacity-50"
-              >
-                Kirim
-              </button>
-            </form>
+            {header}
+            {messages}
+            {composer}
           </aside>
         </div>
       )}

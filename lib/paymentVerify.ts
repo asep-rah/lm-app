@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabaseClient';
 import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
 import { canonicalPhone, insertChatMessage } from '@/lib/csChat';
+import { notifyCustomerPayment } from '@/lib/notifications';
 
 export const PENDING_PAY_STATUS = 'menunggu_pembayaran';
 
@@ -168,6 +169,7 @@ export async function markInvoicePaid(opts: {
     });
   }
 
+  notifyCustomerPayment(opts.customerPhone);
   return { error: null };
 }
 

@@ -1,6 +1,7 @@
 import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
 import { supabase } from '@/lib/supabaseClient';
 import { updatePickupOrder } from '@/lib/pickupUpdates';
+import { notifyStaffNewOrder } from '@/lib/notifications';
 
 const schemaMissesColumn = (err: { message?: string } | null | undefined, column: string) => {
   const msg = String(err?.message || '').toLowerCase();
@@ -60,7 +61,7 @@ export async function insertPickupOrder(
     scheduled_at: payload.scheduled_at || payload.pickup_at || null
   };
 
-  return insertWithFallback<{ id: string }>(
+  const result = await insertWithFallback<{ id: string }>(
     'pickup_orders',
     [
       payload,
@@ -98,6 +99,14 @@ export async function insertPickupOrder(
     ],
     { select: 'id' }
   );
+  if (!result.error) {
+    notifyStaffNewOrder({
+      outletId: String(payload.outlet_id || core.outlet_id || '') || null,
+      customerName: String(core.customer_name || ''),
+      service: String(core.service_type || '')
+    });
+  }
+  return result;
 }
 
 export async function createPickupRoleTasks(order: {

@@ -9,8 +9,9 @@ import StageTimeline from '@/components/StageTimeline';
 import { PAID_STAGE_KEYS, stageKeyOf } from '@/lib/stageTimeline';
 import RequisitionForm from '@/components/RequisitionForm';
 import OutletIssueForm from '@/components/OutletIssueForm';
-import RoleTaskInbox from '@/components/RoleTaskInbox';
-import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
+import OutletGroupChatDrawer from '@/components/OutletGroupChatDrawer';
+import PosBottomNavbar, { type PosTab } from '@/components/pos/PosBottomNavbar';
+import { isOnlineOrderType, logCashflow, logInventoryChange, payBucket, writeSubmission } from '@/lib/posSync';
 import { updatePickupOrder, markPickupConvertedToPos } from '@/lib/pickupUpdates';
 import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
 import { uploadProofFile } from '@/lib/uploadProof';
@@ -21,6 +22,8 @@ import { sendInvoiceToLiveChat } from '@/lib/chatInvoice';
 import { simulateMayarAutoPay } from '@/lib/mayar';
 import { creditCustomerDeposit, decrementCustomerDeposit } from '@/lib/depositTopup';
 import { toast } from '@/lib/toast';
+import { notifyCustomerStatus } from '@/lib/notifications';
+import { maybeAwardLoyalty } from '@/lib/crm-automation';
 import { dispatchThirdPartyDelivery, isThirdPartyDelivery } from '@/lib/thirdPartyDelivery';
 import ThirdPartyDispatchForm from '@/components/ThirdPartyDispatchForm';
 import ThirdPartyDeliveryCard from '@/components/ThirdPartyDeliveryCard';
@@ -189,7 +192,11 @@ interface PickupItem {
 }
 
 export function POSContent() {
-  const [activeTab, setActiveTab] = useState<'pos' | 'workflow' | 'pickup' | 'member' | 'expense' | 'performance'>('pos');
+  const [activeTab, setActiveTab] = useState<PosTab>('home');
+  const [pengajuanSub, setPengajuanSub] = useState<'pembelian' | 'kendala' | 'kasbon' | 'stok'>('pembelian');
+  const [homeModal, setHomeModal] = useState<'kasir' | 'customer' | 'member' | 'online' | null>(null);
+  const [prosesView, setProsesView] = useState<'cuci' | 'rak'>('cuci');
+  const lastGpsRef = useRef<{ lat: number; lon: number } | null>(null);
 
   const [employeeId, setEmployeeId] = useState('');
   const [employeeName, setEmployeeName] = useState('Memuat...');
@@ -241,6 +248,17 @@ export function POSContent() {
   const router = useRouter();
   const pathname = usePathname();
   const skipPickupPrefillRef = useRef(false);
+  const [newCustName, setNewCustName] = useState('');
+  const [newCustPhone, setNewCustPhone] = useState('');
+  const [incomingPickups, setIncomingPickups] = useState<any[]>([]);
+  const [dailyMetrics, setDailyMetrics] = useState({
+    offlineCount: 0,
+    onlineCount: 0,
+    revenue: 0,
+    cash: 0,
+    qris: 0,
+    deposit: 0
+  });
   const [customerOrder, setCustomerOrder] = useState<CustomerOrder | null>(null);
   const [address, setAddress] = useState('');
   const [bagCount, setBagCount] = useState('1');
@@ -369,7 +387,11 @@ export function POSContent() {
     if (urlDuration) setDuration(normalizePosDuration(decodeURIComponent(urlDuration)));
     if (urlWeight && Number(urlWeight) > 0) setInputQtyKg(String(Number(urlWeight)));
     if (urlDeliveryFee) setDeliveryFee(urlDeliveryFee);
-    if (urlName || urlPhone || pickupId) setOrderType(urlOrderType || 'Online');
+    if (urlName || urlPhone || pickupId) {
+      setOrderType(urlOrderType || 'Online');
+      setActiveTab('home');
+      setHomeModal('kasir');
+    }
   
     if (!pickupId) return;
   
@@ -593,20 +615,48 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     return alert('⚠️ Wajib memasukkan Nomor Surat Piutang SPV untuk kasbon di atas limit!');
   }
 
-  const { error } = await supabase.from('employee_loans').insert([
+  const { data: loanRows, error } = await insertWithFallback<{ id: string }>('employee_loans', [
     {
       employee_id: employeeId || '00000000-0000-0000-0000-000000000000',
+      employee_name: employeeName,
       outlet_id: selectedOutlet,
       amount: amount,
+      total_loan: amount,
       reason: loanReason.trim(),
+      notes: loanReason.trim(),
       status: 'pending',
       is_special_loan: isSpecialLoan,
       piutang_doc_number: isSpecialLoan ? piutangDocNo.trim() : null,
       max_allowed_at_submission: maxAutoLoan
+    },
+    {
+      employee_name: employeeName,
+      outlet_id: selectedOutlet,
+      amount: amount,
+      total_loan: amount,
+      reason: loanReason.trim(),
+      status: 'pending'
+    },
+    {
+      employee_name: employeeName,
+      outlet_id: selectedOutlet,
+      amount: amount,
+      reason: loanReason.trim(),
+      status: 'pending'
     }
-  ]);
+  ], { select: 'id' });
 
   if (!error) {
+    await writeSubmission({
+      type: 'kasbon',
+      outlet_id: selectedOutlet,
+      requested_by: employeeName,
+      title: `Kasbon ${employeeName}`,
+      amount,
+      description: loanReason.trim(),
+      source_table: 'employee_loans',
+      source_id: loanRows?.[0]?.id || null
+    });
     alert('✅ Pengajuan kasbon dikirim! Menunggu verifikasi dari Supervisor/Owner.');
     setLoanAmount('');
     setLoanReason('');
@@ -837,7 +887,8 @@ const handleApplyLoan = async (e: React.FormEvent) => {
   // FITUR C: TARIK DATA PENJEMPUTAN DRIVER LANGSUNG KE FORM POS
   const handleImportPickupOrder = (pickup: any) => {
     applyPickupToForm(pickup as CustomerOrder);
-    setActiveTab('pos');
+    setActiveTab('home');
+    setHomeModal('kasir');
     alert('✅ 10 Data lengkap penjemputan berhasil ditarik ke Form POS!');
   };
 
@@ -1231,22 +1282,60 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     if (s.includes('selesai')) return false;
     return true;
   });
+  setIncomingPickups(stillIncoming);
   setIncomingPickupsCount(stillIncoming.length);
 
-    const { data: txData } = await supabase.from('transactions').select('amount, order_type, created_at').eq('outlet_id', selectedOutlet);
+    const { data: txData } = await supabase.from('transactions').select('amount, order_type, created_at, payment_method').eq('outlet_id', selectedOutlet);
     const { data: memLogsAll } = await supabase.from('membership_logs').select('price, order_type, created_at').eq('outlet_id', selectedOutlet);
 
+    const isSameDay = (iso: any) => {
+      const d = new Date(iso);
+      return d.getDate() === now.getDate() && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+    };
+
     let totalRev = 0;
+    let dayRev = 0;
+    let dayCash = 0;
+    let dayQris = 0;
+    let dayDeposit = 0;
+    let offlineCount = 0;
+    let onlineCount = 0;
+
     txData?.forEach((tx) => {
       const d = new Date(tx.created_at);
-      if (d.getMonth() === currentMonth && d.getFullYear() === currentYear) { totalRev += Number(tx.amount) || 0; }
+      const amt = Number(tx.amount) || 0;
+      if (d.getMonth() === currentMonth && d.getFullYear() === currentYear) { totalRev += amt; }
+      if (isSameDay(tx.created_at)) {
+        dayRev += amt;
+        const bucket = payBucket(tx.payment_method);
+        if (bucket === 'deposit') dayDeposit += amt;
+        else if (bucket === 'qris') dayQris += amt;
+        else dayCash += amt;
+        if (isOnlineOrderType(tx.order_type)) onlineCount += 1;
+        else offlineCount += 1;
+      }
     });
 
     memLogsAll?.forEach((ml) => {
       const d = new Date(ml.created_at);
-      if (d.getMonth() === currentMonth && d.getFullYear() === currentYear) { totalRev += Number(ml.price) || 0; }
+      const amt = Number(ml.price) || 0;
+      if (d.getMonth() === currentMonth && d.getFullYear() === currentYear) { totalRev += amt; }
+      if (isSameDay(ml.created_at)) {
+        dayRev += amt;
+        dayCash += amt;
+        if (isOnlineOrderType(ml.order_type)) onlineCount += 1;
+        else offlineCount += 1;
+      }
     });
     setMonthlyRevenue(totalRev);
+    setDailyMetrics({
+      offlineCount,
+      onlineCount,
+      revenue: dayRev,
+      cash: dayCash,
+      qris: dayQris,
+      deposit: dayDeposit
+    });
 
     const { data: invData } = await supabase.from('inventory').select('*').eq('outlet_id', selectedOutlet); setInventory(invData || []);
     const { data: logs } = await supabase.from('work_logs').select('*').eq('employee_name', employeeName);
@@ -1316,8 +1405,19 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     }
 
     const currentOutletObj = outletsList.find(o => o.id === selectedOutlet);
+    const captureAndResolve = (ok: boolean, lat?: number, lon?: number) => {
+      if (lat != null && lon != null) lastGpsRef.current = { lat, lon };
+      return ok;
+    };
+
     if (!currentOutletObj || !currentOutletObj.latitude || !currentOutletObj.longitude) {
-      return true;
+      return new Promise((resolve) => {
+        navigator.geolocation.getCurrentPosition(
+          (position) => resolve(captureAndResolve(true, position.coords.latitude, position.coords.longitude)),
+          () => resolve(true),
+          { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+        );
+      });
     }
 
     return new Promise((resolve) => {
@@ -1330,6 +1430,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
           const maxRadius = Number(currentOutletObj.radius_meters) || 200;
 
           const distanceMeters = getDistanceInMeters(userLat, userLon, targetLat, targetLon);
+          lastGpsRef.current = { lat: userLat, lon: userLon };
 
           if (distanceMeters <= maxRadius) {
             resolve(true);
@@ -1353,12 +1454,23 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     if (!isValidGPS) { setIsSubmitting(false); return; }
 
     const todayStr = new Date().toLocaleDateString('en-CA');
-    const { error } = await supabase.from('attendance_logs').insert([{
-      employee_name: employeeName,
-      outlet_id: selectedOutlet === 'ALL' ? null : selectedOutlet,
-      log_date: todayStr,
-      check_in: new Date().toISOString()
-    }]);
+    const gps = lastGpsRef.current;
+    const { error } = await insertWithFallback('attendance_logs', [
+      {
+        employee_name: employeeName,
+        outlet_id: selectedOutlet === 'ALL' ? null : selectedOutlet,
+        log_date: todayStr,
+        check_in: new Date().toISOString(),
+        latitude: gps?.lat ?? null,
+        longitude: gps?.lon ?? null
+      },
+      {
+        employee_name: employeeName,
+        outlet_id: selectedOutlet === 'ALL' ? null : selectedOutlet,
+        log_date: todayStr,
+        check_in: new Date().toISOString()
+      }
+    ]);
 
     if (!error) { alert('✅ Absen Masuk Berhasil!'); refreshData(); } else alert('❌ Gagal: ' + error.message);
     setIsSubmitting(false);
@@ -1369,9 +1481,19 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     const isValidGPS = await verifyOutletGPS();
     if (!isValidGPS) { setIsSubmitting(false); return; }
 
-    const { error } = await supabase.from('attendance_logs').update({
-      check_out: new Date().toISOString()
-    }).eq('id', todayAttendance.id);
+    const gps = lastGpsRef.current;
+    const { error } = await updateWithFallback(
+      'attendance_logs',
+      [
+        {
+          check_out: new Date().toISOString(),
+          check_out_latitude: gps?.lat ?? null,
+          check_out_longitude: gps?.lon ?? null
+        },
+        { check_out: new Date().toISOString() }
+      ],
+      { column: 'id', value: todayAttendance.id }
+    );
 
     if (!error) { alert('✅ Absen Pulang Berhasil!'); refreshData(); } else alert('❌ Gagal: ' + error.message);
     setIsSubmitting(false);
@@ -1574,6 +1696,27 @@ const handleApplyLoan = async (e: React.FormEvent) => {
         outletPhone: curOutletPhone
       });
 
+      const logPay = async (amt: number, method: string, note: string) => {
+        await logCashflow({
+          outlet_id: selectedOutlet,
+          type: 'income',
+          source: 'pos',
+          amount: amt,
+          payment_method: method,
+          reference_id: newTx.id,
+          note,
+          actor_name: employeeName
+        });
+      };
+      if (paymentMethod === 'Split Payment') {
+        const amt1 = Number(splitAmount1) || 0;
+        const amt2 = Math.max(0, totalPay - amt1);
+        await logPay(amt1, splitMethod1, `POS ${generatedResi} · ${splitMethod1}`);
+        if (amt2 > 0) await logPay(amt2, splitMethod2, `POS ${generatedResi} · ${splitMethod2}`);
+      } else {
+        await logPay(totalPay, finalPaymentMethodLabel, `POS ${generatedResi}`);
+      }
+
       // Nota POS = cucian diterima kasir. Pickup tetap aktif di Beranda pelanggan
       // (bukan Selesai) sampai diserahkan / diantar.
     const params = new URLSearchParams(window.location.search);
@@ -1587,6 +1730,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       setCustomerOrder(null);
       clearPickupPrefill();
       setAmount(''); setCustomerName(''); setCustomerPhone(''); setWeightKg(''); setPcsCount(''); setNotes(''); setDiscountValue(''); setCartItems([]); setSplitPerBag(false); setDeliveryFee(orderType === 'Online' ? '20000' : '');
+      setHomeModal(null);
       refreshData();
     } else alert('❌ Gagal: ' + error?.message);
     setIsSubmitting(false);
@@ -1674,7 +1818,16 @@ const handleApplyLoan = async (e: React.FormEvent) => {
 
     const { error: logErr } = await supabase.from('membership_logs').insert([{ outlet_id: selectedOutlet, processed_by: employeeName, commission_owner: commissionOwner, customer_phone: normalizedPhone, package_name: memberPackage, price: price, balance_added: balanceAdded, commission: commission, order_type: memberOrderType }]);
     if (!logErr) {
-      setMemberPhone(''); setMemberName(''); setSuccessMsg(`✅ Top-Up Berhasil! Saldo: Rp ${newBalance.toLocaleString('id-ID')}`); refreshData(); setTimeout(() => setSuccessMsg(''), 5000); 
+      await logCashflow({
+        outlet_id: selectedOutlet,
+        type: 'income',
+        source: 'membership',
+        amount: price,
+        payment_method: memberOrderType === 'Online' ? 'QRIS' : 'Cash',
+        note: `Top Up Deposit ${memberPackage} · ${normalizedPhone}`,
+        actor_name: employeeName
+      });
+      setMemberPhone(''); setMemberName(''); setSuccessMsg(`✅ Top-Up Berhasil! Saldo: Rp ${newBalance.toLocaleString('id-ID')}`); setHomeModal(null); refreshData(); setTimeout(() => setSuccessMsg(''), 5000); 
     } else alert('❌ Gagal: ' + logErr.message);
     setIsSubmitting(false);
   };
@@ -1687,9 +1840,51 @@ const handleApplyLoan = async (e: React.FormEvent) => {
 
   const handleAddStock = async (e: React.FormEvent) => {
     e.preventDefault(); if (!selectedOutlet || !stockAddAmount) return; setIsSubmitting(true);
+    const qty = Number(stockAddAmount) || 0;
     const { data: invData } = await supabase.from('inventory').select('*').eq('outlet_id', selectedOutlet).eq('item_name', stockItem).single();
-    if (invData) await supabase.from('inventory').update({ stock_ml_gram: Number(invData.stock_ml_gram) + Number(stockAddAmount) * 1000 }).eq('id', invData.id); else await supabase.from('inventory').insert([{ outlet_id: selectedOutlet, item_name: stockItem, stock_ml_gram: Number(stockAddAmount) * 1000 }]);
+    if (invData) await supabase.from('inventory').update({ stock_ml_gram: Number(invData.stock_ml_gram) + qty * 1000 }).eq('id', invData.id); else await supabase.from('inventory').insert([{ outlet_id: selectedOutlet, item_name: stockItem, stock_ml_gram: qty * 1000 }]);
+    await logInventoryChange({
+      outlet_id: selectedOutlet,
+      item_name: stockItem,
+      qty,
+      unit: 'kg',
+      note: 'Input stok kasir',
+      actor_name: employeeName
+    });
+    await writeSubmission({
+      type: 'stock',
+      outlet_id: selectedOutlet,
+      requested_by: employeeName,
+      title: `Input Stok ${stockItem}`,
+      amount: 0,
+      description: `+${qty} ${stockItem}`,
+      source_table: 'inventory_logs'
+    });
     setStockAddAmount(''); setSuccessMsg(`✅ Stok Ditambah!`); refreshData(); setTimeout(() => setSuccessMsg(''), 3000); setIsSubmitting(false);
+  };
+
+  const handleRegisterCustomer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const phone = cleanPhone(newCustPhone);
+    const name = newCustName.trim();
+    if (!phone || !name) return alert('Lengkapi nama dan nomor WhatsApp.');
+    setIsSubmitting(true);
+    const { error } = await insertWithFallback('customers', [
+      { phone, name, registered_by: employeeName, outlet_id: selectedOutlet, deposit_balance: 0 },
+      { phone, name, registered_by: employeeName, deposit_balance: 0 },
+      { phone, name }
+    ]);
+    if (error) alert('❌ Gagal daftar konsumen: ' + error.message);
+    else {
+      setSuccessMsg(`✅ ${name} terdaftar.`);
+      setCustomerName(name);
+      setCustomerPhone(newCustPhone);
+      setNewCustName('');
+      setNewCustPhone('');
+      setHomeModal(null);
+      setTimeout(() => setSuccessMsg(''), 4000);
+    }
+    setIsSubmitting(false);
   };
 // Helper Hitung & Deduct Stok Bahan Baku (Deterjen & Parfum)
   const deductChemicalInventory = async (orderItemName: string, qtyKgOrPcs: number, outletId: string) => {
@@ -1911,6 +2106,11 @@ const handleStatusChange = async (
       console.error('Error updating transaction status:', updateError);
       alert('Gagal mengubah status: ' + (updateError.message || 'Koneksi bermasalah'));
       return;
+    }
+    notifyCustomerStatus(order.customer_phone, targetStatus);
+
+    if (!isSubItem && stageKeyOf(targetStatus) === 'selesai') {
+      maybeAwardLoyalty({ ...order, status: targetStatus });
     }
 
     // 3. Sinkronkan pickup_orders hanya bila transaksi benar-benar punya referensi
@@ -2311,10 +2511,12 @@ const handleStatusChange = async (
       await updatePickupOrder(order.pickup_id, { status: 'Selesai' });
     } else {
       await supabase.from('pickup_orders').update({ status: 'Selesai' }).eq('transaction_id', order.id);
+      notifyCustomerStatus(order.customer_phone, 'Selesai');
     }
 
     setPickupOrders((prev) => prev.filter((o) => o.id !== order.id));
     setCompletedPickups((prev) => [{ ...order, status: 'Selesai' }, ...prev.filter((o) => o.id !== order.id)]);
+    maybeAwardLoyalty({ ...order, status: 'Selesai' });
     setSuccessMsg('✅ Diserahkan!'); refreshData(); setTimeout(() => setSuccessMsg(''), 3000); setIsSubmitting(false);
   };
 
@@ -3087,92 +3289,56 @@ const handleStatusChange = async (
         </div>
       )}
 
-<div className="print:hidden min-h-screen bg-slate-50 text-slate-900 p-3 md:p-6 pb-24 md:pb-8 font-sans">
+<div className="print:hidden min-h-screen bg-slate-50 text-slate-900 p-3 md:p-6 pb-24 font-sans">
       <div className="w-full max-w-7xl mx-auto bg-white border border-slate-200/80 rounded-2xl p-4 md:p-5 mb-5 shadow-sm hover:shadow-md transition-all flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 min-w-0">
           <div className="w-11 h-11 bg-emerald-500 rounded-2xl flex items-center justify-center text-xl text-white shadow-sm shrink-0">
             🛒
           </div>
-          <div>
+          <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h1 className="text-lg md:text-xl font-black tracking-tight text-slate-900">Kasir POS</h1>
               <span className="bg-emerald-50 text-emerald-700 text-[9px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider">Live</span>
             </div>
-            <p className="text-xs text-slate-400 font-medium mt-0.5">
+            <p className="text-xs text-slate-400 font-medium mt-0.5 truncate">
               {employeeName || 'Kasir'} <span className="text-slate-500">@{employeeUsername}</span>
             </p>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
-          {isMultiOutletUser && outletsList.length > 0 && (
-            <select 
-              value={selectedOutlet} 
-              onChange={(e) => handleOutletChange(e.target.value)} 
-              className="flex-1 md:flex-initial bg-slate-50 border border-slate-200 text-slate-800 text-xs rounded-xl px-3 py-2.5 font-bold focus:outline-none focus:ring-2 focus:ring-sky-500"
-            >
-              {outletsList.map((o) => (
-                <option key={o.id} value={o.id}>{o.name}</option>
-              ))}
-            </select>
-          )}
+        <div className="flex flex-wrap items-center justify-end gap-2 w-full md:w-auto">
+          {outletsList.length > 0 ? (
+            isMultiOutletUser ? (
+              <select
+                value={selectedOutlet}
+                onChange={(e) => handleOutletChange(e.target.value)}
+                className="flex-1 md:flex-initial bg-slate-50 border border-slate-200 text-slate-800 text-xs rounded-xl px-3 py-2.5 font-bold focus:outline-none focus:ring-2 focus:ring-sky-500"
+              >
+                {outletsList.map((o) => (
+                  <option key={o.id} value={o.id}>{o.name}</option>
+                ))}
+              </select>
+            ) : (
+              <span className="flex-1 md:flex-initial bg-slate-50 border border-slate-200 text-slate-800 text-xs rounded-xl px-3 py-2.5 font-bold truncate">
+                {outletName}
+              </span>
+            )
+          ) : null}
           <Link
             href="/pos/queue"
-            className="bg-cyan-50 hover:bg-cyan-600 border border-cyan-200 text-cyan-800 hover:text-white text-xs font-bold px-3 py-2.5 rounded-xl transition-all"
+            className="ml-auto bg-cyan-50 hover:bg-cyan-600 border border-cyan-200 text-cyan-800 hover:text-white text-xs font-bold px-3 py-2.5 rounded-xl transition-all"
           >
-            Antrian Mesin
+            Antrean Mesin
           </Link>
-          <button 
-            onClick={handleLogout} 
-            className="bg-rose-50 hover:bg-rose-500 border border-rose-200 text-rose-600 hover:text-white active:scale-95 text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
-          >
-            Keluar
-          </button>
         </div>
       </div>
 
-        {/* DESKTOP NAV BAR */}
-        <div className="hidden md:grid w-full max-w-7xl mx-auto grid-cols-7 gap-1 p-1.5 bg-white border border-slate-200/80 rounded-xl mb-5 shadow-sm">
-          <button onClick={() => setActiveTab('pos')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'pos' ? 'bg-emerald-600 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>🛒 POS</button>
-          
-          <Link href="/admin/pickups" className="py-2 rounded-lg text-[10px] font-bold text-center bg-blue-50 text-blue-800 border border-blue-200 hover:bg-blue-100 flex items-center justify-center gap-0.5 relative transition">
-            <span>🛵 Online</span>
-            {incomingPickupsCount > 0 && (
-              <span className="bg-rose-500 text-white text-[8px] font-black px-1.5 py-0.2 rounded-full ml-0.5 animate-pulse">
-                {incomingPickupsCount}
-              </span>
-            )}
-          </Link>
-
-          <button onClick={() => setActiveTab('workflow')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'workflow' ? 'bg-amber-500 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>⚙️ Proses ({activeOrders.length})</button>
-          <button onClick={() => setActiveTab('pickup')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'pickup' ? 'bg-blue-600 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>🛍️ Ambil ({pickupOrders.length})</button>
-          <button onClick={() => setActiveTab('member')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'member' ? 'bg-purple-600 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>💳 Membership</button>
-          <button onClick={() => setActiveTab('expense')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'expense' ? 'bg-rose-500 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>💸 Pengajuan</button>
-          <button onClick={() => setActiveTab('performance')} className={`py-2 rounded-lg text-[10px] font-bold ${activeTab === 'performance' ? 'bg-indigo-600 text-white shadow' : 'text-slate-500 hover:bg-slate-100'}`}>📊 Gaji</button>
-        </div>
-
-        {/* MOBILE BOTTOM NAV BAR */}
-        <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 flex justify-around p-2 pb-5 z-50 shadow-[0_-4px_10px_rgba(0,0,0,0.05)]">
-          <button onClick={() => setActiveTab('pos')} className={`flex flex-col items-center flex-1 p-1 ${activeTab === 'pos' ? 'text-emerald-600' : 'text-slate-400'}`}><span className="text-xl">🛒</span><span className="text-[9px] font-bold mt-1">POS</span></button>
-          
-          <Link href="/admin/pickups" className="flex flex-col items-center flex-1 p-1 text-blue-700">
-            <span className="text-xl relative">
-              🛵
-              {incomingPickupsCount > 0 && (
-                <span className="absolute -top-1 -right-2 bg-rose-500 text-white text-[8px] rounded-full px-1 font-bold animate-pulse">
-                  {incomingPickupsCount}
-                </span>
-              )}
-            </span>
-            <span className="text-[9px] font-bold mt-1">Online</span>
-          </Link>
-
-          <button onClick={() => setActiveTab('workflow')} className={`flex flex-col items-center flex-1 p-1 ${activeTab === 'workflow' ? 'text-amber-500' : 'text-slate-400'}`}><span className="text-xl relative">⚙️<span className="absolute -top-1 -right-2 bg-rose-500 text-white text-[8px] rounded-full px-1">{activeOrders.length}</span></span><span className="text-[9px] font-bold mt-1">Proses</span></button>
-          <button onClick={() => setActiveTab('pickup')} className={`flex flex-col items-center flex-1 p-1 ${activeTab === 'pickup' ? 'text-blue-600' : 'text-slate-400'}`}><span className="text-xl relative">🛍️<span className="absolute -top-1 -right-2 bg-rose-500 text-white text-[8px] rounded-full px-1">{pickupOrders.length}</span></span><span className="text-[9px] font-bold mt-1">Ambil</span></button>
-          <button onClick={() => setActiveTab('member')} className={`flex flex-col items-center flex-1 p-1 ${activeTab === 'member' ? 'text-purple-600' : 'text-slate-400'}`}><span className="text-xl">💳</span><span className="text-[9px] font-bold mt-1">Membership</span></button>
-          <button onClick={() => setActiveTab('expense')} className={`flex flex-col items-center flex-1 p-1 ${activeTab === 'expense' ? 'text-rose-500' : 'text-slate-400'}`}><span className="text-xl">💸</span><span className="text-[9px] font-bold mt-1">Pengajuan</span></button>
-          <button onClick={() => setActiveTab('performance')} className={`flex flex-col items-center flex-1 p-1 ${activeTab === 'performance' ? 'text-indigo-600' : 'text-slate-400'}`}><span className="text-xl">📊</span><span className="text-[9px] font-bold mt-1">Gaji</span></button>
-        </div>
+        <PosBottomNavbar
+          activeTab={activeTab}
+          onChange={setActiveTab}
+          prosesCount={activeOrders.length + pickupOrders.length}
+          incomingCount={incomingPickupsCount}
+        />
 
         <div className="w-full max-w-7xl mx-auto bg-white border border-slate-200/80 rounded-2xl p-4 md:p-6 shadow-sm">
           {successMsg && (
@@ -3181,7 +3347,82 @@ const handleStatusChange = async (
             </div>
           )}
 
-          {activeTab === 'member' && (
+          {activeTab === 'home' && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <button type="button" onClick={() => setHomeModal('kasir')} className="text-left bg-emerald-50 border border-emerald-200 rounded-2xl p-4 hover:bg-emerald-100 transition">
+                  <p className="text-lg">🛒</p>
+                  <p className="text-xs font-black text-emerald-800 mt-1">Kasir POS</p>
+                  <p className="text-[10px] text-emerald-700 mt-0.5">Billing & checkout</p>
+                </button>
+                <button type="button" onClick={() => setHomeModal('customer')} className="text-left bg-sky-50 border border-sky-200 rounded-2xl p-4 hover:bg-sky-100 transition">
+                  <p className="text-lg">👤</p>
+                  <p className="text-xs font-black text-sky-800 mt-1">Tambah Konsumen Baru</p>
+                  <p className="text-[10px] text-sky-700 mt-0.5">Daftar pelanggan outlet</p>
+                </button>
+                <button type="button" onClick={() => setHomeModal('member')} className="text-left bg-purple-50 border border-purple-200 rounded-2xl p-4 hover:bg-purple-100 transition">
+                  <p className="text-lg">💳</p>
+                  <p className="text-xs font-black text-purple-800 mt-1">Membership</p>
+                  <p className="text-[10px] text-purple-700 mt-0.5">Paket deposit & poin</p>
+                </button>
+                <button type="button" onClick={() => setHomeModal('online')} className="relative text-left bg-indigo-50 border border-indigo-200 rounded-2xl p-4 hover:bg-indigo-100 transition">
+                  <p className="text-lg">🛵</p>
+                  <p className="text-xs font-black text-indigo-800 mt-1">Order Online/App</p>
+                  <p className="text-[10px] text-indigo-700 mt-0.5">Pesanan aplikasi masuk</p>
+                  {incomingPickupsCount > 0 && (
+                    <span className="absolute top-3 right-3 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[9px] font-black flex items-center justify-center">
+                      {incomingPickupsCount}
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3">
+                  <p className="text-[10px] font-bold uppercase text-slate-400">Offline hari ini</p>
+                  <p className="text-2xl font-black text-slate-900">{dailyMetrics.offlineCount}</p>
+                  <p className="text-[10px] text-slate-500">transaksi datang langsung</p>
+                </div>
+                <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-3">
+                  <p className="text-[10px] font-bold uppercase text-indigo-400">Online / App</p>
+                  <p className="text-2xl font-black text-indigo-900">{dailyMetrics.onlineCount}</p>
+                  <p className="text-[10px] text-indigo-700">transaksi aplikasi / WA</p>
+                </div>
+              </div>
+
+              <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 space-y-3">
+                <div className="flex justify-between items-end">
+                  <div>
+                    <p className="text-[10px] font-bold uppercase text-emerald-600">Omset Harian</p>
+                    <p className="text-xl font-black text-emerald-900">Rp {dailyMetrics.revenue.toLocaleString('id-ID')}</p>
+                  </div>
+                  <p className="text-[10px] font-bold text-emerald-700">{dailyMetrics.offlineCount + dailyMetrics.onlineCount} trx</p>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="bg-white/80 rounded-xl p-2 text-center">
+                    <p className="text-[9px] font-bold uppercase text-slate-400">Cash</p>
+                    <p className="text-[11px] font-black text-slate-800">Rp {dailyMetrics.cash.toLocaleString('id-ID')}</p>
+                  </div>
+                  <div className="bg-white/80 rounded-xl p-2 text-center">
+                    <p className="text-[9px] font-bold uppercase text-slate-400">QRIS</p>
+                    <p className="text-[11px] font-black text-slate-800">Rp {dailyMetrics.qris.toLocaleString('id-ID')}</p>
+                  </div>
+                  <div className="bg-white/80 rounded-xl p-2 text-center">
+                    <p className="text-[9px] font-bold uppercase text-slate-400">Deposit</p>
+                    <p className="text-[11px] font-black text-slate-800">Rp {dailyMetrics.deposit.toLocaleString('id-ID')}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {homeModal === 'member' && (
+            <div className="fixed inset-0 z-[60] bg-black/50 flex items-end md:items-center justify-center p-0 md:p-4">
+              <div className="bg-white w-full max-w-lg max-h-[95vh] overflow-y-auto rounded-t-3xl md:rounded-2xl p-4 md:p-6 shadow-2xl">
+                <div className="flex items-center justify-between mb-3 pb-2 border-b">
+                  <h3 className="text-sm font-black text-purple-800">Membership</h3>
+                  <button type="button" onClick={() => setHomeModal(null)} className="text-xs font-bold text-slate-500 px-3 py-1.5 rounded-lg bg-slate-100">Tutup</button>
+                </div>
             <form onSubmit={handleAddMembership} className="space-y-4">
               <h3 className="text-sm font-bold text-purple-700 border-b pb-2">💳 Top-Up & Member Baru</h3>
               <div className="flex bg-slate-100 rounded-xl p-1 mb-2">
@@ -3193,9 +3434,60 @@ const handleStatusChange = async (
               <select value={memberPackage} onChange={(e) => setMemberPackage(e.target.value)} className="w-full border rounded-xl px-4 py-3 text-sm"><option value="Silver">Silver (Bayar 300rb, Saldo 320rb)</option><option value="Gold">Gold (Bayar 500rb, Saldo 550rb)</option><option value="Platinum">Platinum (Bayar 900rb, Saldo 1 Jt)</option></select>
               <button type="submit" disabled={isSubmitting} className="w-full bg-purple-600 text-white font-bold py-4 rounded-xl text-sm shadow-md">💳 PROSES TOP-UP ({memberOrderType.toUpperCase()})</button>
             </form>
+              </div>
+            </div>
           )}
 
-          {activeTab === 'pos' && (
+          {homeModal === 'customer' && (
+            <div className="fixed inset-0 z-[60] bg-black/50 flex items-end md:items-center justify-center p-0 md:p-4">
+              <div className="bg-white w-full max-w-lg max-h-[95vh] overflow-y-auto rounded-t-3xl md:rounded-2xl p-4 md:p-6 shadow-2xl">
+                <div className="flex items-center justify-between mb-3 pb-2 border-b">
+                  <h3 className="text-sm font-black text-sky-800">Tambah Konsumen Baru</h3>
+                  <button type="button" onClick={() => setHomeModal(null)} className="text-xs font-bold text-slate-500 px-3 py-1.5 rounded-lg bg-slate-100">Tutup</button>
+                </div>
+                <form onSubmit={handleRegisterCustomer} className="space-y-3">
+                  <input type="text" placeholder="Nama lengkap" value={newCustName} onChange={(e) => setNewCustName(e.target.value)} className="w-full border rounded-xl px-4 py-3 text-sm" required />
+                  <input type="tel" placeholder="Nomor WhatsApp" value={newCustPhone} onChange={(e) => setNewCustPhone(e.target.value)} className="w-full border rounded-xl px-4 py-3 text-sm" required />
+                  <button type="submit" disabled={isSubmitting} className="w-full bg-sky-600 text-white font-bold py-3.5 rounded-xl text-sm">Simpan Konsumen</button>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {homeModal === 'online' && (
+            <div className="fixed inset-0 z-[60] bg-black/50 flex items-end md:items-center justify-center p-0 md:p-4">
+              <div className="bg-white w-full max-w-lg max-h-[95vh] overflow-y-auto rounded-t-3xl md:rounded-2xl p-4 md:p-6 shadow-2xl space-y-3">
+                <div className="flex items-center justify-between pb-2 border-b">
+                  <h3 className="text-sm font-black text-indigo-800">Order Online / App</h3>
+                  <button type="button" onClick={() => setHomeModal(null)} className="text-xs font-bold text-slate-500 px-3 py-1.5 rounded-lg bg-slate-100">Tutup</button>
+                </div>
+                {incomingPickups.length === 0 && (
+                  <p className="text-xs text-slate-400 text-center py-8">Tidak ada pesanan aplikasi yang menunggu kasir.</p>
+                )}
+                {incomingPickups.map((p: any) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => handleImportPickupOrder(p)}
+                    className="w-full text-left border border-indigo-200 bg-indigo-50 rounded-xl p-3 hover:bg-indigo-100"
+                  >
+                    <p className="text-xs font-black text-indigo-900">{p.customer_name || p.name || 'Pelanggan App'}</p>
+                    <p className="text-[10px] text-indigo-700 mt-0.5">{p.service_type || p.service || 'Layanan'} · {p.status || 'Baru'}</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">{p.address || p.pickup_address || ''}</p>
+                  </button>
+                ))}
+                <Link href="/admin/pickups" className="block text-center text-[11px] font-bold text-indigo-700 py-2">Buka daftar penjemputan lengkap →</Link>
+              </div>
+            </div>
+          )}
+
+          {homeModal === 'kasir' && (
+            <div className="fixed inset-0 z-[60] bg-black/50 flex items-end md:items-center justify-center p-0 md:p-4">
+              <div className="bg-white w-full max-w-2xl max-h-[95vh] overflow-y-auto rounded-t-3xl md:rounded-2xl p-4 md:p-6 shadow-2xl">
+                <div className="flex items-center justify-between mb-3 sticky top-0 bg-white z-10 pb-2 border-b">
+                  <h3 className="text-sm font-black text-slate-900">Kasir POS</h3>
+                  <button type="button" onClick={() => setHomeModal(null)} className="text-xs font-bold text-slate-500 px-3 py-1.5 rounded-lg bg-slate-100">Tutup</button>
+                </div>
             <form onSubmit={handleTransactionSubmit} className="space-y-3">
               <div className="flex bg-slate-100 rounded-xl p-1 mb-2">
                 <button type="button" onClick={() => setOrderType('Offline')} className={`flex-1 py-2.5 text-[10px] md:text-xs font-bold rounded-lg ${orderType === 'Offline' ? 'bg-emerald-600 text-white shadow' : 'text-slate-500'}`}>🏪 Langsung</button>
@@ -3579,9 +3871,17 @@ const handleStatusChange = async (
               </div>
               </div>
             </form>
+              </div>
+            </div>
           )}
 
-          {activeTab === 'workflow' && (
+          {activeTab === 'proses' && (
+            <div className="space-y-3">
+              <div className="flex bg-slate-100 rounded-xl p-1">
+                <button type="button" onClick={() => setProsesView('cuci')} className={`flex-1 py-2 text-[10px] font-black rounded-lg ${prosesView === 'cuci' ? 'bg-amber-500 text-white shadow' : 'text-slate-500'}`}>Cuci & Produksi ({activeOrders.length})</button>
+                <button type="button" onClick={() => setProsesView('rak')} className={`flex-1 py-2 text-[10px] font-black rounded-lg ${prosesView === 'rak' ? 'bg-blue-600 text-white shadow' : 'text-slate-500'}`}>Rak & Ambil ({pickupOrders.length})</button>
+              </div>
+          {prosesView === 'cuci' && (
             <div className="space-y-3">
               <div className="flex justify-between items-center border-b pb-2">
                 <h3 className="text-[10px] md:text-xs font-black text-slate-800 uppercase tracking-wider">📋 Sedang Diproses ({activeOrders.length})</h3>
@@ -3697,7 +3997,7 @@ const handleStatusChange = async (
             </div>
           )}
 
-          {activeTab === 'pickup' && (
+          {prosesView === 'rak' && (
             <div className="space-y-3">
               <h3 className="text-[10px] md:text-xs font-bold text-slate-500 uppercase">🛍️ Siap Diambil ({pickupOrders.length})</h3>
               <input
@@ -3775,11 +4075,17 @@ const handleStatusChange = async (
               {(pickupOrders.length > 0 || completedPickups.length > 0) && visibleAmbil.length === 0 && visibleAmbilDone.length === 0 && <p className="text-xs text-slate-400 text-center py-8">Tidak ada pesanan yang cocok dengan pencarian.</p>}
             </div>
           )}
+            </div>
+          )}
 
-          {activeTab === 'expense' && (
-            <div className="space-y-6">
+          {activeTab === 'chat' && (
+            <OutletGroupChatDrawer embedded />
+          )}
+
+          {activeTab === 'pengajuan' && (
+            <div className="space-y-4">
               {/* TOMBOL PEMICU SETORAN CASH */}
-          <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-xl flex justify-between items-center mb-4">
+          <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-xl flex justify-between items-center">
             <div>
               <h4 className="font-bold text-xs text-emerald-900">📲 Setoran Cash Outlet via Wallet/QRIS</h4>
               <p className="text-[10px] text-emerald-700">Generate QRIS Mayar sebesar net tunai, scan dari e-wallet, otomatis BALANCED.</p>
@@ -3799,14 +4105,46 @@ const handleStatusChange = async (
               </button>
             </div>
           </div>
-              <RequisitionForm
-                selectedOutlet={selectedOutlet}
-                employeeName={employeeName || 'Kasir'}
-                role="kasir"
-              />
+              <nav className="flex gap-1.5 overflow-x-auto pb-0.5 hide-scrollbar">
+                {(
+                  [
+                    { id: 'pembelian' as const, label: 'Pengajuan Pembelian' },
+                    { id: 'kendala' as const, label: 'Laporan Kendala' },
+                    { id: 'kasbon' as const, label: 'Pengajuan Kasbon' },
+                    { id: 'stok' as const, label: 'Penambahan Stok' }
+                  ]
+                ).map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setPengajuanSub(item.id)}
+                    className={`whitespace-nowrap px-3 py-2 rounded-xl text-[11px] font-bold transition ${
+                      pengajuanSub === item.id
+                        ? 'bg-slate-900 text-white shadow-sm'
+                        : 'bg-white border border-slate-200 text-slate-600'
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </nav>
+              {pengajuanSub === 'pembelian' && (
+                <RequisitionForm
+                  selectedOutlet={selectedOutlet}
+                  employeeName={employeeName || 'Kasir'}
+                  role="kasir"
+                />
+              )}
+              {pengajuanSub === 'kendala' && (
+                <OutletIssueForm
+                  selectedOutlet={selectedOutlet}
+                  employeeName={employeeName || 'Kasir Outlet'}
+                />
+              )}
+              {pengajuanSub === 'kasbon' && (
               <form onSubmit={handleApplyLoan} className="bg-white border border-slate-200 p-5 rounded-2xl space-y-3 shadow-sm">
                 <h3 className="font-bold text-xs text-indigo-900 flex items-center gap-1.5 border-b pb-2">
-                  <span>💵 Form Pengajuan Kasbon Karyawan</span>
+                  <span>Pengajuan Kasbon</span>
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <input
@@ -3829,18 +4167,15 @@ const handleStatusChange = async (
                   Ajukan Kasbon Sekarang
                 </button>
               </form>
-              <OutletIssueForm
-                selectedOutlet={selectedOutlet}
-                employeeName={employeeName || 'Kasir Outlet'}
-              />
-              <KpiRoleMonitoring />
-              <RoleTaskInbox role="kasir" />
-              <form onSubmit={handleAddStock} className="space-y-3 border rounded-xl p-4 shadow-sm">
-                <h3 className="text-xs font-bold text-indigo-600 border-b pb-2">📦 Tambah Stok</h3>
+              )}
+              {pengajuanSub === 'stok' && (
+              <form onSubmit={handleAddStock} className="bg-white border border-slate-200 space-y-3 rounded-2xl p-4 shadow-sm">
+                <h3 className="text-xs font-bold text-indigo-600 border-b pb-2">Penambahan Stok</h3>
                 <select value={stockItem} onChange={(e) => setStockItem(e.target.value)} className="w-full border rounded-xl px-3 py-3 text-xs md:text-sm"><option value="Detergen Premium (ml)">Detergen Premium</option><option value="Parfum Lavender (ml)">Parfum Lavender</option></select>
                 <input type="number" placeholder="Jumlah LITER" value={stockAddAmount} onChange={(e) => setStockAddAmount(e.target.value)} className="w-full border rounded-xl px-3 py-3 text-lg font-bold text-indigo-600" required />
                 <button type="submit" disabled={isSubmitting} className="w-full bg-indigo-600 text-white font-bold py-3.5 rounded-xl text-sm">SIMPAN</button>
               </form>
+              )}
             
             {/* MODAL SETORAN CASH KASIR */}
       {showDepositModal && (
@@ -3981,8 +4316,25 @@ const handleStatusChange = async (
       )}
     </div>
   )}
-          {activeTab === 'performance' && (
+          {activeTab === 'profil' && (
             <div className="space-y-4">
+              <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-200 space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Staf Outlet</p>
+                    <h4 className="text-base font-black text-slate-900">{employeeName}</h4>
+                    <p className="text-xs text-slate-500">@{employeeUsername} · {employeeRole || 'kasir'}</p>
+                    <p className="text-[11px] font-bold text-emerald-700 mt-1">{outletName}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    className="bg-rose-50 hover:bg-rose-500 border border-rose-200 text-rose-600 hover:text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all"
+                  >
+                    Keluar
+                  </button>
+                </div>
+              </div>
 
               {/* FITUR ABSENSI */}
               <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-200">

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import StaffWorkspace from '@/components/StaffWorkspace';
-import { getStaffSession, homePathForRole, isWorkspaceRole } from '@/lib/staffSession';
+import { getStaffSession, homePathForRole, isCsRole, isWorkspaceRole } from '@/lib/staffSession';
 
 export default function WorkspacePage() {
   const [ready, setReady] = useState(false);
@@ -14,6 +14,10 @@ export default function WorkspacePage() {
       return;
     }
     const role = getStaffSession().role;
+    if (isCsRole(role)) {
+      window.location.href = '/cs/workspace';
+      return;
+    }
     if (!isWorkspaceRole(role)) {
       window.location.href = homePathForRole(role);
       return;

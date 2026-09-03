@@ -27,6 +27,7 @@ import {
 import { toast } from '@/lib/toast';
 import FileProofInput from '@/components/FileProofInput';
 import { updateWithFallback } from '@/lib/safeWrite';
+import { writeSubmission } from '@/lib/posSync';
 
 const formatRp = (n: any) => `Rp ${Number(n || 0).toLocaleString('id-ID')}`;
 
@@ -155,7 +156,7 @@ export default function RequisitionForm({
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canCreate) {
-      toast('Hanya Kasir yang dapat mengajukan Purchase Request.', 'warn');
+      toast('Hanya Kasir yang dapat mengajukan pembelian.', 'warn');
       return;
     }
     if (!outletId) return alert('Pilih outlet terlebih dahulu.');
@@ -188,6 +189,16 @@ export default function RequisitionForm({
           receipt_url: receiptUrl || null
         })
       );
+
+      await writeSubmission({
+        type: 'purchase',
+        outlet_id: outletId,
+        requested_by: actorName || 'Karyawan Outlet',
+        title: title.trim(),
+        amount: nominal,
+        description: description.trim() || category,
+        source_table: 'purchase_requests'
+      });
 
       setTitle('');
       setAmount('');
@@ -336,7 +347,7 @@ export default function RequisitionForm({
       {canCreate && (
         <form onSubmit={handleCreate} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3">
           <div>
-            <h3 className="text-sm font-black text-slate-800">🛒 Purchase Request (CMS)</h3>
+            <h3 className="text-sm font-black text-slate-800">Pengajuan Pembayaran</h3>
             <p className="text-[10px] text-slate-500 mt-0.5">
               Outlet → <b>Pending Approval</b> → Supervisor → <b>Approved - Awaiting Admin Ops</b> → Finance <b>Paid</b>
             </p>

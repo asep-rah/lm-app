@@ -1,4 +1,5 @@
 import { insertChatMessage } from '@/lib/csChat';
+import { maybeAwardLoyalty } from '@/lib/crm-automation';
 import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
 import { findPickupIdByTransaction } from '@/lib/pickupDispatch';
 
@@ -192,6 +193,7 @@ export async function confirmThirdPartyReceived(order: any) {
   if (txId) {
     const { error } = await updateWithFallback('transactions', [{ status: 'Selesai' }], { column: 'id', value: txId });
     if (error) return { error };
+    maybeAwardLoyalty({ ...order, id: txId, status: 'Selesai' });
   }
   if (pickupId) {
     await updateWithFallback('pickup_orders', [{ status: 'Selesai' }], { column: 'id', value: pickupId });

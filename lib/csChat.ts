@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabaseClient';
+import { notifyCustomerChat, notifyCsPortal } from '@/lib/notifications';
 
 /** 08xx, 8xx, dan 62xx jadi 62… supaya thread tidak pecah. */
 export const canonicalPhone = (raw: string) => {
@@ -241,6 +242,13 @@ export const insertChatMessage = async (input: {
         sender_type: input.sender_type,
         preview: withFile
       });
+      const sender = String(input.sender_type || '').toLowerCase();
+      const fromCustomer = sender === 'customer' || sender === 'user' || sender === 'pelanggan';
+      if (fromCustomer && phone) {
+        notifyCsPortal('cs_chat', 'Pesan baru dari pelanggan. Buka Live Chat.');
+      } else if (!input.is_internal && !fromCustomer && phone) {
+        notifyCustomerChat(phone, input.message);
+      }
       return { error: null, thread_key };
     }
     lastErr = error;

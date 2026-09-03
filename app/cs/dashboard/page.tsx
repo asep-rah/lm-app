@@ -2,14 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import Link from 'next/link';
-import RoleTaskInbox from '@/components/RoleTaskInbox';
-import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
 import { getStaffSession } from '@/lib/staffSession';
 import { insertChatMessage, sessionLooksClosed, threadKeyOf } from '@/lib/csChat';
-import { sendInvoiceToLiveChat } from '@/lib/chatInvoice';
-import { isPaymentLocked, markInvoicePaid } from '@/lib/paymentVerify';
-import { simulateMayarAutoPay } from '@/lib/mayar';
+import { isPaymentLocked } from '@/lib/paymentVerify';
 import { toast } from '@/lib/toast';
 import ChatInvoiceCard from '@/components/ChatInvoiceCard';
 import ThirdPartyDeliveryCard from '@/components/ThirdPartyDeliveryCard';
@@ -23,7 +18,7 @@ const supabase = createClient(
 );
 
 export default function CSDashboard() {
-  const [activeTab, setActiveTab] = useState<'confirmations' | 'pickups' | 'transactions'>('pickups');
+  const [activeTab, setActiveTab] = useState<'confirmations' | 'pickups'>('pickups');
   const [outlets, setOutlets] = useState<any[]>([]);
   const [selectedOutlet, setSelectedOutlet] = useState('ALL');
   const [searchQuery, setSearchSearchQuery] = useState('');
@@ -300,41 +295,6 @@ export default function CSDashboard() {
     openWhatsApp(p.customer_phone, msg);
   };
 
-  const handleSendBillConfirm = async (t: any) => {
-    const agent = getStaffSession();
-    if (!t.customer_phone) return alert('⚠️ Nomor pelanggan tidak ditemukan!');
-    const { error } = await sendInvoiceToLiveChat(t, agent.name);
-    if (error) {
-      alert('❌ Gagal kirim tagihan ke live chat: ' + error.message);
-      return;
-    }
-    toast('Tagihan terkirim ke live chat pelanggan.', 'ok');
-    alert('✅ Tagihan & QRIS dikirim ke live chat pelanggan.');
-  };
-
-  const handleMarkBillPaid = async (t: any) => {
-    const agent = getStaffSession();
-    if (!confirm(`Tandai tagihan ${t.receipt_number} sudah terbayar?`)) return;
-    const { error } = await markInvoicePaid({
-      transactionId: t.id,
-      amount: Number(t.amount) || 0,
-      receipt: t.receipt_number,
-      agentName: agent.name,
-      customerPhone: t.customer_phone
-    });
-    if (error) {
-      alert('❌ Gagal konfirmasi pembayaran: ' + error.message);
-      return;
-    }
-    toast('Pembayaran diverifikasi. POS terbuka untuk Sortir.', 'ok');
-    loadCSData();
-  };
-
-  const handleSendFinishNotice = (t: any) => {
-    const msg = `Halo Kak ${t.customer_name}! 🎉\n\nKabar gembira, cucian Anda (*Resi ${t.receipt_number}*) di cabang *${t.outlets?.name}* SUDAH SELESAI, bersih, wangi, dan rapi!\n\nApakah cucian ingin diambil sendiri ke toko atau mau dibantu *Pesan Driver Antar ke Rumah* via aplikasi? 😊\n\nKlik di sini: https://lm-coral.vercel.app/customer/dashboard`;
-    openWhatsApp(t.customer_phone, msg);
-  };
-
   const handleSendConfirmationWA = (t: any) => {
     const msg = `Halo Kak *${t.customer_name}*! CS Laundrivery di sini 😊\n\nCucian Kakak di cabang *${t.outlets?.name || 'Toko'}* dengan Resi *${t.receipt_number}* telah selesai ditimbang ulang oleh Kasir.\n\n*Rincian Hasil Timbangan Baru:*\n• Layanan: ${t.service_type}\n• Rincian: ${t.weight_kg > 0 ? t.weight_kg + ' Kg' : ''} ${t.pcs_count > 0 ? t.pcs_count + ' Pcs' : ''}\n• Total Tagihan Final: *Rp ${Number(t.amount).toLocaleString('id-ID')}*\n• Catatan: ${t.notes || '-'}\n\nMohon cek & konfirmasi rincian ini melalui aplikasi: https://lm-coral.vercel.app/customer/dashboard\n\nJika ada pertanyaan, silakan balas pesan ini ya Kak! Terima kasih! 🙏`;
     openWhatsApp(t.customer_phone || '', msg);
@@ -377,53 +337,20 @@ export default function CSDashboard() {
       p.customer_phone?.includes(searchQuery)
   );
 
-  const filteredTransactions = transactions.filter(
-    (t) =>
-      t.receipt_number?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      t.customer_name?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 p-4 md:p-8 font-sans">
       <div className="max-w-7xl mx-auto space-y-6">
         
         {/* HEADER CS */}
-        <div className="bg-slate-900 text-white rounded-3xl p-6 md:p-8 shadow-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b-4 border-blue-600">
+        <div className="bg-white border border-slate-200 rounded-2xl p-5 md:p-6 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div>
-            <h1 className="text-2xl md:text-3xl font-black tracking-tight flex items-center gap-3">
-              <span>🎧 Dashboard Customer Service</span>
-              <span className="bg-blue-600 text-white text-[10px] px-3 py-1 rounded-full font-bold uppercase">CS Pusat</span>
-            </h1>
-            <p className="text-blue-200 mt-1 text-xs md:text-sm">Pintu Utama Komunikasi, Instruksi Driver, Konfirmasi Tagihan, & Follow-up</p>
+            <h1 className="text-lg md:text-xl font-black tracking-tight text-slate-900">Antrean Pickup & Dispatch Driver</h1>
+            <p className="text-slate-500 mt-1 text-xs">Assign driver outlet atau pesan kurir instan (Gojek / Grab / Lalamove).</p>
           </div>
-          <div className="flex items-center gap-2">
-            <Link href="/workspace" className="bg-white/10 hover:bg-white/20 text-white font-bold py-2.5 px-4 rounded-xl text-xs transition">
-              Workspace
-            </Link>
-            <Link href="/cs" className="relative bg-sky-500 hover:bg-sky-600 text-white font-bold py-2.5 px-4 rounded-xl text-xs shadow-sm transition">
-              Command Center
-              {unreadChatsCount > 0 && (
-                <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
-                  {unreadChatsCount > 99 ? '99+' : unreadChatsCount}
-                </span>
-              )}
-            </Link>
-            <Link href="/admin/pickups" className="relative bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-4 rounded-xl text-xs shadow-md transition">
-              Monitor Penjemputan
-              {pendingPickupsCount > 0 && (
-                <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
-                  {pendingPickupsCount > 99 ? '99+' : pendingPickupsCount}
-                </span>
-              )}
-            </Link>
-            <button onClick={loadCSData} className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2.5 px-4 rounded-xl transition text-xs shadow-md">
-              🔄 REFRESH
-            </button>
-          </div>
+          <button onClick={loadCSData} className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-4 rounded-xl transition text-xs shadow-md">
+            🔄 Refresh
+          </button>
         </div>
-
-        <KpiRoleMonitoring />
-        <RoleTaskInbox role="cs" />
 
         {/* FILTER BAR */}
         <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-col md:flex-row gap-3 justify-between items-center">
@@ -443,14 +370,6 @@ export default function CSDashboard() {
               }`}
             >
               ⚠️ Perlu Konfirmasi ({pendingConfirmations.length})
-            </button>
-            <button
-              onClick={() => setActiveTab('transactions')}
-              className={`flex-1 md:flex-none px-4 py-2.5 rounded-lg text-xs font-bold transition whitespace-nowrap ${
-                activeTab === 'transactions' ? 'bg-blue-900 text-white shadow' : 'text-slate-600 hover:bg-slate-200'
-              }`}
-            >
-              🧺 Transaksi POS ({transactions.length})
             </button>
           </div>
 
@@ -698,131 +617,6 @@ export default function CSDashboard() {
               {filteredConfirmations.length === 0 && (
                 <p className="text-xs text-slate-400 col-span-full text-center py-8">🎉 Tidak ada transaksi yang memerlukan konfirmasi.</p>
               )}
-            </div>
-          </div>
-        )}
-
-        {/* TAB 3: TRANSAKSI POS */}
-        {activeTab === 'transactions' && (
-          <div className="space-y-4">
-            <h2 className="text-sm font-black text-slate-700 uppercase tracking-wider">
-              🧺 Transaksi Cucian POS (Semua Status)
-            </h2>
-
-            <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs whitespace-nowrap">
-                  <thead className="bg-slate-900 text-white font-bold">
-                    <tr>
-                      <th className="p-3">Tgl & Resi</th>
-                      <th className="p-3">Pelanggan</th>
-                      <th className="p-3">Cabang Outlet</th>
-                      <th className="p-3">Layanan & Berat</th>
-                      <th className="p-3">Status</th>
-                      <th className="p-3 text-right">Total Tagihan</th>
-                      <th className="p-3 text-center">Aksi CS</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {filteredTransactions.map((t) => (
-                      <tr key={t.id} className="hover:bg-slate-50">
-                        <td className="p-3">
-                          <b className="font-mono text-blue-900">{t.receipt_number}</b>
-                          <p className="text-[9px] text-slate-400">{new Date(t.created_at).toLocaleDateString('id-ID')}</p>
-                        </td>
-                        <td className="p-3 font-bold text-slate-800">{t.customer_name}</td>
-                        <td className="p-3 font-semibold text-slate-600">{t.outlets?.name || 'Cabang'}</td>
-                        <td className="p-3 text-slate-700">
-                          {t.service_type}
-                          <br />
-                          <b className="text-[10px] text-blue-800">
-                            {t.weight_kg > 0 ? `${t.weight_kg} Kg` : ''} {t.pcs_count > 0 ? `${t.pcs_count} Pcs` : ''}
-                          </b>
-                        </td>
-                        <td className="p-3">
-                          <span
-                            className={`px-2 py-0.5 rounded text-[9px] font-extrabold ${
-                              t.status === 'Selesai' || t.status === 'Siap Diambil'
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : 'bg-blue-100 text-blue-900'
-                            }`}
-                          >
-                            {t.status}
-                          </span>
-                        </td>
-                        <td className="p-3 text-right font-black text-slate-900">
-                          Rp {Number(t.amount).toLocaleString('id-ID')}
-                        </td>
-                        <td className="p-3">
-                          <div className="flex justify-center gap-1.5 flex-wrap">
-                            <button
-                              onClick={() => handleSendBillConfirm(t)}
-                              title="Kirim tagihan ke live chat"
-                              className="bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 font-bold px-2.5 py-1 rounded-lg text-[10px] transition"
-                            >
-                              📲 Kirim Tagihan
-                            </button>
-                            {isPaymentLocked(t) && (
-                              <>
-                                <button
-                                  onClick={async () => {
-                                    try {
-                                      await simulateMayarAutoPay({
-                                        transactionId: t.id,
-                                        receipt: t.receipt_number,
-                                        amount: Number(t.amount) || 0,
-                                        customerPhone: t.customer_phone
-                                      });
-                                      toast('Simulasi auto-pay Mayar terkirim.', 'ok');
-                                      loadCSData();
-                                    } catch (e: any) {
-                                      toast(e?.message || 'Simulasi gagal', 'err');
-                                    }
-                                  }}
-                                  title="Simulasi pembayaran Mayar (mock)"
-                                  className="bg-violet-50 text-violet-800 hover:bg-violet-100 border border-violet-200 font-bold px-2.5 py-1 rounded-lg text-[10px] transition"
-                                >
-                                  🧪 Test Auto-Pay
-                                </button>
-                                <button
-                                  onClick={() => handleMarkBillPaid(t)}
-                                  title="Tandai tagihan sudah dibayar"
-                                  className="bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200 font-bold px-2.5 py-1 rounded-lg text-[10px] transition"
-                                >
-                                  ✅ Tagihan Sudah Terbayarkan
-                                </button>
-                              </>
-                            )}
-                            {(t.status === 'Siap Diambil' || t.status === 'Diantar') && !isThirdPartyDelivery(t) && (
-                              <button
-                                type="button"
-                                onClick={() => setDispatchTarget(t)}
-                                className="bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200 font-bold px-2.5 py-1 rounded-lg text-[10px] transition"
-                              >
-                                📦 Kurir Pihak Ketiga
-                              </button>
-                            )}
-                            {isThirdPartyDelivery(t) && t.status !== 'Selesai' && (
-                              <span className="text-[9px] font-black text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded-lg">
-                                Menunggu konfirmasi pelanggan
-                              </span>
-                            )}
-                            {(t.status === 'Selesai' || t.status === 'Siap Diambil') && (
-                              <button
-                                onClick={() => handleSendFinishNotice(t)}
-                                title="Kirim Notifikasi Cucian Selesai"
-                                className="bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 font-bold px-2.5 py-1 rounded-lg text-[10px] transition"
-                              >
-                                🎉 Info Selesai
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
             </div>
           </div>
         )}

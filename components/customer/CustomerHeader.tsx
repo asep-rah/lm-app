@@ -17,8 +17,7 @@ export default function CustomerHeader() {
           }}
         />
         <div className="min-w-0">
-          <h1 className="text-base font-extrabold text-slate-900 tracking-tight leading-none">Laundrivery</h1>
-          <p className="text-[10px] text-blue-600 font-bold tracking-wide uppercase mt-0.5">Express Laundry Delivery</p>
+          <h1 className="text-base font-bold text-blue-600 text-[#0084FF] tracking-tight leading-none">laundrivery</h1>
         </div>
       </div>
     </div>

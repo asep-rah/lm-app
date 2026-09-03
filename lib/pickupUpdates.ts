@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabaseClient';
+import { notifyCustomerStatus } from '@/lib/notifications';
 
 const OPTIONAL_KEYS = [
   'transaction_id',
@@ -15,14 +16,25 @@ const OPTIONAL_KEYS = [
  * payload dipangkas lalu diulang — jangan sampai seluruh update ditolak diam-diam.
  */
 export const updatePickupOrder = async (id: string, payload: Record<string, any>) => {
+  const pingStatus = async () => {
+    const status = payload?.status;
+    if (!status || !id) return;
+    const { data } = await supabase.from('pickup_orders').select('customer_phone').eq('id', id).maybeSingle();
+    notifyCustomerStatus(data?.customer_phone, status);
+  };
+
   const first = await supabase.from('pickup_orders').update(payload).eq('id', id);
-  if (!first.error) return { error: null };
+  if (!first.error) {
+    await pingStatus();
+    return { error: null };
+  }
 
   const stripped = { ...payload };
   OPTIONAL_KEYS.forEach((k) => delete stripped[k]);
   const second = await supabase.from('pickup_orders').update(stripped).eq('id', id);
   if (!second.error) {
     console.warn('pickup_orders: kolom stempel waktu diabaikan:', first.error.message);
+    await pingStatus();
     return { error: null, stripped: true };
   }
 
@@ -35,6 +47,7 @@ export const updatePickupOrder = async (id: string, payload: Record<string, any>
   const third = await supabase.from('pickup_orders').update(statusOnly).eq('id', id);
   if (!third.error) {
     console.warn('pickup_orders: payload dipangkas ke status/foto:', second.error.message);
+    await pingStatus();
     return { error: null, stripped: true };
   }
 
@@ -48,6 +61,7 @@ export const updatePickupOrder = async (id: string, payload: Record<string, any>
     const fourth = await supabase.from('pickup_orders').update(withoutNewCol).eq('id', id);
     if (!fourth.error) {
       console.warn('pickup_orders: photo_outlet_pickup_url diabaikan:', third.error.message);
+      await pingStatus();
       return { error: null, stripped: true };
     }
   }

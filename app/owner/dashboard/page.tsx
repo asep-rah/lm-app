@@ -12,6 +12,14 @@ import { isVoidTransaction } from '@/lib/voidTx';
 import { canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
 import { staffRolesForForm } from '@/lib/staffRoles';
 import { toast } from '@/lib/toast';
+import { updateWithFallback } from '@/lib/safeWrite';
+import {
+  PR_STATUS,
+  isPrPending,
+  prAmount,
+  prRequestedBy,
+  prTitle
+} from '@/lib/cmsRequisition';
 import {
   SUPERVISOR_DECISIONS,
   complaintStepOf,
@@ -32,7 +40,7 @@ const safeParse = (data: any, fallback: any) => {
 };
 
 export default function Dashboard() {
-  const [activeTab, setActiveTab] = useState<'pnl' | 'settings' | 'employees' | 'delete_requests' | 'loans' | 'history'>('pnl');
+  const [activeTab, setActiveTab] = useState<'pnl' | 'settings' | 'employees' | 'delete_requests' | 'loans' | 'history' | 'approvals'>('pnl');
   
   const [currentUserRole, setCurrentUserRole] = useState('');
   const [currentUserName, setCurrentUserName] = useState('');
@@ -105,6 +113,10 @@ export default function Dashboard() {
   const [txWasherCycles, setTxWasherCycles] = useState<any[]>([]);
 // State & Logic To-Do List Kendala Outlet (Real-Time)
 const [outletIssues, setOutletIssues] = useState<any[]>([]);
+const [purchaseRequests, setPurchaseRequests] = useState<any[]>([]);
+const [submissionsList, setSubmissionsList] = useState<any[]>([]);
+const [approvalBusy, setApprovalBusy] = useState<string | null>(null);
+const [syncTick, setSyncTick] = useState(0);
 const [supNote, setSupNote] = useState('');
 const [supBusy, setSupBusy] = useState<string | null>(null);
 
@@ -119,11 +131,32 @@ const fetchOutletIssues = async () => {
 useEffect(() => {
   fetchOutletIssues();
   
-  // Realtime listener untuk laporan baru dari Kasir
   const channel = supabase
     .channel('realtime_outlet_issues')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'outlet_issues' }, () => {
       fetchOutletIssues();
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'purchase_requests' }, () => {
+      supabase.from('purchase_requests').select('*, outlets(name)').order('created_at', { ascending: false }).limit(80)
+        .then(({ data }) => { if (data) setPurchaseRequests(data); });
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'submissions' }, () => {
+      supabase.from('submissions').select('*').order('created_at', { ascending: false }).limit(80)
+        .then(({ data }) => { if (data) setSubmissionsList(data); });
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'employee_loans' }, () => {
+      supabase.from('employee_loans').select('*').order('created_at', { ascending: false })
+        .then(({ data }) => { if (data) setLoansList(data); });
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance_logs' }, () => {
+      supabase.from('attendance_logs').select('*').order('created_at', { ascending: false }).limit(200)
+        .then(({ data }) => { if (data) setAttendances(data); });
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
+      setSyncTick((n) => n + 1);
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'cashflow_logs' }, () => {
+      setSyncTick((n) => n + 1);
     })
     .subscribe();
 
@@ -202,6 +235,115 @@ const handleApproveExpense = async (expenseId: string) => {
     alert('✅ Pengajuan disetujui! Data otomatis diteruskan ke Admin Ops untuk pembayaran via CMS BRI.');
   }
 };
+
+const refreshApprovals = async () => {
+  const [{ data: prs }, { data: subs }, { data: loans }] = await Promise.all([
+    supabase.from('purchase_requests').select('*, outlets(name)').order('created_at', { ascending: false }).limit(80),
+    supabase.from('submissions').select('*').order('created_at', { ascending: false }).limit(80),
+    supabase.from('employee_loans').select('*').order('created_at', { ascending: false })
+  ]);
+  if (prs) setPurchaseRequests(prs);
+  if (subs) setSubmissionsList(subs);
+  if (loans) setLoansList(loans);
+  fetchOutletIssues();
+};
+
+const markSubmission = async (sourceId: string | null | undefined, status: string) => {
+  if (!sourceId) return;
+  await updateWithFallback(
+    'submissions',
+    [{ status }, { status: status === 'approved' ? 'approved' : 'rejected' }],
+    { column: 'source_id', value: String(sourceId) }
+  );
+};
+
+const handleApprovePurchase = async (req: any) => {
+  setApprovalBusy(req.id);
+  const now = new Date().toISOString();
+  const { error } = await updateWithFallback(
+    'purchase_requests',
+    [
+      { status: PR_STATUS.APPROVED, supervisor_approved_at: now, approved_by: currentUserName || 'Owner' },
+      { status: PR_STATUS.APPROVED, approved_at: now },
+      { status: PR_STATUS.APPROVED }
+    ],
+    { column: 'id', value: req.id }
+  );
+  await markSubmission(req.id, 'approved');
+  if (error) toast(error.message, 'err');
+  else toast('Pengajuan pembelian disetujui.', 'ok');
+  await refreshApprovals();
+  setApprovalBusy(null);
+};
+
+const handleRejectPurchase = async (req: any) => {
+  if (!confirm('Tolak pengajuan pembelian ini?')) return;
+  setApprovalBusy(req.id);
+  const { error } = await updateWithFallback(
+    'purchase_requests',
+    [{ status: PR_STATUS.REJECTED, rejected_at: new Date().toISOString() }, { status: PR_STATUS.REJECTED }],
+    { column: 'id', value: req.id }
+  );
+  await markSubmission(req.id, 'rejected');
+  if (error) toast(error.message, 'err');
+  else toast('Pengajuan pembelian ditolak.', 'ok');
+  await refreshApprovals();
+  setApprovalBusy(null);
+};
+
+const handleApproveKasbon = async (loan: any) => {
+  setApprovalBusy(loan.id);
+  const amt = Number(loan.amount || loan.total_loan) || 0;
+  const { error } = await updateWithFallback(
+    'employee_loans',
+    [
+      {
+        status: 'Active',
+        approved_by: currentUserName || 'Owner',
+        total_loan: amt || loan.total_loan,
+        monthly_deduction: Number(loan.monthly_deduction) || Math.ceil(amt / 5),
+        employee_name: loan.employee_name || currentUserName
+      },
+      { status: 'Active', approved_by: currentUserName || 'Owner' },
+      { status: 'Active' }
+    ],
+    { column: 'id', value: loan.id }
+  );
+  await markSubmission(loan.id, 'approved');
+  if (error) toast(error.message, 'err');
+  else toast('Kasbon staf disetujui.', 'ok');
+  await refreshApprovals();
+  setApprovalBusy(null);
+};
+
+const handleRejectKasbon = async (loan: any) => {
+  if (!confirm('Tolak kasbon staf ini?')) return;
+  setApprovalBusy(loan.id);
+  const { error } = await updateWithFallback(
+    'employee_loans',
+    [{ status: 'Rejected' }, { status: 'rejected' }],
+    { column: 'id', value: loan.id }
+  );
+  await markSubmission(loan.id, 'rejected');
+  if (error) toast(error.message, 'err');
+  else toast('Kasbon ditolak.', 'ok');
+  await refreshApprovals();
+  setApprovalBusy(null);
+};
+
+const handleApproveSubmission = async (row: any) => {
+  setApprovalBusy(row.id);
+  const { error } = await updateWithFallback(
+    'submissions',
+    [{ status: 'approved' }],
+    { column: 'id', value: row.id }
+  );
+  if (error) toast(error.message, 'err');
+  else toast('Pengajuan dicatat disetujui.', 'ok');
+  await refreshApprovals();
+  setApprovalBusy(null);
+};
+
   useEffect(() => {
     const ownerStr = localStorage.getItem('laundry_owner_user');
     if (!ownerStr) { window.location.href = '/login'; return; }
@@ -220,6 +362,7 @@ const handleApproveExpense = async (expenseId: string) => {
     const tab = new URLSearchParams(window.location.search).get('tab');
     if (tab === 'history' || tab === 'transaksi') setActiveTab('history');
     if (tab === 'settings') setActiveTab('settings');
+    if (tab === 'approvals' || tab === 'persetujuan') setActiveTab('approvals');
   }, []);
 
   const handleLogout = () => {
@@ -270,6 +413,12 @@ setDeleteRequests(delData);
 
       const { data: loansData } = await supabase.from('employee_loans').select('*').order('created_at', { ascending: false });
       if (loansData) setLoansList(loansData);
+
+      const { data: prData } = await supabase.from('purchase_requests').select('*, outlets(name)').order('created_at', { ascending: false }).limit(80);
+      if (prData) setPurchaseRequests(prData);
+
+      const { data: subData } = await supabase.from('submissions').select('*').order('created_at', { ascending: false }).limit(80);
+      if (subData) setSubmissionsList(subData);
 
       const { data: penData } = await supabase.from('employee_penalties').select('*').order('created_at', { ascending: false });
       if (penData) setPenaltiesList(penData);
@@ -403,7 +552,7 @@ setDeleteRequests(delData);
       setIsLoading(false);
     }
     loadData();
-  }, [selectedOutlet, period, activeTab]);
+  }, [selectedOutlet, period, activeTab, syncTick]);
 
   useEffect(() => {
     if (selectedOutletToEdit === 'NEW') {
@@ -673,6 +822,22 @@ setDeleteRequests(delData);
     link.click();
   };
 
+  const pendingPurchases = purchaseRequests.filter((r) => isPrPending(r));
+  const pendingLoans = loansList.filter((l) => String(l.status || '').toLowerCase().includes('pending'));
+  const openIssues = outletIssues.filter((i) => {
+    const s = String(i.status || '').toLowerCase();
+    return !s.includes('selesai') && !s.includes('closed') && !s.includes('resolved');
+  });
+  const pendingSubs = submissionsList.filter((s) => {
+    const st = String(s.status || '').toLowerCase();
+    if (st !== 'pending') return false;
+    if (s.source_id && (pendingPurchases.some((p) => String(p.id) === String(s.source_id)) || pendingLoans.some((l) => String(l.id) === String(s.source_id)))) {
+      return false;
+    }
+    return true;
+  });
+  const approvalCount = pendingPurchases.length + pendingLoans.length + openIssues.length + pendingSubs.length;
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-3 md:p-8">
       <div className="max-w-6xl mx-auto space-y-4 md:space-y-6">
@@ -703,6 +868,14 @@ setDeleteRequests(delData);
           <button onClick={() => setActiveTab('pnl')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'pnl' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>📊 Laporan PnL</button>
           <button onClick={() => setActiveTab('history')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'history' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>📦 Transaksi</button>
           <button onClick={() => setActiveTab('loans')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'loans' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>💸 Kasbon Crew</button>
+          <button onClick={() => setActiveTab('approvals')} className={`relative whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'approvals' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
+            ✅ Persetujuan
+            {approvalCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 bg-rose-500 text-white text-[10px] font-black min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center">
+                {approvalCount > 99 ? '99+' : approvalCount}
+              </span>
+            )}
+          </button>
 
           {isOwnerRole(currentUserRole) && (
             <Link href="/owner/kpi-settings" className="whitespace-nowrap bg-amber-50 border border-amber-200 text-amber-800 hover:bg-amber-500 hover:text-white text-xs px-4 py-2 rounded-xl font-bold transition">🎯 KPI Settings</Link>
@@ -944,6 +1117,85 @@ setDeleteRequests(delData);
           </div>
         )}
 
+        {activeTab === 'approvals' && (
+          <div className="space-y-4">
+            <div className="bg-white border border-slate-200 p-4 md:p-6 rounded-2xl shadow-sm space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <h3 className="font-black text-slate-900 text-sm">Persetujuan / Approval</h3>
+                  <p className="text-[10px] text-slate-500">Pengajuan kasir masuk otomatis ke antrian ini.</p>
+                </div>
+                <span className="text-xs font-black text-indigo-700 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-full">{approvalCount} pending</span>
+              </div>
+            </div>
+
+            <div className="bg-white border border-amber-200 p-4 md:p-6 rounded-2xl shadow-sm space-y-3">
+              <h4 className="font-bold text-amber-800 text-xs uppercase">Pengajuan Pembelian</h4>
+              {pendingPurchases.map((req) => (
+                <div key={req.id} className="border border-amber-200 bg-amber-50/50 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-black text-slate-900">{prTitle(req)}</p>
+                    <p className="text-[10px] text-slate-500">{prRequestedBy(req) || 'Kasir'} · {req.outlets?.name || 'Outlet'} · Rp {prAmount(req).toLocaleString('id-ID')}</p>
+                    <p className="text-[10px] text-slate-400">{req.created_at ? new Date(req.created_at).toLocaleString('id-ID') : ''}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button type="button" disabled={approvalBusy === req.id} onClick={() => handleApprovePurchase(req)} className="bg-emerald-600 text-white text-[10px] font-bold px-3 py-2 rounded-lg">Setujui</button>
+                    <button type="button" disabled={approvalBusy === req.id} onClick={() => handleRejectPurchase(req)} className="bg-rose-100 text-rose-700 text-[10px] font-bold px-3 py-2 rounded-lg">Tolak</button>
+                  </div>
+                </div>
+              ))}
+              {pendingPurchases.length === 0 && <p className="text-xs text-slate-400 text-center py-4">Tidak ada pengajuan pembelian menunggu.</p>}
+            </div>
+
+            <div className="bg-white border border-indigo-200 p-4 md:p-6 rounded-2xl shadow-sm space-y-3">
+              <h4 className="font-bold text-indigo-800 text-xs uppercase">Kasbon Staf</h4>
+              {pendingLoans.map((loan) => (
+                <div key={loan.id} className="border border-indigo-200 bg-indigo-50/50 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-black text-slate-900">{loan.employee_name || 'Staf'}</p>
+                    <p className="text-[10px] text-slate-500">Rp {Number(loan.amount || loan.total_loan || 0).toLocaleString('id-ID')} · {loan.reason || loan.notes || 'Kasbon'}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button type="button" disabled={approvalBusy === loan.id} onClick={() => handleApproveKasbon(loan)} className="bg-emerald-600 text-white text-[10px] font-bold px-3 py-2 rounded-lg">Setujui</button>
+                    <button type="button" disabled={approvalBusy === loan.id} onClick={() => handleRejectKasbon(loan)} className="bg-rose-100 text-rose-700 text-[10px] font-bold px-3 py-2 rounded-lg">Tolak</button>
+                  </div>
+                </div>
+              ))}
+              {pendingLoans.length === 0 && <p className="text-xs text-slate-400 text-center py-4">Tidak ada kasbon menunggu.</p>}
+            </div>
+
+            <div className="bg-white border border-rose-200 p-4 md:p-6 rounded-2xl shadow-sm space-y-3">
+              <h4 className="font-bold text-rose-800 text-xs uppercase">Laporan Kendala Outlet</h4>
+              {openIssues.slice(0, 20).map((issue) => (
+                <div key={issue.id} className="border border-rose-200 bg-rose-50/40 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-black text-slate-900">{issue.title || issue.category || 'Kendala'}</p>
+                    <p className="text-[10px] text-slate-500">{issue.outlets?.name || 'Outlet'} · {issue.status}</p>
+                  </div>
+                  <button type="button" onClick={() => handleUpdateIssueStatus(issue.id, 'Selesai')} className="bg-slate-800 text-white text-[10px] font-bold px-3 py-2 rounded-lg">Tandai Selesai</button>
+                </div>
+              ))}
+              {openIssues.length === 0 && <p className="text-xs text-slate-400 text-center py-4">Tidak ada kendala terbuka.</p>}
+            </div>
+
+            {pendingSubs.length > 0 && (
+              <div className="bg-white border border-slate-200 p-4 md:p-6 rounded-2xl shadow-sm space-y-3">
+                <h4 className="font-bold text-slate-800 text-xs uppercase">Pengajuan Lain</h4>
+                {pendingSubs.map((row) => (
+                  <div key={row.id} className="border border-slate-200 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <p className="text-xs font-black text-slate-900">{row.title || row.type}</p>
+                      <p className="text-[10px] text-slate-500">{row.requested_by || 'Kasir'} · {row.type} · Rp {Number(row.amount || 0).toLocaleString('id-ID')}</p>
+                      <p className="text-[10px] text-slate-400">{row.description || ''}</p>
+                    </div>
+                    <button type="button" disabled={approvalBusy === row.id} onClick={() => handleApproveSubmission(row)} className="bg-emerald-600 text-white text-[10px] font-bold px-3 py-2 rounded-lg">Setujui</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* TAB KASBON & POTONGAN KESALAHAN */}
         {activeTab === 'loans' && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -1020,7 +1272,7 @@ setDeleteRequests(delData);
           <>
             {activeTab === 'settings' && (
               <div className="flex flex-col gap-6">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                   <Link href="/owner/settings/outlets" className="bg-white border border-sky-200 rounded-2xl p-4 shadow-sm hover:border-sky-400 transition">
                     <p className="text-sm font-black text-slate-900">Profil Outlet & Google</p>
                     <p className="text-[11px] text-slate-500 mt-0.5">Foto, jam buka, Coming Soon, Place ID, dan rating fallback.</p>
@@ -1032,6 +1284,10 @@ setDeleteRequests(delData);
                   <Link href="/owner/promos" className="bg-white border border-amber-200 rounded-2xl p-4 shadow-sm hover:border-amber-400 transition">
                     <p className="text-sm font-black text-slate-900">Banner Promo Customer</p>
                     <p className="text-[11px] text-slate-500 mt-0.5">Carousel pengumuman di beranda aplikasi pelanggan.</p>
+                  </Link>
+                  <Link href="/owner/crm" className="bg-white border border-violet-200 rounded-2xl p-4 shadow-sm hover:border-violet-400 transition">
+                    <p className="text-sm font-black text-slate-900">CRM Loyalty</p>
+                    <p className="text-[11px] text-slate-500 mt-0.5">Persentase poin per tier, segmen retensi, dan broadcast pelanggan.</p>
                   </Link>
                 </div>
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

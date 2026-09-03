@@ -51,6 +51,7 @@ import PromoBannerDetailModal from '@/components/customer/PromoBannerDetailModal
 import OutletProfileDrawer from '@/components/customer/OutletProfileDrawer';
 import BottomNavbar from '@/components/customer/BottomNavbar';
 import AddressManager from '@/components/customer/AddressManager';
+import LoyaltyProfileCard from '@/components/customer/LoyaltyProfileCard';
 import CustomerHeader from '@/components/customer/CustomerHeader';
 import {
   MAX_NEARBY_RADIUS_KM,
@@ -1793,22 +1794,33 @@ function CustomerDashboardPage() {
         <>
           {activeTab === 'home' && (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                <button onClick={() => setActiveTab('order')} className="bg-white border border-slate-200 p-4 rounded-3xl flex items-center gap-3 hover:border-blue-500 transition shadow-sm text-left">
+              <div className="grid grid-cols-3 gap-2">
+                <LoyaltyProfileCard
+                  phone={customerPhone}
+                  name={customerData.name || customerName}
+                  outletId={selectedOutlet}
+                />
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('order')}
+                  className="bg-white border border-slate-200 p-3 rounded-3xl flex flex-col gap-2 hover:border-blue-500 transition shadow-sm text-left min-w-0"
+                >
                   <IconBadge icon={Truck} tone="blue" size="lg" />
-                  <div>
-                    <span className="text-xs font-extrabold text-slate-900 block">Pesan Express</span>
-                    <span className="text-[10px] text-slate-500 font-medium">Jemput ke Rumah</span>
+                  <div className="min-w-0">
+                    <span className="text-[10px] font-extrabold text-slate-900 block">Pesan Express</span>
+                    <span className="text-[9px] text-slate-500 font-medium">Jemput ke Rumah</span>
                   </div>
                 </button>
-
-                <button onClick={() => setActiveTab('deposit')} className="bg-white border border-slate-200 p-4 rounded-3xl flex items-start gap-3 hover:border-indigo-500 transition shadow-sm text-left">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('deposit')}
+                  className="bg-white border border-slate-200 p-3 rounded-3xl flex flex-col gap-2 hover:border-indigo-500 transition shadow-sm text-left min-w-0"
+                >
                   <IconBadge icon={Wallet} tone="indigo" size="lg" />
                   <div className="min-w-0">
-                    <span className="text-xs font-extrabold text-slate-900 block">Paket Deposit</span>
-                    <span className="text-[10px] text-slate-500 font-medium block">Bonus Saldo Extra</span>
-                    <span className="text-[10px] text-indigo-600 font-bold mt-1 block">
-                      Sisa Saldo: Rp {Number(customerData.deposit_balance || 0).toLocaleString('id-ID')}
+                    <span className="text-[10px] font-extrabold text-slate-900 block">Saldo Deposit</span>
+                    <span className="text-[9px] text-indigo-600 font-bold mt-1 block leading-tight">
+                      Rp {Number(customerData.deposit_balance || 0).toLocaleString('id-ID')}
                     </span>
                   </div>
                 </button>

@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabaseClient';
 import { createSupervisorIssueTask } from '@/lib/createOutletIssueTask';
 import { insertWithFallback } from '@/lib/safeWrite';
 import FileProofInput from '@/components/FileProofInput';
+import { writeSubmission } from '@/lib/posSync';
 
 export default function OutletIssueForm({ selectedOutlet, employeeName }: { selectedOutlet: string; employeeName: string }) {
   const [issueCategory, setIssueCategory] = useState('Kerusakan Alat');
@@ -119,6 +120,17 @@ export default function OutletIssueForm({ selectedOutlet, employeeName }: { sele
           issueId = undefined;
         }
       }
+
+      await writeSubmission({
+        type: 'issue',
+        outlet_id: outletId,
+        requested_by: cashierName,
+        title: issueTitle.trim(),
+        amount: 0,
+        description: fullDescription,
+        source_table: 'outlet_issues',
+        source_id: issueId || null
+      });
 
       if (issueId) {
         try {
