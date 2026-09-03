@@ -26,3 +26,7 @@ body {
   scrollbar-width: none;
 }
 
+.leaflet-container {
+  z-index: 0;
+}
+

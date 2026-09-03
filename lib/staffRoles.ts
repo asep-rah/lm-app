@@ -16,7 +16,7 @@ export type StaffRoleValue =
 
 export const STAFF_ROLES: { value: StaffRoleValue; label: string }[] = [
   { value: 'kasir', label: 'Kasir (POS - 1 Outlet)' },
-  { value: 'driver', label: 'Driver / Kurir (Aplikasi Kurir)' },
+  { value: 'driver', label: 'Driver / Kurir (Multi-Outlet, clock-in cabang)' },
   { value: 'cs', label: 'Customer Service (CS Pusat)' },
   { value: 'cs_care', label: 'CS Care (Resolusi Komplain)' },
   { value: 'admin_ops', label: 'Admin Operasional / CMS' },

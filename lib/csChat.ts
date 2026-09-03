@@ -1,6 +1,36 @@
 import { supabase } from '@/lib/supabaseClient';
 import { notifyCustomerChat, notifyCsPortal } from '@/lib/notifications';
 
+export type ChatMessage = {
+  id?: string;
+  sender_type?: string | null;
+  is_internal?: boolean | null;
+  created_at?: string | null;
+  customer_phone?: string | null;
+  thread_key?: string | null;
+  is_read?: boolean;
+  message?: string | null;
+  sender_name?: string | null;
+  order_id?: string | null;
+  transaction_id?: string | null;
+  attachment_url?: string | null;
+  image_url?: string | null;
+};
+
+export const mapChatMessage = (row: any): ChatMessage => {
+  if (!row || typeof row !== 'object') return { is_read: false };
+  return {
+    ...row,
+    id: row.id != null ? String(row.id) : undefined,
+    sender_type: row.sender_type ?? null,
+    is_internal: row.is_internal === true,
+    created_at: row.created_at ?? null,
+    customer_phone: row.customer_phone ?? null,
+    thread_key: row.thread_key ?? null,
+    is_read: typeof row.is_read === 'boolean' ? row.is_read : false
+  };
+};
+
 /** 08xx, 8xx, dan 62xx jadi 62… supaya thread tidak pecah. */
 export const canonicalPhone = (raw: string) => {
   let d = String(raw || '').replace(/\D/g, '');
@@ -162,12 +192,17 @@ export const insertChatMessage = async (input: {
       ? `${input.message || ''}${input.message ? '\n' : ''}${media}`.trim()
       : input.message;
 
+  const senderKind = String(input.sender_type || '').toLowerCase();
+  const fromCustomer =
+    senderKind === 'customer' || senderKind === 'user' || senderKind === 'pelanggan';
+
   const base: Record<string, any> = {
     customer_phone: phone,
     sender_type: input.sender_type,
     message: withFile,
     sender_name: input.sender_name || null,
     is_internal: !!input.is_internal,
+    is_read: fromCustomer || !!input.is_internal,
     thread_key,
     assigned_to_agent_id: input.assigned_to_agent_id || null,
     assigned_to_agent_name: input.assigned_to_agent_name || null,
@@ -177,7 +212,7 @@ export const insertChatMessage = async (input: {
     attachment_type: input.attachment_type || (isInline || String(media || '').includes('image') ? 'image' : null)
   };
 
-  const attempts = [
+  const attempts: Record<string, unknown>[] = [
     { ...base, order_id: pickupId, transaction_id: txId },
     { ...base, order_id: pickupId, transaction_id: txId, assigned_to_agent_id: undefined, assigned_to_agent_name: undefined, is_claimed: undefined },
     { ...base, order_id: pickupId, assigned_to_agent_id: undefined, assigned_to_agent_name: undefined, is_claimed: undefined, attachment_url: undefined },
@@ -215,10 +250,12 @@ export const insertChatMessage = async (input: {
   let lastErr: any = null;
   let dropOrderId = false;
   let dropTxId = false;
+  let dropIsRead = false;
   for (const row of attempts) {
     const next = { ...row };
     if (dropOrderId) delete next.order_id;
     if (dropTxId) delete next.transaction_id;
+    if (dropIsRead) delete next.is_read;
     const clean = Object.fromEntries(Object.entries(next).filter(([, v]) => v !== undefined && v !== null));
     const { error } = await supabase.from('support_chats').insert([clean]);
     if (!error) {
@@ -242,8 +279,6 @@ export const insertChatMessage = async (input: {
         sender_type: input.sender_type,
         preview: withFile
       });
-      const sender = String(input.sender_type || '').toLowerCase();
-      const fromCustomer = sender === 'customer' || sender === 'user' || sender === 'pelanggan';
       if (fromCustomer && phone) {
         notifyCsPortal('cs_chat', 'Pesan baru dari pelanggan. Buka Live Chat.');
       } else if (!input.is_internal && !fromCustomer && phone) {
@@ -255,6 +290,7 @@ export const insertChatMessage = async (input: {
     const msg = String(error.message || '').toLowerCase();
     if (msg.includes('foreign key') || msg.includes('order_id_fkey')) dropOrderId = true;
     if (msg.includes('schema cache') && msg.includes('transaction_id')) dropTxId = true;
+    if (msg.includes('schema cache') && msg.includes('is_read')) dropIsRead = true;
   }
   return { error: lastErr, thread_key };
 };
@@ -393,16 +429,17 @@ export const ingestCustomerMessageIfThreadClosed = async (phone: string, message
   return { ingested: !res.error, error: res.error };
 };
 
-const mergeChatRows = (a: any[] = [], b: any[] = []) => {
+const mergeChatRows = (a: any[] = [], b: any[] = []): ChatMessage[] => {
   const seen = new Set<string>();
-  const out: any[] = [];
+  const out: ChatMessage[] = [];
   for (const row of [...a, ...b]) {
-    const id = row?.id ? String(row.id) : '';
-    const stamp = `${row?.created_at || ''}|${row?.sender_type || ''}|${String(row?.message || '').slice(0, 80)}`;
+    const mapped = mapChatMessage(row);
+    const id = mapped.id ? String(mapped.id) : '';
+    const stamp = `${mapped.created_at || ''}|${mapped.sender_type || ''}|${String(mapped.message || '').slice(0, 80)}`;
     const key = id || stamp;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push(row);
+    out.push(mapped);
   }
   return out.sort((x, y) => new Date(x.created_at || 0).getTime() - new Date(y.created_at || 0).getTime());
 };

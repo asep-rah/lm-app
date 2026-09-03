@@ -92,7 +92,7 @@ export const homePathForRole = (role: string) => {
   const r = String(role || '').toLowerCase().trim();
   if (isOwnerRole(r)) return '/owner';
   if (isCsRole(r)) return '/cs/workspace';
-  if (['driver', 'courier', 'kurir'].includes(r)) return '/driver/dashboard';
+  if (['driver', 'courier', 'kurir'].includes(r)) return '/driver';
   if (r === 'investor') return '/investor';
   if (r === 'kasir' || r === 'pos') return '/pos';
   return '/login';

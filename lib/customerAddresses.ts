@@ -6,6 +6,8 @@ export type SavedAddress = {
   label: string;
   full_address: string;
   is_primary: boolean;
+  latitude?: number | null;
+  longitude?: number | null;
 };
 
 export const ADDRESS_LABEL_PRESETS = ['Rumah', 'Kantor', 'Apartemen'] as const;
@@ -22,7 +24,9 @@ const mapRow = (row: Record<string, unknown>): SavedAddress => ({
   id: String(row.id || newId()),
   label: String(row.label_name || row.label || 'Alamat').trim() || 'Alamat',
   full_address: String(row.full_address || row.address || '').trim(),
-  is_primary: row.is_primary === true || row.is_primary === 'true'
+  is_primary: row.is_primary === true || row.is_primary === 'true',
+  latitude: row.latitude == null || row.latitude === '' ? null : Number(row.latitude),
+  longitude: row.longitude == null || row.longitude === '' ? null : Number(row.longitude)
 });
 
 const readLocal = (phone: string): SavedAddress[] => {
@@ -61,11 +65,21 @@ export async function loadCustomerAddresses(phone: string): Promise<SavedAddress
   const local = readLocal(phone);
   if (!phone) return local;
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from('customer_addresses')
-      .select('id, customer_phone, label_name, full_address, is_primary')
+      .select('id, customer_phone, label_name, full_address, is_primary, latitude, longitude')
       .eq('customer_phone', phone)
       .order('created_at', { ascending: true });
+    let { data, error } = await query;
+    if (error && /latitude|longitude/i.test(String(error.message || ''))) {
+      const retry = await supabase
+        .from('customer_addresses')
+        .select('id, customer_phone, label_name, full_address, is_primary')
+        .eq('customer_phone', phone)
+        .order('created_at', { ascending: true });
+      data = (retry.data || null) as typeof data;
+      error = retry.error;
+    }
     if (error || !data) return local;
     const remote = (data as Record<string, unknown>[]).map(mapRow).filter((a) => a.full_address);
     if (!remote.length) return local;
@@ -80,7 +94,14 @@ export async function loadCustomerAddresses(phone: string): Promise<SavedAddress
 export async function upsertCustomerAddress(
   phone: string,
   current: SavedAddress[],
-  draft: { id?: string; label: string; full_address: string; is_primary?: boolean }
+  draft: {
+    id?: string;
+    label: string;
+    full_address: string;
+    is_primary?: boolean;
+    latitude?: number | null;
+    longitude?: number | null;
+  }
 ): Promise<SavedAddress[]> {
   const label = String(draft.label || 'Alamat').trim() || 'Alamat';
   const full_address = String(draft.full_address || '').trim();
@@ -89,7 +110,14 @@ export async function upsertCustomerAddress(
   const isNew = !draft.id || draft.id.startsWith('local_') || draft.id.startsWith('addr_');
   const id = isNew ? newId() : String(draft.id);
   const makePrimary = draft.is_primary === true || current.length === 0;
-  const nextRow: SavedAddress = { id, label, full_address, is_primary: makePrimary };
+  const nextRow: SavedAddress = {
+    id,
+    label,
+    full_address,
+    is_primary: makePrimary,
+    latitude: draft.latitude ?? null,
+    longitude: draft.longitude ?? null
+  };
   const without = current.filter((r) => r.id !== draft.id && r.id !== id);
   const next = withSinglePrimary([...without, nextRow], makePrimary ? id : undefined);
   writeLocal(phone, next);
@@ -101,12 +129,15 @@ export async function upsertCustomerAddress(
     customer_phone: phone,
     label_name: label,
     full_address,
-    is_primary: nextRow.is_primary
+    is_primary: nextRow.is_primary,
+    latitude: nextRow.latitude,
+    longitude: nextRow.longitude
   };
 
   if (isNew) {
     await insertWithFallback('customer_addresses', [
       payload,
+      { customer_phone: phone, label_name: label, full_address, is_primary: nextRow.is_primary, latitude: nextRow.latitude, longitude: nextRow.longitude },
       { customer_phone: phone, label_name: label, full_address, is_primary: nextRow.is_primary },
       { customer_phone: phone, full_address, is_primary: nextRow.is_primary }
     ]);
@@ -114,6 +145,7 @@ export async function upsertCustomerAddress(
     await updateWithFallback(
       'customer_addresses',
       [
+        { label_name: label, full_address, is_primary: nextRow.is_primary, latitude: nextRow.latitude, longitude: nextRow.longitude },
         { label_name: label, full_address, is_primary: nextRow.is_primary },
         { full_address, is_primary: nextRow.is_primary },
         { full_address }

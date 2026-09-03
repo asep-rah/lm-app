@@ -78,7 +78,10 @@ export async function insertPickupOrder(
         'has_fading',
         'has_valuables',
         'wash_process',
-        'bag_count'
+        'bag_count',
+        'latitude',
+        'longitude',
+        'formatted_address'
       ]),
       {
         ...core,

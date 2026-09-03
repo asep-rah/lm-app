@@ -9,7 +9,9 @@ self.addEventListener('push', (event) => {
     title: 'Laundrivery',
     body: 'Ada update baru.',
     url: '/customer/dashboard',
-    icon: '/icon-192.png'
+    icon: '/icon-192.png',
+    kind: '',
+    tag: ''
   };
   try {
     if (event.data) payload = { ...payload, ...event.data.json() };
@@ -22,11 +24,19 @@ self.addEventListener('push', (event) => {
     }
   }
   event.waitUntil(
-    self.registration.showNotification(payload.title || 'Laundrivery', {
-      body: payload.body || '',
-      icon: payload.icon || '/icon-192.png',
-      badge: '/icon-192.png',
-      data: { url: payload.url || '/customer/dashboard' }
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      const appVisible = list.some((c) => c.visibilityState === 'visible');
+      const isChat = payload.kind === 'customer_chat' || payload.tag === 'customer-chat';
+      if (appVisible && isChat) return;
+      return self.registration.showNotification(payload.title || 'Laundrivery', {
+        body: payload.body || '',
+        icon: payload.icon || '/icon-192.png',
+        badge: '/icon-192.png',
+        tag: payload.tag || payload.kind || 'laundrivery',
+        renotify: true,
+        vibrate: [140, 80, 140],
+        data: { url: payload.url || '/customer/dashboard' }
+      });
     })
   );
 });

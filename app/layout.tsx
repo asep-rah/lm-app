@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
+import "leaflet/dist/leaflet.css";
 import ToastHost from "@/components/ui/ToastHost";
 import PushPermissionBanner from "@/components/PushPermissionBanner";
 import OutletGroupChatDrawer from "@/components/OutletGroupChatDrawer";

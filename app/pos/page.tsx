@@ -27,6 +27,7 @@ import { maybeAwardLoyalty } from '@/lib/crm-automation';
 import { dispatchThirdPartyDelivery, isThirdPartyDelivery } from '@/lib/thirdPartyDelivery';
 import ThirdPartyDispatchForm from '@/components/ThirdPartyDispatchForm';
 import ThirdPartyDeliveryCard from '@/components/ThirdPartyDeliveryCard';
+import GoogleMapsNavButton from '@/components/GoogleMapsNavButton';
 import CashDepositQrisPanel from '@/components/CashDepositQrisPanel';
 import WasherAssignPanel from '@/components/pos/WasherAssignPanel';
 import MachineLoadVerifyModal from '@/components/pos/MachineLoadVerifyModal';
@@ -168,6 +169,9 @@ interface CustomerOrder {
   customer_name: string;
   customer_phone: string;
   address: string;
+  formatted_address?: string;
+  latitude?: number | null;
+  longitude?: number | null;
   service_type: string;
   duration: string;
   bag_count: number | string;
@@ -271,7 +275,7 @@ export function POSContent() {
     setOrderType('Online');
     setCustomerName(data.customer_name || 'Pelanggan Online');
     setCustomerPhone(data.customer_phone || data.phone_number || '');
-    setAddress(data.address || '');
+    setAddress(data.formatted_address || data.address || '');
     setDuration(normalizePosDuration(data.duration));
     setBagCount(String(data.bag_count ?? '1'));
     setWashProcess(data.wash_process || 'Pisah');
@@ -3465,16 +3469,24 @@ const handleStatusChange = async (
                   <p className="text-xs text-slate-400 text-center py-8">Tidak ada pesanan aplikasi yang menunggu kasir.</p>
                 )}
                 {incomingPickups.map((p: any) => (
-                  <button
+                  <div
                     key={p.id}
-                    type="button"
-                    onClick={() => handleImportPickupOrder(p)}
-                    className="w-full text-left border border-indigo-200 bg-indigo-50 rounded-xl p-3 hover:bg-indigo-100"
+                    className="w-full text-left border border-indigo-200 bg-indigo-50 rounded-xl p-3 space-y-2"
                   >
-                    <p className="text-xs font-black text-indigo-900">{p.customer_name || p.name || 'Pelanggan App'}</p>
-                    <p className="text-[10px] text-indigo-700 mt-0.5">{p.service_type || p.service || 'Layanan'} · {p.status || 'Baru'}</p>
-                    <p className="text-[10px] text-slate-500 mt-0.5">{p.address || p.pickup_address || ''}</p>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => handleImportPickupOrder(p)}
+                      className="w-full text-left hover:bg-indigo-100 rounded-lg -m-1 p-1"
+                    >
+                      <p className="text-xs font-black text-indigo-900">{p.customer_name || p.name || 'Pelanggan App'}</p>
+                      <p className="text-[10px] text-indigo-700 mt-0.5">{p.service_type || p.service || 'Layanan'} · {p.status || 'Baru'}</p>
+                      <p className="text-[10px] text-slate-500 mt-0.5">{p.formatted_address || p.address || p.pickup_address || ''}</p>
+                    </button>
+                    <GoogleMapsNavButton
+                      order={p}
+                      address={p.formatted_address || p.address || p.pickup_address}
+                    />
+                  </div>
                 ))}
                 <Link href="/admin/pickups" className="block text-center text-[11px] font-bold text-indigo-700 py-2">Buka daftar penjemputan lengkap →</Link>
               </div>
@@ -3525,7 +3537,13 @@ const handleStatusChange = async (
                     </div>
                     <div className="col-span-2">
                       <span className="block text-slate-400 font-bold uppercase text-[8px]">Alamat Penjemputan</span>
-                      <span className="font-semibold">{customerOrder.address || '-'}</span>
+                      <span className="font-semibold">{customerOrder.formatted_address || customerOrder.address || '-'}</span>
+                      <div className="mt-2">
+                        <GoogleMapsNavButton
+                          order={customerOrder}
+                          address={customerOrder.formatted_address || customerOrder.address}
+                        />
+                      </div>
                     </div>
                     <div>
                       <span className="block text-slate-400 font-bold uppercase text-[8px]">Layanan</span>

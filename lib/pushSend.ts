@@ -59,7 +59,9 @@ const sendToRows = async (rows: SubRow[], event: PushDispatch) => {
     title: event.title,
     body: event.body,
     url: event.url || '/customer/dashboard',
-    icon: '/icon-192.png'
+    icon: '/icon-192.png',
+    kind: event.kind,
+    tag: event.kind === 'customer_chat' ? 'customer-chat' : event.kind || undefined
   });
   let sent = 0;
   const seen = new Set<string>();

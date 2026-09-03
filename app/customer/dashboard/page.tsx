@@ -52,6 +52,7 @@ import OutletProfileDrawer from '@/components/customer/OutletProfileDrawer';
 import BottomNavbar from '@/components/customer/BottomNavbar';
 import AddressManager from '@/components/customer/AddressManager';
 import LoyaltyProfileCard from '@/components/customer/LoyaltyProfileCard';
+import PinpointMap from '@/components/customer/PinpointMap';
 import CustomerHeader from '@/components/customer/CustomerHeader';
 import {
   MAX_NEARBY_RADIUS_KM,
@@ -70,7 +71,7 @@ import {
   upsertCustomerAddress,
   type SavedAddress
 } from '@/lib/customerAddresses';
-import { reverseGeocodeCity } from '@/lib/reverseGeocode';
+import { geocodeAddress, reverseGeocodeAddress, reverseGeocodeCity } from '@/lib/reverseGeocode';
 import { matchOutletFromQuery, persistCustomerOutlet, readStoredCustomerOutlet } from '@/lib/outletUuid';
 import ActivitySegmentTabs from '@/components/customer/ActivitySegmentTabs';
 import {
@@ -86,6 +87,7 @@ import {
 } from '@/lib/customerActivity';
 import { updatePickupOrder } from '@/lib/pickupUpdates';
 import { updateWithFallback } from '@/lib/safeWrite';
+import { hasOnDutyDriverAtOutlet } from '@/lib/driverAttendance';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -248,7 +250,10 @@ function CustomerDashboardPage() {
     (pathname || '').includes('/customer/history') ||
     (pathname || '').includes('/aktivitas');
   const pathIsProfile = (pathname || '').includes('/profil');
-  const pathIsOrder = (pathname || '') === '/order' || (pathname || '').startsWith('/order?');
+  const pathIsOrder =
+    (pathname || '') === '/order' ||
+    (pathname || '').startsWith('/order?') ||
+    (pathname || '').includes('/customer/order');
   const urlActivityTab = parseActivityTab(searchParams.get('tab')) || (pathIsActivity ? 'berlangsung' : null);
   const [activeTab, setActiveTab] = useState<'home' | 'order' | 'deposit' | 'activity' | 'profile' | 'chat'>(
     pathIsActivity || urlActivityTab ? 'activity' : pathIsProfile ? 'profile' : pathIsOrder ? 'order' : 'home'
@@ -272,6 +277,8 @@ function CustomerDashboardPage() {
   const [filteredOutlets, setFilteredOutlets] = useState<any[]>([]);
   const [selectedOutlet, setSelectedOutlet] = useState('');
   const qrOutletLockRef = useRef(false);
+  const skipAddressGeocodeRef = useRef(false);
+  const [addressGeoStatus, setAddressGeoStatus] = useState<'idle' | 'searching' | 'found' | 'miss'>('idle');
   const outletQuery = String(searchParams.get('outlet') || '').trim();
 
   const chooseOutlet = (id: string, opts?: { fromQr?: boolean; clearQuery?: boolean }) => {
@@ -378,6 +385,7 @@ function CustomerDashboardPage() {
   const [thirdPartyVendor, setThirdPartyVendor] = useState('');
 
   const [courierType, setCourierType] = useState<'INTERNAL' | 'THIRD_PARTY'>('INTERNAL');
+  const [internalDriverOnDuty, setInternalDriverOnDuty] = useState(true);
   const [queueCount, setQueueCount] = useState<number>(0);
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [inputChat, setInputChat] = useState<string>('');
@@ -452,12 +460,17 @@ function CustomerDashboardPage() {
       setActiveTab('profile');
       return;
     }
-    if (path === '/order' || path.startsWith('/order?')) {
+    if (path === '/order' || path.startsWith('/order?') || path.includes('/customer/order')) {
       setActiveTab('order');
       return;
     }
     if (path.includes('/beranda')) {
       setActiveTab('home');
+      return;
+    }
+    if (searchParams.get('open') === 'chat' || searchParams.get('tab') === 'chat') {
+      setActiveTab('chat');
+      setActiveChatOrderId('GENERAL_CS');
       return;
     }
     if (parsed) {
@@ -486,6 +499,7 @@ function CustomerDashboardPage() {
       path.includes('/aktivitas') ||
       path.includes('/profil') ||
       path === '/order' ||
+      path.includes('/customer/order') ||
       !!parseActivityTab(searchParams.get('tab'));
     if (hasSpecialUrl) {
       router.replace('/customer/dashboard', { scroll: false });
@@ -724,6 +738,35 @@ function CustomerDashboardPage() {
       supabase.removeChannel(channel);
     };
   }, [customerPhone]);
+
+  useEffect(() => {
+    if (!selectedOutlet) {
+      setInternalDriverOnDuty(true);
+      return;
+    }
+    let cancelled = false;
+    const refresh = async () => {
+      const ok = await hasOnDutyDriverAtOutlet(selectedOutlet);
+      if (cancelled) return;
+      if (ok === 'unknown') {
+        setInternalDriverOnDuty(true);
+        return;
+      }
+      setInternalDriverOnDuty(ok);
+      if (!ok) setCourierType((cur) => (cur === 'INTERNAL' ? 'THIRD_PARTY' : cur));
+    };
+    void refresh();
+    const channel = supabase
+      .channel('cust_driver_duty_' + selectedOutlet)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'driver_attendance' }, () => {
+        void refresh();
+      })
+      .subscribe();
+    return () => {
+      cancelled = true;
+      supabase.removeChannel(channel);
+    };
+  }, [selectedOutlet]);
 
   useEffect(() => {
     const ready = activeOrders.filter((o) => isReadyForPickupAlert(o));
@@ -1117,6 +1160,30 @@ function CustomerDashboardPage() {
     };
   }, [userCoords]);
 
+  useEffect(() => {
+    const q = customerAddress.trim();
+    if (skipAddressGeocodeRef.current) {
+      skipAddressGeocodeRef.current = false;
+      return;
+    }
+    if (q.length < 8) {
+      setAddressGeoStatus('idle');
+      return;
+    }
+    setAddressGeoStatus('searching');
+    const t = window.setTimeout(() => {
+      void geocodeAddress(q).then((pt) => {
+        if (!pt) {
+          setAddressGeoStatus('miss');
+          return;
+        }
+        setAddressGeoStatus('found');
+        setUserCoords({ lat: pt.lat, lon: pt.lng });
+      });
+    }, 900);
+    return () => window.clearTimeout(t);
+  }, [customerAddress]);
+
   const userCity = cityOverride || gpsCity;
   const nearbyCities = useMemo(() => {
     const fromOutlets = uniqueOutletCities(outletsList);
@@ -1335,10 +1402,15 @@ function CustomerDashboardPage() {
     label: string;
     full_address: string;
     is_primary?: boolean;
+    latitude?: number | null;
+    longitude?: number | null;
   }) => {
     setAddressBusy(true);
     const next = await upsertCustomerAddress(cleanPhone(customerPhone), savedAddresses, draft);
     syncPrimaryAddress(next);
+    if (draft.latitude != null && draft.longitude != null) {
+      setUserCoords({ lat: Number(draft.latitude), lon: Number(draft.longitude) });
+    }
     setAddressBusy(false);
   };
 
@@ -1374,10 +1446,19 @@ function CustomerDashboardPage() {
     }
 
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
+      async (pos) => {
         const { latitude, longitude } = pos.coords;
         setUserCoords({ lat: latitude, lon: longitude });
-        alert(`Lokasi GPS berhasil didapatkan! (${latitude.toFixed(5)}, ${longitude.toFixed(5)})`);
+        const label = await reverseGeocodeAddress(latitude, longitude);
+        if (label) {
+          skipAddressGeocodeRef.current = true;
+          setCustomerAddress(label);
+        }
+        alert(
+          label
+            ? 'Lokasi GPS terdeteksi. Alamat terisi otomatis — geser pin ke gerbang jika perlu.'
+            : `Lokasi GPS berhasil. Geser pin ke rumah/gerbang. (${latitude.toFixed(5)}, ${longitude.toFixed(5)})`
+        );
       },
       (err) => {
         console.error('Gagal ambil GPS:', err);
@@ -1497,6 +1578,10 @@ function CustomerDashboardPage() {
     if (!isKiloanChecked && !kiloanLines.length && (!isSatuanChecked || cartSatuan.length === 0)) {
       return alert('Pilih minimal 1 paket Kiloan atau Satuan!');
     }
+    if (courierType === 'INTERNAL' && !internalDriverOnDuty) {
+      alert('Driver internal cabang ini sedang tidak bertugas. Silakan pilih kurir instan/antar mandiri.');
+      return;
+    }
     // PENGAMAN: Blokir total pembayaran COD
     if ((typeof paymentMethod !== 'undefined' && paymentMethod === 'COD') || (typeof paymentMethod !== 'undefined' && paymentMethod === 'Cash on Delivery')) {
       alert('Mohon maaf, Laundrivery saat ini hanya melayani pembayaran cashless / transfer online. Pembayaran COD tidak tersedia.');
@@ -1574,6 +1659,9 @@ function CustomerDashboardPage() {
       service_type: mainServiceLabel,
       estimated_weight: kiloanLines.reduce((s, k) => s + k.kg, 0) || 0,
       address: customerAddress || '',
+      formatted_address: customerAddress || '',
+      latitude: userCoords?.lat ?? null,
+      longitude: userCoords?.lon ?? null,
       address_id: (() => {
         const id = savedAddresses.find((a) => a.full_address === customerAddress)?.id || '';
         return /^[0-9a-f-]{36}$/i.test(id) ? id : null;
@@ -1604,6 +1692,19 @@ function CustomerDashboardPage() {
           customer_phone: normPhone,
           outlet_id: selectedOutlet
         });
+      }
+      if (userCoords && customerAddress) {
+        const match = savedAddresses.find((a) => a.full_address === customerAddress);
+        if (match) {
+          void upsertCustomerAddress(normPhone, savedAddresses, {
+            id: match.id,
+            label: match.label,
+            full_address: match.full_address,
+            is_primary: match.is_primary,
+            latitude: userCoords.lat,
+            longitude: userCoords.lon
+          });
+        }
       }
       if (claimedPromo?.id && !String(claimedPromo.id).startsWith('settings-')) {
         const nextUsed = (Number(claimedPromo.used_count) || 0) + 1;
@@ -1906,9 +2007,20 @@ function CustomerDashboardPage() {
                   <textarea
                     value={customerAddress}
                     onChange={(e) => setCustomerAddress(e.target.value)}
-                    placeholder="Ketik alamat lengkap (Jalan, No. Rumah, Patokan)..."
+                    placeholder="Ketik alamat lengkap (Jalan, No. Rumah, Patokan) — pin peta akan ikut pindah..."
                     className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3 text-xs font-bold text-slate-800 focus:outline-none"
                     rows={2}
+                  />
+                  {addressGeoStatus === 'searching' && (
+                    <p className="text-[9px] text-indigo-600 font-bold">Mencari titik di peta dari alamat…</p>
+                  )}
+                  {addressGeoStatus === 'miss' && (
+                    <p className="text-[9px] text-amber-700 font-bold">Alamat belum ketemu di peta. Geser pin secara manual ke rumah/gerbang.</p>
+                  )}
+                  <PinpointMap
+                    value={userCoords ? { lat: userCoords.lat, lng: userCoords.lon } : null}
+                    onChange={(pt) => setUserCoords({ lat: pt.lat, lon: pt.lng })}
+                    onGps={handleGetCurrentLocation}
                   />
                   {savedAddresses.length > 0 && (
                     <div className="flex flex-wrap gap-1.5">
@@ -1916,7 +2028,17 @@ function CustomerDashboardPage() {
                         <button
                           key={addr.id}
                           type="button"
-                          onClick={() => setCustomerAddress(addr.full_address)}
+                          onClick={() => {
+                            skipAddressGeocodeRef.current = true;
+                            setCustomerAddress(addr.full_address);
+                            setAddressGeoStatus('idle');
+                            if (addr.latitude != null && addr.longitude != null) {
+                              setUserCoords({ lat: Number(addr.latitude), lon: Number(addr.longitude) });
+                            } else {
+                              skipAddressGeocodeRef.current = false;
+                              setUserCoords(null);
+                            }
+                          }}
                           className={`text-[10px] font-extrabold px-2.5 py-1 rounded-lg border ${
                             customerAddress === addr.full_address
                               ? 'bg-blue-600 text-white border-blue-600'
@@ -2337,9 +2459,15 @@ function CustomerDashboardPage() {
                   <div className="grid grid-cols-1 gap-2.5">
                     <button
                       type="button"
-                      onClick={() => setCourierType('INTERNAL')}
+                      disabled={!internalDriverOnDuty}
+                      onClick={() => {
+                        if (!internalDriverOnDuty) return;
+                        setCourierType('INTERNAL');
+                      }}
                       className={`p-3.5 rounded-2xl border text-left transition ${
-                        courierType === 'INTERNAL' 
+                        !internalDriverOnDuty
+                          ? 'bg-slate-100 border-slate-200 opacity-60 cursor-not-allowed'
+                          : courierType === 'INTERNAL' 
                           ? 'bg-emerald-50 border-emerald-400 ring-2 ring-emerald-100' 
                           : 'bg-slate-50 border-slate-200'
                       }`}
@@ -2348,13 +2476,25 @@ function CustomerDashboardPage() {
                         <span className="text-xs font-black text-slate-900 inline-flex items-center gap-1">
                           <Truck className="w-3.5 h-3.5" /> Driver Internal
                         </span>
-                        <span className="bg-emerald-100 text-emerald-700 border border-emerald-200 text-[9px] font-black uppercase px-2 py-0.5 rounded-full">
-                          FREE
-                        </span>
+                        {internalDriverOnDuty ? (
+                          <span className="bg-emerald-100 text-emerald-700 border border-emerald-200 text-[9px] font-black uppercase px-2 py-0.5 rounded-full">
+                            FREE
+                          </span>
+                        ) : (
+                          <span className="bg-slate-200 text-slate-600 text-[9px] font-black uppercase px-2 py-0.5 rounded-full">
+                            Tidak bertugas
+                          </span>
+                        )}
                       </div>
-                      <p className="text-[10px] text-slate-500 font-semibold leading-relaxed">
-                        {queueCount} Antrean • Est. Penjemputan ~{estimatedPickupMinutes} Menit
-                      </p>
+                      {internalDriverOnDuty ? (
+                        <p className="text-[10px] text-slate-500 font-semibold leading-relaxed">
+                          {queueCount} Antrean • Est. Penjemputan ~{estimatedPickupMinutes} Menit
+                        </p>
+                      ) : (
+                        <p className="text-[10px] text-rose-600 font-bold leading-relaxed">
+                          Driver internal cabang ini sedang tidak bertugas. Silakan pilih kurir instan/antar mandiri.
+                        </p>
+                      )}
                     </button>
 
                     <button
@@ -3177,6 +3317,7 @@ function CustomerDashboardPage() {
       <BottomNavbar
         activeTab={activeTab}
         ongoingCount={ongoingCount}
+        customerPhone={customerPhone}
         onHome={goHome}
         onChat={() => (customerData ? openCustomerChat() : setActiveTab('chat'))}
         onOrder={() => setActiveTab('order')}

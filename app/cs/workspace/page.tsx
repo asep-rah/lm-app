@@ -37,7 +37,7 @@ export default function CsWorkspacePage() {
       icon: Truck,
       tone: 'indigo',
       title: 'Antrean Pickup & Dispatch Driver',
-      desc: 'Order jemput online. Assign driver outlet atau kurir instan Gojek / Grab / Lalamove.',
+      desc: 'Order jemput online. Hanya driver ON DUTY yang bisa di-assign; jika kosong, pesan kurir instan Gojek / Grab / Lalamove.',
       badge: pendingPickups,
       badgeLabel: pendingPickups === 1 ? '1 Pending' : `${pendingPickups} Pending`,
       cta: 'Buka antrean pickup'

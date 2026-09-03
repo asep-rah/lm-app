@@ -11,6 +11,9 @@ import { SkeletonCard } from '@/components/ui/Skeleton';
 import { toast } from '@/lib/toast';
 import { uploadProofFile } from '@/lib/uploadProof';
 import { Camera, Check } from 'lucide-react';
+import GoogleMapsNavButton from '@/components/GoogleMapsNavButton';
+import DriverAttendancePanel from '@/components/driver/DriverAttendancePanel';
+import type { DriverAttendance } from '@/lib/driverAttendance';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -37,18 +40,30 @@ const isDeliveryJob = (status: any) => {
 };
 
 const pickupAddress = (p: any) =>
-  String(p?.address || p?.customer_address || p?.notes || '').trim() || 'Alamat belum diisi';
+  String(
+    p?.formatted_address ||
+      p?.address ||
+      p?.customer_address ||
+      p?.customer_addresses?.full_address ||
+      p?.pickup_address ||
+      ''
+  ).trim() || 'Alamat belum diisi';
 
 export default function DriverDashboard() {
   const [pickups, setPickups] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [driverName, setDriverName] = useState('Driver Internal');
   const [driverOutletId, setDriverOutletId] = useState('');
+  const [driverId, setDriverId] = useState('');
+  const [driverEmp, setDriverEmp] = useState<any>(null);
+  const [duty, setDuty] = useState<DriverAttendance | null>(null);
   const [loginRole, setLoginRole] = useState('driver');
   const [driverTab, setDriverTab] = useState<'jobs' | 'inbox' | 'account'>('jobs');
   const [uploadingId, setUploadingId] = useState<string | null>(null);
   const gpsFailed = useRef(false);
   const driverNameRef = useRef('Driver Internal');
+  const outletRef = useRef('');
+  outletRef.current = driverOutletId;
 
   const loadDriverTasks = async (outletId?: string) => {
     setIsLoading(true);
@@ -59,7 +74,7 @@ export default function DriverDashboard() {
         .in('status', ACTIVE_STATUSES)
         .order('created_at', { ascending: true });
 
-      const branch = outletId ?? driverOutletId;
+      const branch = outletId ?? outletRef.current;
       if (branch) query = query.eq('outlet_id', branch);
 
       const { data, error } = await query;
@@ -81,14 +96,16 @@ export default function DriverDashboard() {
         setDriverName(name);
         driverNameRef.current = name;
         setLoginRole(String(parsed.role || 'driver').toLowerCase());
-        outletId = String(parsed.outlet_id || '');
+        setDriverId(String(parsed.id || parsed.username || ''));
+        setDriverEmp(parsed);
+        outletId = String(parsed.active_outlet_id || parsed.outlet_id || '');
         setDriverOutletId(outletId);
       } catch {
         /* ignore */
       }
     }
 
-    loadDriverTasks(outletId);
+    setIsLoading(false);
 
     let watchId: number | undefined;
     if (navigator.geolocation) {
@@ -111,7 +128,7 @@ export default function DriverDashboard() {
     const driverChannel = supabase
       .channel('driver_pickup_sync')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'pickup_orders' }, () => {
-        loadDriverTasks(outletId);
+        if (outletRef.current) loadDriverTasks(outletRef.current);
       })
       .subscribe();
 
@@ -150,21 +167,6 @@ export default function DriverDashboard() {
     } else {
       toast('Gagal mengambil tugas: ' + error.message, 'err');
     }
-  };
-
-  const handleOpenMaps = (order: any) => {
-    if (order.lat && order.lon) {
-      return window.open(`https://www.google.com/maps/dir/?api=1&destination=${order.lat},${order.lon}`, '_blank');
-    }
-
-    const targetAddress = pickupAddress(order);
-    if (!targetAddress || targetAddress === 'Alamat belum diisi') {
-      return alert('Alamat lokasi pelanggan belum diatur.');
-    }
-
-    const cleanAddress = targetAddress.replace(/^Alamat:\s*/i, '').trim();
-    const query = encodeURIComponent(cleanAddress);
-    window.open(`https://www.google.com/maps/search/?api=1&query=${query}`, '_blank');
   };
 
   const handleOpenCall = (phone: string) => {
@@ -352,11 +354,27 @@ export default function DriverDashboard() {
               <p className="text-[9px] text-slate-400 font-bold uppercase">Bertugas</p>
               <p className="font-black text-slate-900">{driverName}</p>
             </div>
-            <StatusBadge tone="emerald">{pickups.length} aktif</StatusBadge>
+            <StatusBadge tone={duty ? 'emerald' : 'slate'}>{duty ? `${pickups.length} aktif` : 'OFF DUTY'}</StatusBadge>
           </div>
         </div>
 
         <div className="p-4 flex-1 space-y-4">
+          {driverTab !== 'inbox' && driverId && (
+            <DriverAttendancePanel
+              driverId={driverId}
+              driverName={driverName}
+              employee={driverEmp}
+              onDutyChange={(next) => {
+                setDuty(next);
+                if (next?.active_outlet_id) {
+                  setDriverOutletId(next.active_outlet_id);
+                  void loadDriverTasks(next.active_outlet_id);
+                } else {
+                  setPickups([]);
+                }
+              }}
+            />
+          )}
           {driverTab === 'inbox' && (
             <div className="space-y-4">
               <KpiRoleMonitoring />
@@ -379,7 +397,7 @@ export default function DriverDashboard() {
 
           {driverTab === 'jobs' && (
             <>
-          {isLoading && (
+          {isLoading && duty && (
             <div className="space-y-3">
               <SkeletonCard />
               <SkeletonCard />
@@ -387,7 +405,13 @@ export default function DriverDashboard() {
           )}
 
           <div className="space-y-4">
-            {pickups.map((p, index) => (
+            {!duty && !isLoading && (
+              <div className="text-center py-10 border border-dashed border-slate-200 rounded-2xl text-slate-400 bg-white">
+                <p className="text-sm font-black text-slate-700">Clock-in dulu</p>
+                <p className="text-[10px] mt-1 px-6">Pilih cabang bertugas lalu clock-in untuk menerima antrean jemput/antar.</p>
+              </div>
+            )}
+            {duty && pickups.map((p, index) => (
               <div key={p.id} className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-sm hover:shadow-md transition-all space-y-3">
                 <div className="flex justify-between items-center">
                   <span className="text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-600">
@@ -410,13 +434,9 @@ export default function DriverDashboard() {
                   {p.service_type} · {p.estimated_weight || '3'} Kg · Ongkir Rp {Number(p.delivery_fee || 0).toLocaleString('id-ID')}
                 </p>
 
-                <div className="grid grid-cols-3 gap-2">
-                  <button
-                    onClick={() => handleOpenMaps(p)}
-                    className="flex flex-col items-center justify-center bg-sky-50 border border-sky-100 text-sky-700 font-bold p-2.5 rounded-xl text-[10px]"
-                  >
-                    Maps
-                  </button>
+                <div className="grid grid-cols-1 gap-2">
+                  <GoogleMapsNavButton order={p} address={pickupAddress(p)} />
+                  <div className="grid grid-cols-2 gap-2">
                   <button
                     onClick={() => handleOpenWA(phoneOf(p), isDeliveryJob(p.status))}
                     className="flex flex-col items-center justify-center bg-emerald-50 border border-emerald-100 text-emerald-700 font-bold p-2.5 rounded-xl text-[10px]"
@@ -429,6 +449,7 @@ export default function DriverDashboard() {
                   >
                     Telepon
                   </button>
+                  </div>
                 </div>
 
                 {waitingAccept(p.status) ? (
@@ -491,7 +512,7 @@ export default function DriverDashboard() {
             ))}
           </div>
 
-          {pickups.length === 0 && !isLoading && (
+          {duty && pickups.length === 0 && !isLoading && (
             <div className="text-center py-16 border border-dashed border-slate-200 rounded-2xl text-slate-400 bg-white">
               <p className="text-sm font-black text-slate-700">Tidak ada tugas.</p>
               <p className="text-[10px] mt-1">Standby di outlet atau cek inbox.</p>

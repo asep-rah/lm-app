@@ -1,4 +1,5 @@
 import { insertWithFallback } from '@/lib/safeWrite';
+import { playOpsSound, unlockOpsAudio } from '@/lib/opsNotify';
 import { getStaffSession } from '@/lib/staffSession';
 import { supabase } from '@/lib/supabaseClient';
 import { VAPID_PUBLIC_KEY } from '@/lib/vapidPublic';
@@ -173,6 +174,19 @@ export const notifyCustomerPayment = (phone?: string | null) => {
   });
 };
 
+export const playCustomerChatChime = () => {
+  unlockOpsAudio();
+  playOpsSound('chat');
+};
+
+/** Chime saat chat tidak sedang dibuka. Web Push tetap dikirim dari sisi CS via notifyCustomerChat. */
+export const alertCustomerIncomingChat = (opts?: { preview?: string; inChat?: boolean }) => {
+  const hidden = typeof document !== 'undefined' && document.visibilityState !== 'visible';
+  const inChat = !!opts?.inChat && !hidden;
+  if (inChat) return;
+  playCustomerChatChime();
+};
+
 export const notifyCustomerChat = (phone?: string | null, preview?: string) => {
   if (!phone) return;
   queuePush({
@@ -180,7 +194,7 @@ export const notifyCustomerChat = (phone?: string | null, preview?: string) => {
     phone,
     title: 'Pesan Baru dari CS',
     body: String(preview || 'Ada pesan baru dari customer service.').slice(0, 140),
-    url: '/customer/dashboard?tab=chat'
+    url: '/customer/dashboard?open=chat'
   });
 };
 

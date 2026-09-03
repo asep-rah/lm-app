@@ -11,6 +11,8 @@ import ThirdPartyDeliveryCard from '@/components/ThirdPartyDeliveryCard';
 import ThirdPartyDispatchForm from '@/components/ThirdPartyDispatchForm';
 import { visibleChatText } from '@/components/ChatAttachment';
 import { dispatchThirdPartyDelivery, isThirdPartyDelivery } from '@/lib/thirdPartyDelivery';
+import GoogleMapsNavButton from '@/components/GoogleMapsNavButton';
+import { listAllOnDuty, type DriverAttendance } from '@/lib/driverAttendance';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -27,6 +29,7 @@ export default function CSDashboard() {
   const [transactions, setTransactions] = useState<any[]>([]);
   const [pendingConfirmations, setPendingConfirmations] = useState<any[]>([]);
   const [drivers, setDrivers] = useState<any[]>([]);
+  const [onDutyShifts, setOnDutyShifts] = useState<DriverAttendance[]>([]);
   const [assignedDriverMap, setAssignedDriverMap] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
 
@@ -154,6 +157,7 @@ export default function CSDashboard() {
 
     const { data: driverData } = await supabase.from('employees').select('*').eq('role', 'driver');
     if (driverData) setDrivers(driverData);
+    setOnDutyShifts(await listAllOnDuty());
 
     let pkpQuery = supabase
       .from('pickup_orders')
@@ -235,7 +239,7 @@ export default function CSDashboard() {
     loadCSData();
     const interval = setInterval(loadCSData, 10000);
     const ch = supabase
-      .channel('cs_tp_delivery')
+      .channel('cs_pickup_duty_' + selectedOutlet)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'support_chat_sessions' }, () => {
         loadBadgeCounts();
       })
@@ -244,6 +248,9 @@ export default function CSDashboard() {
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'pickup_orders' }, () => {
         loadBadgeCounts();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'driver_attendance' }, () => {
+        void listAllOnDuty().then(setOnDutyShifts);
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'transactions' }, (payload) => {
         const row: any = payload.new;
@@ -264,9 +271,26 @@ export default function CSDashboard() {
     };
   }, [selectedOutlet]);
 
+  const dutyDriversFor = (outletId: string) => {
+    const shifts = onDutyShifts.filter((s) => String(s.active_outlet_id) === String(outletId || ''));
+    const ids = new Set(shifts.map((s) => String(s.driver_id)));
+    const names = new Set(shifts.map((s) => String(s.driver_name || '').toLowerCase()).filter(Boolean));
+    return drivers.filter(
+      (d) =>
+        ids.has(String(d.id)) ||
+        ids.has(String(d.username || '')) ||
+        names.has(String(d.name || '').toLowerCase())
+    );
+  };
+
   const handleAssignDriver = async (pickupId: string) => {
     const driverName = assignedDriverMap[pickupId];
     if (!driverName) return alert('⚠️ Pilih driver terlebih dahulu dari daftar!');
+    const pickup = pickups.find((p) => p.id === pickupId);
+    const allowed = dutyDriversFor(pickup?.outlet_id).some((d) => d.name === driverName);
+    if (!allowed) {
+      return alert('Driver ini sedang tidak ON DUTY di cabang tersebut. Pesan kurir instan atau pilih driver yang clock-in.');
+    }
 
     const { error } = await supabase.from('pickup_orders').update({
       driver_name: driverName,
@@ -432,9 +456,16 @@ export default function CSDashboard() {
                     <div>
                       <h3 className="font-black text-slate-900 text-base">{p.customer_phone}</h3>
                       <p className="text-xs text-slate-600 mt-0.5">
-                        📍 <b>{p.customer_addresses?.label_name || 'Alamat'}:</b> {p.customer_addresses?.full_address || 'Alamat tersimpan'}
+                        📍 <b>{p.customer_addresses?.label_name || 'Alamat'}:</b>{' '}
+                        {p.formatted_address || p.address || p.customer_addresses?.full_address || 'Alamat tersimpan'}
                       </p>
                       <p className="text-[10px] text-blue-800 font-bold mt-1">Outlet: {p.outlets?.name || 'Mencari Outlet...'}</p>
+                      <div className="mt-2">
+                        <GoogleMapsNavButton
+                          order={p}
+                          address={p.formatted_address || p.address || p.customer_addresses?.full_address}
+                        />
+                      </div>
                     </div>
 
                     <div className="bg-slate-50 p-2.5 rounded-xl text-[10px] space-y-1 text-slate-700">
@@ -482,6 +513,11 @@ export default function CSDashboard() {
                       <label className="text-[10px] font-black text-indigo-900 block uppercase">
                         👔 Instruksi CS: Tugaskan Driver
                       </label>
+                      {dutyDriversFor(p.outlet_id).length === 0 ? (
+                        <p className="text-[10px] text-rose-700 font-bold">
+                          Tidak ada driver internal ON DUTY di cabang ini. Gunakan kurir instan di bawah.
+                        </p>
+                      ) : (
                       <div className="flex gap-1.5">
                         <select
                           value={assignedDriverMap[p.id] || ''}
@@ -489,7 +525,7 @@ export default function CSDashboard() {
                           className="w-full bg-white border border-indigo-300 rounded-xl p-2 text-xs font-bold text-slate-800"
                         >
                           <option value="">-- Pilih Driver --</option>
-                          {drivers.map((d) => (
+                          {dutyDriversFor(p.outlet_id).map((d) => (
                             <option key={d.id} value={d.name}>
                               🛵 {d.name}
                             </option>
@@ -502,6 +538,7 @@ export default function CSDashboard() {
                           Utus
                         </button>
                       </div>
+                      )}
                       {p.driver_name && (
                         <p className="text-[10px] text-emerald-700 font-bold mt-1">
                           ✅ Driver Ditugaskan: {p.driver_name}
@@ -536,9 +573,15 @@ export default function CSDashboard() {
                           <button
                             type="button"
                             onClick={() => setDispatchTarget(p)}
-                            className="w-full bg-amber-500 hover:bg-amber-600 text-white font-black text-[10px] py-2 rounded-lg"
+                            className={`w-full font-black text-[10px] py-2 rounded-lg ${
+                              dutyDriversFor(p.outlet_id).length === 0
+                                ? 'bg-amber-500 hover:bg-amber-600 text-white ring-2 ring-amber-300 shadow-lg'
+                                : 'bg-amber-500 hover:bg-amber-600 text-white'
+                            }`}
                           >
-                            Kurir Pihak Ketiga — isi tracking + foto
+                            {dutyDriversFor(p.outlet_id).length === 0
+                              ? '⚡ Pesan kurir instan (Gojek / Grab / Lalamove)'
+                              : 'Kurir Pihak Ketiga — isi tracking + foto'}
                           </button>
                         )}
                       </div>

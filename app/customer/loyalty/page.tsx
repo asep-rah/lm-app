@@ -147,8 +147,9 @@ export default function CustomerLoyaltyPage() {
 
       <BottomNavbar
         activeTab="home"
+        customerPhone={phone}
         onHome={() => router.push('/customer/dashboard')}
-        onChat={() => router.push('/customer/dashboard')}
+        onChat={() => router.push('/customer/dashboard?open=chat')}
         onOrder={() => router.push('/order')}
         onActivity={() => router.push('/aktivitas')}
         onProfile={() => router.push('/profil')}

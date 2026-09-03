@@ -10,6 +10,8 @@ import MetricCard from '@/components/ui/MetricCard';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 import { canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
 import { isMultiOutletRole, staffRolesForForm } from '@/lib/staffRoles';
+import { parseAssignedOutletIds } from '@/lib/driverAttendance';
+import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
 import OwnerExecNav from '@/components/OwnerExecNav';
 import FinanceAlertListener from '@/components/FinanceAlertListener';
 import WasherFraudAlertListener from '@/components/WasherFraudAlertListener';
@@ -76,6 +78,7 @@ export default function Dashboard() {
   const [editEmpRole, setEditEmpRole] = useState('');
   const [editEmpPassword, setEditEmpPassword] = useState('');
   const [editEmpOutlet, setEditEmpOutlet] = useState('ALL');
+  const [editEmpOutlets, setEditEmpOutlets] = useState<string[]>([]);
   const [employees, setEmployees] = useState<any[]>([]);
   const [attendances, setAttendances] = useState<any[]>([]);
   const [newEmpName, setNewEmpName] = useState('');
@@ -571,18 +574,46 @@ export default function Dashboard() {
     const { data: checkUser } = await supabase.from('employees').select('id').eq('username', newEmpUsername).single();
     if (checkUser) { alert('❌ Username sudah digunakan!'); setIsSaving(false); return; }
     
-    const singleOutletValue = isMultiOutletRole(newEmpRole) ? null : (newEmpOutlet === 'ALL' ? null : newEmpOutlet);
+    const driverOutlets = newEmpRole === 'driver' ? newEmpAccessOutlets : [];
+    const singleOutletValue =
+      newEmpRole === 'driver'
+        ? driverOutlets[0] || (newEmpOutlet === 'ALL' ? null : newEmpOutlet)
+        : isMultiOutletRole(newEmpRole)
+        ? null
+        : newEmpOutlet === 'ALL'
+        ? null
+        : newEmpOutlet;
     const multiOutletValue = newEmpRole === 'investor' ? JSON.stringify(newEmpAccessOutlets) : '[]';
 
-    const { error } = await supabase.from('employees').insert([{ 
-      name: newEmpName, 
-      outlet_id: singleOutletValue, 
-      username: newEmpUsername, 
-      password: newEmpPassword, 
-      role: newEmpRole, 
-      basic_salary: Number(newEmpSalary), 
-      access_outlets: multiOutletValue 
-    }]);
+    const { error } = await insertWithFallback('employees', [
+      {
+        name: newEmpName,
+        outlet_id: singleOutletValue,
+        username: newEmpUsername,
+        password: newEmpPassword,
+        role: newEmpRole,
+        basic_salary: Number(newEmpSalary),
+        access_outlets: multiOutletValue,
+        assigned_outlet_ids: driverOutlets.length ? driverOutlets : undefined
+      },
+      {
+        name: newEmpName,
+        outlet_id: singleOutletValue,
+        username: newEmpUsername,
+        password: newEmpPassword,
+        role: newEmpRole,
+        basic_salary: Number(newEmpSalary),
+        access_outlets: multiOutletValue
+      },
+      {
+        name: newEmpName,
+        outlet_id: singleOutletValue,
+        username: newEmpUsername,
+        password: newEmpPassword,
+        role: newEmpRole,
+        basic_salary: Number(newEmpSalary)
+      }
+    ]);
 
     if (!error) { 
       alert('✅ Karyawan/User ditambahkan!'); 
@@ -599,14 +630,23 @@ export default function Dashboard() {
 
     const payload: any = {
       role: editEmpRole,
-      outlet_id: editEmpOutlet === 'ALL' ? null : editEmpOutlet
+      outlet_id: editEmpRole === 'driver'
+        ? (editEmpOutlets[0] || (editEmpOutlet === 'ALL' ? null : editEmpOutlet))
+        : editEmpOutlet === 'ALL'
+        ? null
+        : editEmpOutlet,
+      assigned_outlet_ids: editEmpRole === 'driver' ? editEmpOutlets : undefined
     };
 
     if (editEmpPassword.trim()) {
       payload.password = editEmpPassword.trim();
     }
 
-    const { error } = await supabase.from('employees').update(payload).eq('id', editingEmp.id);
+    const { error } = await updateWithFallback(
+      'employees',
+      [payload, { role: payload.role, outlet_id: payload.outlet_id, password: payload.password }, { role: payload.role, outlet_id: payload.outlet_id }],
+      { column: 'id', value: editingEmp.id }
+    );
 
     if (!error) {
       alert('✅ Data karyawan berhasil diperbarui!');
@@ -1366,10 +1406,14 @@ export default function Dashboard() {
                     </select>
                   </div>
 
-                  {/* JIKA INVESTOR: TAMPILKAN CHECKBOX MULTI-OUTLET */}
-                  {newEmpRole === 'investor' ? (
+                  {/* JIKA INVESTOR / DRIVER: CHECKBOX MULTI-OUTLET */}
+                  {newEmpRole === 'investor' || newEmpRole === 'driver' ? (
                     <div className="border border-indigo-200 bg-indigo-50 p-3 rounded-xl space-y-2">
-                      <p className="text-[10px] font-bold text-indigo-900">✅ Beri Akses Cabang Ke Investor Ini:</p>
+                      <p className="text-[10px] font-bold text-indigo-900">
+                        {newEmpRole === 'driver'
+                          ? '✅ Cabang yang boleh dipilih driver saat clock-in:'
+                          : '✅ Beri Akses Cabang Ke Investor Ini:'}
+                      </p>
                       <div className="max-h-40 overflow-y-auto space-y-1">
                         {outlets.map(o => (
                           <label key={o.id} className="flex items-center gap-2 text-xs text-indigo-800 font-medium bg-white p-2 rounded border border-indigo-100 cursor-pointer">
@@ -1428,6 +1472,7 @@ export default function Dashboard() {
       setEditingEmp(emp);
       setEditEmpRole(emp.role);
       setEditEmpOutlet(emp.outlet_id || 'ALL');
+      setEditEmpOutlets(parseAssignedOutletIds(emp));
       setEditEmpPassword('');
     }} 
     className="bg-indigo-100 text-indigo-700 hover:bg-indigo-200 px-2.5 py-1 rounded text-[10px] font-bold transition"
@@ -1505,12 +1550,33 @@ export default function Dashboard() {
                   <option key={r.value} value={r.value}>{r.label}</option>
                 ))}
               </select>
+              {editEmpRole === 'driver' ? (
+                <div className="border border-indigo-200 bg-indigo-50 p-3 rounded-xl space-y-2 max-h-40 overflow-y-auto">
+                  <p className="text-[10px] font-bold text-indigo-900">Cabang clock-in driver</p>
+                  {outlets.map((o) => (
+                    <label key={o.id} className="flex items-center gap-2 text-xs text-indigo-800 font-medium bg-white p-2 rounded border border-indigo-100 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={editEmpOutlets.includes(o.id)}
+                        onChange={() =>
+                          setEditEmpOutlets((prev) =>
+                            prev.includes(o.id) ? prev.filter((id) => id !== o.id) : [...prev, o.id]
+                          )
+                        }
+                        className="w-4 h-4 rounded text-indigo-600"
+                      />
+                      {o.name}
+                    </label>
+                  ))}
+                </div>
+              ) : (
               <select value={editEmpOutlet} onChange={(e) => setEditEmpOutlet(e.target.value)} className="w-full border rounded-xl px-3 py-2 text-xs">
                 <option value="ALL">🌐 Semua Cabang (Pusat)</option>
                 {outlets.map((o) => (
                   <option key={o.id} value={o.id}>{o.name}</option>
                 ))}
               </select>
+              )}
               <input
                 type="text"
                 placeholder="Password baru (opsional)"

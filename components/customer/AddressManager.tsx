@@ -1,11 +1,14 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Check, MapPin, Pencil, Plus, Star, Trash2 } from 'lucide-react';
+import PinpointMap from '@/components/customer/PinpointMap';
 import {
   ADDRESS_LABEL_PRESETS,
   type SavedAddress
 } from '@/lib/customerAddresses';
+import type { GeoPoint } from '@/lib/mapsNav';
+import { geocodeAddress, reverseGeocodeAddress } from '@/lib/reverseGeocode';
 
 export default function AddressManager({
   addresses,
@@ -16,7 +19,14 @@ export default function AddressManager({
 }: {
   addresses: SavedAddress[];
   busy?: boolean;
-  onSave: (draft: { id?: string; label: string; full_address: string; is_primary?: boolean }) => Promise<void> | void;
+  onSave: (draft: {
+    id?: string;
+    label: string;
+    full_address: string;
+    is_primary?: boolean;
+    latitude?: number | null;
+    longitude?: number | null;
+  }) => Promise<void> | void;
   onDelete: (id: string) => Promise<void> | void;
   onSetPrimary: (id: string) => Promise<void> | void;
 }) {
@@ -24,12 +34,14 @@ export default function AddressManager({
   const [label, setLabel] = useState('Rumah');
   const [fullAddress, setFullAddress] = useState('');
   const [asPrimary, setAsPrimary] = useState(false);
+  const [pin, setPin] = useState<GeoPoint | null>(null);
 
   const startNew = () => {
     setEditingId('NEW');
     setLabel('Rumah');
     setFullAddress('');
     setAsPrimary(addresses.length === 0);
+    setPin(null);
   };
 
   const startEdit = (row: SavedAddress) => {
@@ -37,11 +49,17 @@ export default function AddressManager({
     setLabel(row.label);
     setFullAddress(row.full_address);
     setAsPrimary(row.is_primary);
+    setPin(
+      row.latitude != null && row.longitude != null && Number.isFinite(Number(row.latitude)) && Number.isFinite(Number(row.longitude))
+        ? { lat: Number(row.latitude), lng: Number(row.longitude) }
+        : null
+    );
   };
 
   const cancel = () => {
     setEditingId(null);
     setFullAddress('');
+    setPin(null);
   };
 
   const submit = async () => {
@@ -50,7 +68,9 @@ export default function AddressManager({
       id: editingId === 'NEW' ? undefined : editingId || undefined,
       label,
       full_address: fullAddress.trim(),
-      is_primary: asPrimary || addresses.length === 0
+      is_primary: asPrimary || addresses.length === 0,
+      latitude: pin?.lat ?? null,
+      longitude: pin?.lng ?? null
     });
     cancel();
   };
@@ -83,11 +103,13 @@ export default function AddressManager({
             label={label}
             fullAddress={fullAddress}
             asPrimary={asPrimary}
+            pin={pin}
             busy={busy}
             submitLabel="Simpan Perubahan"
             onLabel={setLabel}
             onAddress={setFullAddress}
             onPrimary={setAsPrimary}
+            onPin={setPin}
             onSubmit={submit}
             onCancel={cancel}
           />
@@ -104,6 +126,9 @@ export default function AddressManager({
                   )}
                 </p>
                 <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">{row.full_address}</p>
+                {row.latitude != null && row.longitude != null && (
+                  <p className="text-[9px] text-emerald-600 font-bold mt-1">Pin {Number(row.latitude).toFixed(5)}, {Number(row.longitude).toFixed(5)}</p>
+                )}
               </div>
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -145,11 +170,13 @@ export default function AddressManager({
           label={label}
           fullAddress={fullAddress}
           asPrimary={asPrimary}
+          pin={pin}
           busy={busy}
           submitLabel="Simpan Alamat"
           onLabel={setLabel}
           onAddress={setFullAddress}
           onPrimary={setAsPrimary}
+          onPin={setPin}
           onSubmit={submit}
           onCancel={cancel}
         />
@@ -162,25 +189,80 @@ function AddressForm({
   label,
   fullAddress,
   asPrimary,
+  pin,
   busy,
   submitLabel,
   onLabel,
   onAddress,
   onPrimary,
+  onPin,
   onSubmit,
   onCancel
 }: {
   label: string;
   fullAddress: string;
   asPrimary: boolean;
+  pin: GeoPoint | null;
   busy?: boolean;
   submitLabel: string;
   onLabel: (v: string) => void;
   onAddress: (v: string) => void;
   onPrimary: (v: boolean) => void;
+  onPin: (pt: GeoPoint) => void;
   onSubmit: () => void;
   onCancel: () => void;
 }) {
+  const skipGeocode = useRef(false);
+  const onPinRef = useRef(onPin);
+  onPinRef.current = onPin;
+  const [geoStatus, setGeoStatus] = useState<'idle' | 'searching' | 'found' | 'miss'>('idle');
+  const bootstrapped = useRef(false);
+
+  useEffect(() => {
+    const q = fullAddress.trim();
+    if (!bootstrapped.current) {
+      bootstrapped.current = true;
+      if (pin) return;
+    }
+    if (skipGeocode.current) {
+      skipGeocode.current = false;
+      return;
+    }
+    if (q.length < 8) {
+      setGeoStatus('idle');
+      return;
+    }
+    setGeoStatus('searching');
+    const t = window.setTimeout(() => {
+      void geocodeAddress(q).then((pt) => {
+        if (!pt) {
+          setGeoStatus('miss');
+          return;
+        }
+        setGeoStatus('found');
+        onPinRef.current({ lat: pt.lat, lng: pt.lng });
+      });
+    }, 900);
+    return () => window.clearTimeout(t);
+  }, [fullAddress]);
+
+  const grabGps = () => {
+    if (!navigator.geolocation) return alert('GPS tidak tersedia di perangkat ini.');
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const pt = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        onPin(pt);
+        const label = await reverseGeocodeAddress(pt.lat, pt.lng);
+        if (label) {
+          skipGeocode.current = true;
+          onAddress(label);
+        }
+      },
+      () => alert('Gagal mengambil GPS. Izinkan lokasi di browser.'),
+      { enableHighAccuracy: true }
+    );
+  };
+
   return (
     <div className="space-y-2 bg-white border border-blue-100 rounded-2xl p-3">
       <div className="flex flex-wrap gap-1.5">
@@ -209,10 +291,17 @@ function AddressForm({
       <textarea
         value={fullAddress}
         onChange={(e) => onAddress(e.target.value)}
-        placeholder="Tulis alamat lengkap penjemputan..."
+        placeholder="Tulis alamat lengkap — pin peta akan ikut pindah..."
         className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3 text-xs text-slate-800 font-medium"
         rows={3}
       />
+      {geoStatus === 'searching' && (
+        <p className="text-[9px] text-indigo-600 font-bold">Mencari titik di peta dari alamat…</p>
+      )}
+      {geoStatus === 'miss' && (
+        <p className="text-[9px] text-amber-700 font-bold">Alamat belum ketemu di peta. Geser pin ke rumah/gerbang.</p>
+      )}
+      <PinpointMap value={pin} onChange={onPin} onGps={grabGps} />
       <label className="flex items-center gap-2 text-[11px] font-bold text-slate-600">
         <input type="checkbox" checked={asPrimary} onChange={(e) => onPrimary(e.target.checked)} />
         Jadikan alamat utama (checkout jemput)

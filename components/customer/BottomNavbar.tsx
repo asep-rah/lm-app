@@ -1,12 +1,28 @@
 'use client';
 
+import { useEffect, useRef, useState } from 'react';
 import { Home, ListTodo, MessageSquare, User } from 'lucide-react';
+import { supabase } from '@/lib/supabaseClient';
+import {
+  chatBelongsToCustomer,
+  countUnreadCustomerChats,
+  isIncomingStaffChat,
+  markCustomerChatsRead
+} from '@/lib/customerChatUnread';
+import { canonicalPhone } from '@/lib/csChat';
+import {
+  alertCustomerIncomingChat,
+  ensurePushSubscription,
+  registerPushWorker
+} from '@/lib/notifications';
+import { unlockOpsAudio } from '@/lib/opsNotify';
 
 type Tab = 'home' | 'chat' | 'order' | 'activity' | 'profile' | 'deposit';
 
 export default function BottomNavbar({
   activeTab,
   ongoingCount,
+  customerPhone,
   onHome,
   onChat,
   onOrder,
@@ -15,6 +31,7 @@ export default function BottomNavbar({
 }: {
   activeTab: Tab;
   ongoingCount?: number;
+  customerPhone?: string;
   onHome: () => void;
   onChat: () => void;
   onOrder: () => void;
@@ -23,6 +40,77 @@ export default function BottomNavbar({
 }) {
   const item = (on: boolean) => (on ? 'text-blue-600' : 'text-slate-400');
   const tabClass = 'flex flex-col items-center justify-center gap-0.5 py-1 min-h-[2.75rem]';
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const inChatRef = useRef(activeTab === 'chat');
+  inChatRef.current = activeTab === 'chat';
+
+  const phone =
+    String(customerPhone || (typeof window !== 'undefined' ? localStorage.getItem('laundry_customer_phone') : '') || '').trim();
+
+  const refreshUnread = async (forPhone: string) => {
+    const n = await countUnreadCustomerChats(forPhone);
+    setUnreadChatCount(n);
+  };
+
+  const clearUnread = async (forPhone: string) => {
+    setUnreadChatCount(0);
+    await markCustomerChatsRead(forPhone);
+  };
+
+  useEffect(() => {
+    if (!phone) {
+      setUnreadChatCount(0);
+      return;
+    }
+    void registerPushWorker();
+    void ensurePushSubscription();
+    void refreshUnread(phone);
+
+    const canon = canonicalPhone(phone) || phone;
+    const channel = supabase
+      .channel('cust_nav_unread_' + canon)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'support_chats' }, (payload) => {
+        const row = payload.new;
+        if (!chatBelongsToCustomer(row, phone) || !isIncomingStaffChat(row)) return;
+        const viewingChat = inChatRef.current && typeof document !== 'undefined' && document.visibilityState === 'visible';
+        if (viewingChat) {
+          void clearUnread(phone);
+          return;
+        }
+        alertCustomerIncomingChat({ preview: row?.message, inChat: false });
+        setUnreadChatCount((n) => n + 1);
+        void countUnreadCustomerChats(phone).then((n) => {
+          if (n > 0) setUnreadChatCount(n);
+        });
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'support_chats' }, (payload) => {
+        const row = payload.new;
+        if (!chatBelongsToCustomer(row, phone)) return;
+        void refreshUnread(phone);
+      })
+      .subscribe();
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refreshUnread(phone);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      supabase.removeChannel(channel);
+    };
+  }, [phone]);
+
+  useEffect(() => {
+    if (activeTab !== 'chat' || !phone) return;
+    void clearUnread(phone);
+  }, [activeTab, phone]);
+
+  const openChat = () => {
+    unlockOpsAudio();
+    if (phone) void clearUnread(phone);
+    onChat();
+  };
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto z-50">
@@ -32,8 +120,13 @@ export default function BottomNavbar({
             <Home className="w-5 h-5" strokeWidth={2.2} />
             <span className="text-[9px] font-extrabold">Beranda</span>
           </button>
-          <button type="button" onClick={onChat} className={`${tabClass} ${item(activeTab === 'chat')}`}>
+          <button type="button" onClick={openChat} className={`relative ${tabClass} ${item(activeTab === 'chat')}`}>
             <MessageSquare className="w-5 h-5" strokeWidth={2.2} />
+            {unreadChatCount > 0 && (
+              <span className="absolute top-0 right-[18%] min-w-[15px] h-[15px] px-1.5 rounded-full bg-red-500 text-white text-[8px] font-black flex items-center justify-center">
+                {unreadChatCount > 99 ? '99+' : unreadChatCount}
+              </span>
+            )}
             <span className="text-[9px] font-extrabold">Chat</span>
           </button>
           <button
