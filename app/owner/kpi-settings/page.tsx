@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
-import { getStaffSession, homePathForRole, canAccessKpiSettings } from '@/lib/staffSession';
+import { useEffect, useState } from 'react';
+import OwnerChrome from '@/components/owner/OwnerChrome';
+import { homePathForRole, canAccessKpiSettings } from '@/lib/staffSession';
 import { queueToast } from '@/lib/toast';
 import {
   currentMonthYear,
@@ -21,9 +21,8 @@ import {
 } from '@/lib/kpiConfigs';
 
 export default function KpiSettingsPage() {
-  const session = useMemo(() => getStaffSession(), []);
-  const canEdit = canAccessKpiSettings(session.role);
-
+  const [ready, setReady] = useState(false);
+  const [sessionName, setSessionName] = useState('Owner');
   const [monthYear, setMonthYear] = useState(currentMonthYear());
   const [role, setRole] = useState(KPI_ROLES[0].key);
   const [rows, setRows] = useState<KpiConfigRow[]>([]);
@@ -43,7 +42,6 @@ export default function KpiSettingsPage() {
   };
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
     const raw =
       localStorage.getItem('laundry_owner_user') || localStorage.getItem('laundry_user');
     if (!raw) {
@@ -51,15 +49,21 @@ export default function KpiSettingsPage() {
       return;
     }
     const user = JSON.parse(raw);
-    const role = String(user.role || '').toLowerCase();
-    if (!canAccessKpiSettings(role)) {
+    const userRole = String(user.role || '').toLowerCase();
+    if (!canAccessKpiSettings(userRole)) {
       queueToast('Akses ditolak. Hanya Owner yang dapat mengatur target KPI.', 'warn');
-      window.location.href = homePathForRole(role);
+      window.location.href = homePathForRole(userRole);
       return;
     }
+    setSessionName(String(user.name || user.username || 'Owner'));
+    setReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!ready) return;
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [monthYear]);
+  }, [ready, monthYear]);
 
   const roleRows = rows.filter((r) => r.role === role);
   const scored = roleRows.filter((r) => r.metric_key !== SLA_PENALTY_KEY && r.is_active);
@@ -74,7 +78,7 @@ export default function KpiSettingsPage() {
   const saveRow = async (row: KpiConfigRow) => {
     setSavingId(row.id || 'new');
     try {
-      await upsertKpiConfig({ ...row, month_year: monthYear, updated_by: session.name });
+      await upsertKpiConfig({ ...row, month_year: monthYear, updated_by: sessionName });
       flash('✅ Tersimpan');
       await load();
     } catch (err: any) {
@@ -96,7 +100,7 @@ export default function KpiSettingsPage() {
 
   const handleSeed = async () => {
     try {
-      const res = await seedMonthDefaults(monthYear, session.name);
+      const res = await seedMonthDefaults(monthYear, sessionName);
       flash(res.seeded ? `✅ ${res.seeded} metrik default dimuat` : 'ℹ️ Bulan ini sudah ada konfigurasi');
       await load();
     } catch (err: any) {
@@ -106,7 +110,7 @@ export default function KpiSettingsPage() {
 
   const handleCopyPrev = async () => {
     try {
-      const n = await copyMonthConfigs(shiftMonthYear(monthYear, -1), monthYear, session.name);
+      const n = await copyMonthConfigs(shiftMonthYear(monthYear, -1), monthYear, sessionName);
       flash(`✅ ${n} metrik disalin dari bulan lalu`);
       await load();
     } catch (err: any) {
@@ -124,7 +128,7 @@ export default function KpiSettingsPage() {
       target_value: Number(customTarget) || 0,
       weight_percentage: Number(customWeight) || 0,
       is_active: true,
-      updated_by: session.name
+      updated_by: sessionName
     });
     setCustomLabel('');
     setCustomTarget('');
@@ -134,30 +138,16 @@ export default function KpiSettingsPage() {
     setRows(rows.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
   };
 
-  if (!canEdit) {
-    return (
-      <div className="min-h-screen bg-slate-50 text-slate-900 flex items-center justify-center p-6">
-        <p className="text-sm">Hanya Owner yang dapat mengatur KPI.</p>
-      </div>
-    );
-  }
+  if (!ready) return <div className="min-h-screen bg-slate-50" />;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 p-4 md:p-8">
       <div className="max-w-5xl mx-auto space-y-5">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-black">🎯 KPI Configurator</h1>
-            <p className="text-xs text-slate-400 mt-1">
-              Target & bobot per bulan untuk 7 role. Skor monitoring = realisasi vs target, tertimbang.
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <Link href="/owner" className="text-xs bg-white border border-slate-200 px-3 py-2 rounded-xl">
-              ← Dashboard
-            </Link>
-          </div>
-        </div>
+        <OwnerChrome
+          activeTab="kpi-settings"
+          title="KPI Configurator"
+          subtitle="Target & bobot per bulan untuk 7 role. Skor monitoring = realisasi vs target, tertimbang."
+        />
 
         {msg && <p className="text-xs font-bold text-emerald-400">{msg}</p>}
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import OwnerShowcaseNav from '@/components/OwnerShowcaseNav';
+import OwnerChrome from '@/components/owner/OwnerChrome';
 import { supabase } from '@/lib/supabaseClient';
 import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
 import { canAccessSettings, homePathForRole, isOwnerRole } from '@/lib/staffSession';
@@ -81,9 +81,16 @@ export default function OwnerPromoBannersPage() {
       window.location.href = homePathForRole(role);
       return;
     }
+    const tab = new URLSearchParams(window.location.search).get('tab');
+    if (tab === 'voucher') {
+      window.location.replace('/owner/vouchers');
+      return;
+    }
     setReady(true);
     load();
   }, []);
+
+  const visiblePromos = promos;
 
   const fillEdit = (row: PromoRow) => {
     setEditId(row.id);
@@ -203,13 +210,13 @@ export default function OwnerPromoBannersPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 md:p-6 space-y-4">
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-black text-slate-900">Manajemen Banner Promo</h1>
-          <p className="text-xs text-slate-500 mt-0.5">Gambar, judul, dan kode promo tampil di carousel Home pelanggan. Ketuk banner → Klaim Promo.</p>
-        </div>
-        <OwnerShowcaseNav active="promos" />
-      </div>
+      <div className="max-w-6xl mx-auto space-y-4">
+      <OwnerChrome
+        activeTab="promos"
+        eyebrow="Promosi"
+        title="Promo / Banner"
+        subtitle="Banner di aplikasi pelanggan. Voucher program ada di menu Promosi → Voucher."
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 max-w-5xl">
         <form onSubmit={handleSave} className="bg-white border border-slate-200 rounded-2xl p-4 md:p-6 shadow-sm space-y-3">
@@ -249,7 +256,7 @@ export default function OwnerPromoBannersPage() {
               placeholder="Contoh: HEMAT20"
               className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold bg-slate-50 uppercase tracking-wide"
             />
-            <p className="text-[10px] text-slate-400 mt-1">Dipakai tombol Klaim Promo di aplikasi pelanggan. Samakan dengan kode voucher di Settings.</p>
+            <p className="text-[10px] text-slate-400 mt-1">Opsional. Kode ini untuk klaim promo banner, bukan program voucher.</p>
           </div>
           <div>
             <label className="text-[10px] font-bold text-slate-600 block mb-1">Deskripsi / pengumuman</label>
@@ -289,12 +296,12 @@ export default function OwnerPromoBannersPage() {
         </form>
 
         <div className="space-y-2">
-          {promos.length === 0 && (
+          {visiblePromos.length === 0 && (
             <div className="bg-white border border-slate-200 rounded-2xl p-6 text-center text-xs text-slate-400">
-              Belum ada banner. Jalankan SQL `20260902_multi_outlet_promos.sql` jika kolom target outlet belum ada.
+              Belum ada item di tab ini. Tambah dari formulir di kiri.
             </div>
           )}
-          {promos.map((p) => (
+          {visiblePromos.map((p) => (
             <div key={p.id} className="bg-white border border-slate-200 rounded-2xl p-3 shadow-sm flex gap-3">
               <div className="w-20 h-14 rounded-lg overflow-hidden bg-slate-100 shrink-0">
                 {p.banner_url ? (
@@ -328,6 +335,7 @@ export default function OwnerPromoBannersPage() {
             </div>
           ))}
         </div>
+      </div>
       </div>
     </div>
   );

@@ -7,12 +7,12 @@ import { IconBadge } from '@/components/customer/ui';
 import {
   cashbackCopy,
   ensureCrmProfile,
-  loadCrmSettings,
   tierBadgeClass,
   type CrmProfile,
   type CrmSettings,
   DEFAULT_CRM_SETTINGS
 } from '@/lib/crm';
+import { loadFreshCrmProfile } from '@/lib/crm-automation';
 
 export default function LoyaltyProfileCard({
   phone,
@@ -29,8 +29,9 @@ export default function LoyaltyProfileCard({
   useEffect(() => {
     if (!phone) return;
     let cancelled = false;
-    Promise.all([ensureCrmProfile({ phone, name, outletId }), loadCrmSettings()])
-      .then(([p, s]) => {
+    ensureCrmProfile({ phone, name, outletId })
+      .then(() => loadFreshCrmProfile(phone))
+      .then(({ profile: p, settings: s }) => {
         if (cancelled) return;
         if (p) setProfile(p);
         setSettings(s);
@@ -57,7 +58,7 @@ export default function LoyaltyProfileCard({
         </span>
         <span className="text-[10px] text-amber-700 font-bold mt-1 block tabular-nums">{points.toLocaleString('id-ID')} poin</span>
         <span className="text-[8px] text-slate-400 font-medium mt-0.5 block leading-tight line-clamp-2">
-          {cashbackCopy(tier, settings)}
+          {cashbackCopy(tier, settings)} · klaim {settings.redeem_amounts.map((n) => `Rp${Math.round(n / 1000)}rb`).join('/')}
         </span>
       </div>
     </Link>

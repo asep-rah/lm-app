@@ -8,6 +8,8 @@ export type CrmTier = (typeof CRM_TIERS)[number];
 export const PERFUME_OPTIONS = ['Standard', 'Lavender', 'Lily', 'Tanpa Parfum'] as const;
 export const FOLD_OPTIONS = ['Lipat Rapi', 'Gantung', 'Hanger'] as const;
 
+export const DEFAULT_REDEEM_AMOUNTS = [5000, 10000, 20000] as const;
+
 export type CrmSettings = {
   id: number;
   standard_rate: number;
@@ -19,6 +21,8 @@ export type CrmSettings = {
   platinum_threshold: number;
   inactive_days: number;
   retention_message: string;
+  tier_window_months: number;
+  redeem_amounts: number[];
 };
 
 export type CrmProfile = {
@@ -27,6 +31,9 @@ export type CrmProfile = {
   tier_level: CrmTier;
   loyalty_points: number;
   total_spent: number;
+  window_spent: number;
+  tier_window_started_at: string | null;
+  pending_loyalty_discount: number;
   last_order_at: string | null;
   last_retention_at: string | null;
   perfume_pref: string;
@@ -46,7 +53,9 @@ export const DEFAULT_CRM_SETTINGS: CrmSettings = {
   platinum_threshold: 3000000,
   inactive_days: 21,
   retention_message:
-    'Sudah lama tidak cuci di Laundrivery. Yuk order lagi dan kumpulkan poin loyalty sesuai tier Anda.'
+    'Sudah lama tidak cuci di Laundrivery. Yuk order lagi dan kumpulkan poin loyalty sesuai tier Anda.',
+  tier_window_months: 3,
+  redeem_amounts: [...DEFAULT_REDEEM_AMOUNTS]
 };
 
 export const crmPhoneKey = (raw?: string | null) => {
@@ -77,6 +86,61 @@ export const evaluateTier = (totalSpent: number, settings: CrmSettings): CrmTier
   if (spent >= (Number(settings.silver_threshold) || 0)) return 'Silver';
   return 'Standard';
 };
+
+export const TIER_RANK: Record<CrmTier, number> = {
+  Standard: 0,
+  Silver: 1,
+  Gold: 2,
+  Platinum: 3
+};
+
+export const parseRedeemAmounts = (raw: unknown): number[] => {
+  let arr: unknown[] = [];
+  if (Array.isArray(raw)) arr = raw;
+  else if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      arr = Array.isArray(parsed) ? parsed : String(raw).split(/[,\s]+/);
+    } catch {
+      arr = String(raw).split(/[,\s]+/);
+    }
+  }
+  const nums = [...new Set(arr.map((n) => Math.round(Number(n))).filter((n) => Number.isFinite(n) && n > 0))].sort(
+    (a, b) => a - b
+  );
+  return nums.length ? nums : [...DEFAULT_REDEEM_AMOUNTS];
+};
+
+export const clampTierWindowMonths = (raw: unknown) => {
+  const n = Math.round(Number(raw));
+  if (!Number.isFinite(n)) return DEFAULT_CRM_SETTINGS.tier_window_months;
+  return Math.min(24, Math.max(1, n));
+};
+
+export const addCalendarMonths = (from: Date, months: number) => {
+  const d = new Date(from.getTime());
+  d.setMonth(d.getMonth() + months);
+  return d;
+};
+
+/** Saat jendela habis: Platinum mulai lagi dari Silver; selain itu Standard. */
+export const resetTierAfterWindow = (previous: CrmTier): CrmTier =>
+  previous === 'Platinum' ? 'Silver' : 'Standard';
+
+export const evaluateTierInWindow = (
+  windowSpent: number,
+  previousTier: CrmTier,
+  settings: CrmSettings,
+  windowExpired: boolean
+): CrmTier => {
+  const earned = evaluateTier(windowSpent, settings);
+  if (!windowExpired) return earned;
+  const floor = resetTierAfterWindow(previousTier);
+  return TIER_RANK[earned] > TIER_RANK[floor] ? earned : floor;
+};
+
+export const windowSpentOf = (profile?: Partial<CrmProfile> | null) =>
+  Number(profile?.window_spent ?? profile?.total_spent) || 0;
 
 export const formatWashPrefsNote = (profile?: Partial<CrmProfile> | null) => {
   if (!profile) return '';
@@ -123,7 +187,9 @@ export const mapCrmSettings = (row?: Record<string, unknown> | null): CrmSetting
   gold_threshold: num(row?.gold_threshold, DEFAULT_CRM_SETTINGS.gold_threshold),
   platinum_threshold: num(row?.platinum_threshold, DEFAULT_CRM_SETTINGS.platinum_threshold),
   inactive_days: Math.max(1, Math.round(num(row?.inactive_days, DEFAULT_CRM_SETTINGS.inactive_days))),
-  retention_message: String(row?.retention_message || DEFAULT_CRM_SETTINGS.retention_message)
+  retention_message: String(row?.retention_message || DEFAULT_CRM_SETTINGS.retention_message),
+  tier_window_months: clampTierWindowMonths(row?.tier_window_months ?? DEFAULT_CRM_SETTINGS.tier_window_months),
+  redeem_amounts: parseRedeemAmounts(row?.redeem_amounts)
 });
 
 export const mapCrmProfile = (row?: Record<string, unknown> | null, fallbackPhone = ''): CrmProfile => ({
@@ -132,6 +198,9 @@ export const mapCrmProfile = (row?: Record<string, unknown> | null, fallbackPhon
   tier_level: normalizeTier(String(row?.tier_level || 'Standard')),
   loyalty_points: num(row?.loyalty_points),
   total_spent: num(row?.total_spent),
+  window_spent: num(row?.window_spent ?? row?.total_spent),
+  tier_window_started_at: row?.tier_window_started_at ? String(row.tier_window_started_at) : null,
+  pending_loyalty_discount: Math.max(0, Math.round(num(row?.pending_loyalty_discount))),
   last_order_at: row?.last_order_at ? String(row.last_order_at) : null,
   last_retention_at: row?.last_retention_at ? String(row.last_retention_at) : null,
   perfume_pref: String(row?.perfume_pref || ''),
@@ -157,16 +226,30 @@ export async function saveCrmSettings(next: CrmSettings): Promise<{ error: { mes
     gold_threshold: num(next.gold_threshold, 1500000),
     platinum_threshold: num(next.platinum_threshold, 3000000),
     inactive_days: Math.max(1, Math.round(num(next.inactive_days, 21))),
-    retention_message: String(next.retention_message || DEFAULT_CRM_SETTINGS.retention_message)
+    retention_message: String(next.retention_message || DEFAULT_CRM_SETTINGS.retention_message),
+    tier_window_months: clampTierWindowMonths(next.tier_window_months),
+    redeem_amounts: parseRedeemAmounts(next.redeem_amounts)
+  };
+  const withoutNew = {
+    id: payload.id,
+    standard_rate: payload.standard_rate,
+    silver_rate: payload.silver_rate,
+    gold_rate: payload.gold_rate,
+    platinum_rate: payload.platinum_rate,
+    silver_threshold: payload.silver_threshold,
+    gold_threshold: payload.gold_threshold,
+    platinum_threshold: payload.platinum_threshold,
+    inactive_days: payload.inactive_days,
+    retention_message: payload.retention_message
   };
   const { data } = await supabase.from('crm_settings').select('id').eq('id', 1).limit(1);
   if (data?.length) {
-    return updateWithFallback('crm_settings', [payload, { ...payload, retention_message: undefined }], {
+    return updateWithFallback('crm_settings', [payload, withoutNew, { ...withoutNew, retention_message: undefined }], {
       column: 'id',
       value: 1
     });
   }
-  return insertWithFallback('crm_settings', [payload, { ...payload, retention_message: undefined }]);
+  return insertWithFallback('crm_settings', [payload, withoutNew, { ...withoutNew, retention_message: undefined }]);
 }
 
 export async function loadCrmProfile(phone?: string | null): Promise<CrmProfile | null> {
@@ -287,9 +370,9 @@ export const waMeUrl = (phone: string, text: string) => {
 
 export const idr = (n: number) => `Rp ${Math.round(Number(n) || 0).toLocaleString('id-ID')}`;
 
-export const nextTierInfo = (totalSpent: number, settings: CrmSettings) => {
+export const nextTierInfo = (totalSpent: number, settings: CrmSettings, currentTier?: CrmTier) => {
   const spent = Number(totalSpent) || 0;
-  const current = evaluateTier(spent, settings);
+  const current = currentTier || evaluateTier(spent, settings);
   if (current === 'Platinum') return { current, next: null as CrmTier | null, threshold: 0, remaining: 0, progress: 1 };
   const next: CrmTier = current === 'Gold' ? 'Platinum' : current === 'Silver' ? 'Gold' : 'Silver';
   const threshold =

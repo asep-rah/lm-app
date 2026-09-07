@@ -6,16 +6,18 @@ import Link from 'next/link';
 import StageTimeline from '@/components/StageTimeline';
 import WasherBatchTimeline from '@/components/pos/WasherBatchTimeline';
 import { isVoidTransaction } from '@/lib/voidTx';
-import MetricCard from '@/components/ui/MetricCard';
-import { SkeletonCard } from '@/components/ui/Skeleton';
 import { canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
 import { isMultiOutletRole, staffRolesForForm } from '@/lib/staffRoles';
 import { parseAssignedOutletIds } from '@/lib/driverAttendance';
 import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
-import OwnerExecNav from '@/components/OwnerExecNav';
 import FinanceAlertListener from '@/components/FinanceAlertListener';
 import WasherFraudAlertListener from '@/components/WasherFraudAlertListener';
 import AICopilotCard from '@/components/analytics/AICopilotCard';
+import ReceiptLayoutEditor from '@/components/owner/ReceiptLayoutEditor';
+import OwnerSidebar, { OwnerBellButton, OwnerMenuButton, type SettingsPanel } from '@/components/owner/OwnerSidebar';
+import { isRemoteOwnerTab, ownerHref, readOwnerSearch } from '@/components/owner/ownerNav';
+import { useOwnerDeleteNotifs } from '@/components/owner/useOwnerDeleteNotifs';
+import { DEFAULT_RECEIPT_LAYOUT, parseReceiptLayout, type ReceiptLayout } from '@/lib/receiptLayout';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -49,6 +51,8 @@ export default function Dashboard() {
   const [supervisorSearch, setSupervisorSearch] = useState('');
 
   const [deleteRequests, setDeleteRequests] = useState<any[]>([]);
+  const deleteNotifIds = deleteRequests.map((r) => String(r.id));
+  const { unread: deleteUnread } = useOwnerDeleteNotifs(deleteNotifIds);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -59,6 +63,10 @@ export default function Dashboard() {
   const [serviceSearch, setServiceSearch] = useState('');
   const [showAllServices, setShowAllServices] = useState(false);
   const [receiptTerms, setReceiptTerms] = useState('');
+  const [receiptLayout, setReceiptLayout] = useState<ReceiptLayout>(DEFAULT_RECEIPT_LAYOUT);
+  const [navOpen, setNavOpen] = useState(false);
+  const [settingsExpanded, setSettingsExpanded] = useState(false);
+  const [settingsPanel, setSettingsPanel] = useState<SettingsPanel>('services');
   const [outletOverrides, setOutletOverrides] = useState<any>({});
   const [settingViewOutlet, setSettingViewOutlet] = useState('ALL');
 
@@ -166,9 +174,17 @@ export default function Dashboard() {
     }
     setCurrentUserRole(role);
     setCurrentUserName(user.name);
-    const tab = new URLSearchParams(window.location.search).get('tab');
+    const { tab, panel } = readOwnerSearch();
     if (tab === 'history' || tab === 'transaksi') setActiveTab('history');
-    if (tab === 'settings') setActiveTab('settings');
+    else if (tab === 'loans') setActiveTab('loans');
+    else if (tab === 'employees') setActiveTab('employees');
+    else if (tab === 'delete_requests') setActiveTab('delete_requests');
+    else if (tab === 'settings') setActiveTab('settings');
+    if (panel) {
+      setSettingsPanel(panel);
+      setSettingsExpanded(true);
+      setActiveTab('settings');
+    }
   }, []);
 
   const handleLogout = () => {
@@ -199,6 +215,7 @@ export default function Dashboard() {
         setBasicSalary(settings.basic_salary?.toString() || '1500000');
         setNewEmpSalary(settings.basic_salary?.toString() || '1500000');
         setReceiptTerms(settings.receipt_terms || '');
+        setReceiptLayout(parseReceiptLayout(settings.receipt_layout, settings.receipt_terms));
         if (settings.coa_categories) setCoaList(safeParse(settings.coa_categories, []).join('\n'));
         if (settings.dynamic_services) setServices(safeParse(settings.dynamic_services, []));
         if (settings.outlet_overrides) setOutletOverrides(safeParse(settings.outlet_overrides, {}));
@@ -668,11 +685,22 @@ export default function Dashboard() {
 
   const handleSaveSettings = async () => {
     setIsSaving(true); const coaArray = coaList.split('\n').map((item) => item.trim()).filter((item) => item !== '');
+    const nextLayout = { ...receiptLayout, terms: receiptTerms || receiptLayout.terms };
     const updatePayload: any = {
-      basic_salary: Number(basicSalary), receipt_terms: receiptTerms, coa_categories: JSON.stringify(coaArray),
-      dynamic_services: JSON.stringify(services), outlet_overrides: JSON.stringify(outletOverrides), supervisor_mapping: JSON.stringify(supervisorMapping)
+      basic_salary: Number(basicSalary),
+      receipt_terms: nextLayout.terms,
+      receipt_layout: nextLayout,
+      coa_categories: JSON.stringify(coaArray),
+      dynamic_services: JSON.stringify(services),
+      outlet_overrides: JSON.stringify(outletOverrides),
+      supervisor_mapping: JSON.stringify(supervisorMapping)
     };
     let { error } = await supabase.from('app_settings').update(updatePayload).eq('id', 1);
+    if (error && String(error.message || '').includes('receipt_layout')) {
+      delete updatePayload.receipt_layout;
+      const fallbackRes = await supabase.from('app_settings').update(updatePayload).eq('id', 1);
+      error = fallbackRes.error;
+    }
     if (error && error.message?.includes('supervisor_mapping')) {
       delete updatePayload.supervisor_mapping;
       const fallbackRes = await supabase.from('app_settings').update(updatePayload).eq('id', 1);
@@ -720,37 +748,6 @@ export default function Dashboard() {
     ? filteredServices 
     : filteredServices.slice(0, 5);
 
-    const exportCSV = () => {
-      const currentMonthName = new Date().toLocaleString('id-ID', { month: 'long' }).toUpperCase();
-      const outletNameStr = selectedOutlet === 'ALL' ? 'SEMUA CABANG' : outlets.find((o) => o.id === selectedOutlet)?.name?.toUpperCase() || 'OUTLET';
-  
-      let csv = `LAPORAN LABA RUGI - ${outletNameStr}\n`;
-      csv += `"Periode", "${period.replace('_', ' ')}"\n`;
-      csv += `"Tanggal Cetak", "${new Date().toLocaleString('id-ID')}"\n\n`;
-      
-      csv += `"KATEGORI FINANCIAL","NOMINAL (RP)"\n`;
-      csv += `"Pendapatan Offline",${stats.offlineIncome}\n`;
-      csv += `"Pendapatan Online",${stats.onlineIncome}\n`;
-      csv += `"TOTAL OMSET (GROSS REVENUE)",${stats.income}\n`;
-      csv += `"TOTAL PENGELUARAN (OPEX)",${stats.expense}\n`;
-      csv += `"NET PROFIT (LABA BERSIH)",${stats.profit}\n\n`;
-  
-      csv += `"RINCIAN AUDIT TRANSAKSI"\n`;
-      csv += `"Tanggal & Waktu","Kategori","Deskripsi / Pelanggan","Nominal (Rp)"\n`;
-      
-      tableData.forEach((row) => {
-        const dateStr = new Date(row.date).toLocaleString('id-ID');
-        csv += `"${dateStr}","${row.category}","${row.desc.replace(/"/g, '""')}",${row.amount}\n`;
-      });
-  
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `Laporan_PnL_${outletNameStr.replace(/ /g, '_')}_${currentMonthName}.csv`;
-      link.click();
-    };
-
   const filteredHistory = fullYearHistory.filter((item) => {
     const itemDate = new Date(item.date);
     const matchCat = historyCategory === 'all' || item.category === historyCategory;
@@ -783,10 +780,6 @@ export default function Dashboard() {
   };
 
   const isManagementAdmin = canAccessSettings(currentUserRole);
-  const trendPct = (curr: number, prev: number) => {
-    if (!prev) return curr > 0 ? 100 : 0;
-    return Math.round(((curr - prev) / Math.abs(prev)) * 100);
-  };
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-3 md:p-8">
@@ -871,35 +864,49 @@ export default function Dashboard() {
         )}
 
         {/* NAV HEADER */}
-        <div className="bg-white border border-slate-200/80 p-5 md:p-6 rounded-2xl shadow-sm hover:shadow-md transition-all flex flex-col md:flex-row justify-between items-start md:items-center gap-5">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-sky-600">Owner Analytics</p>
-            <h1 className="text-2xl md:text-3xl font-black tracking-tight text-slate-900 mt-0.5">
-              Laundrivery ERP
-            </h1>
-            <p className="text-xs text-slate-400 mt-0.5">
-              {currentUserName || 'Owner'} · <span className="font-bold text-slate-600 uppercase">{currentUserRole || '…'}</span>
-            </p>
+        <OwnerSidebar
+          open={navOpen}
+          onClose={() => setNavOpen(false)}
+          activeTab={activeTab}
+          settingsPanel={settingsPanel}
+          settingsExpanded={settingsExpanded}
+          onToggleSettings={() => {
+            setSettingsExpanded((v) => !v);
+            setActiveTab('settings');
+          }}
+          onGo={(tab, panel) => {
+            if (isRemoteOwnerTab(tab)) {
+              window.location.href = ownerHref(tab, panel);
+              return;
+            }
+            setActiveTab(tab as typeof activeTab);
+            if (panel) {
+              setSettingsPanel(panel);
+              setSettingsExpanded(true);
+            }
+          }}
+          canSettings={isManagementAdmin}
+          isOwner={isOwnerRole(currentUserRole)}
+          onLogout={handleLogout}
+        />
+        <div className="bg-white border border-slate-200/80 p-4 md:p-5 rounded-2xl shadow-sm flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <OwnerMenuButton onClick={() => setNavOpen(true)} />
+            <div className="min-w-0">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-sky-600">Owner Analytics</p>
+              <h1 className="text-lg md:text-2xl font-black tracking-tight text-slate-900 truncate">Laundrivery ERP</h1>
+              <p className="text-xs text-slate-400">
+                {currentUserName || 'Owner'} · <span className="font-bold text-slate-600 uppercase">{currentUserRole || '…'}</span>
+              </p>
+            </div>
           </div>
-
-          <div className="flex flex-col items-stretch md:items-end gap-2 w-full md:w-auto">
-          <OwnerExecNav active="main" />
-          <div className="flex w-full md:w-auto overflow-x-auto pb-1 md:pb-0 gap-1.5 hide-scrollbar">
-            <button onClick={() => setActiveTab('pnl')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'pnl' ? 'bg-sky-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>PnL</button>
-            <button onClick={() => setActiveTab('history')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'history' ? 'bg-sky-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>Transaksi</button>
-            <button onClick={() => setActiveTab('loans')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'loans' ? 'bg-amber-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>Kasbon</button>
-            {isOwnerRole(currentUserRole) && (
-              <Link href="/owner/kpi-settings" className="whitespace-nowrap bg-amber-50 border border-amber-200 text-amber-700 hover:bg-amber-500 hover:text-white text-xs px-3.5 py-2 rounded-xl font-bold transition-all">KPI Settings</Link>
-            )}
-            {isManagementAdmin && (
-              <>
-                <button onClick={() => setActiveTab('settings')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'settings' ? 'bg-sky-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>Settings</button>
-                <button onClick={() => setActiveTab('employees')} className={`whitespace-nowrap px-3.5 py-2 font-bold text-xs rounded-xl transition-all ${activeTab === 'employees' ? 'bg-sky-500 text-white shadow-sm' : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-white'}`}>Karyawan</button>
-              </>
-            )}
-            <button onClick={handleLogout} className="whitespace-nowrap bg-rose-50 border border-rose-200 text-rose-600 hover:bg-rose-500 hover:text-white font-bold text-xs px-3 py-2 rounded-xl transition-all">Keluar</button>
-          </div>
-          </div>
+          <OwnerBellButton
+            count={deleteUnread}
+            onClick={() => {
+              setActiveTab('delete_requests');
+              setNavOpen(false);
+            }}
+          />
         </div>
 
         {isOwnerRole(currentUserRole) && <FinanceAlertListener />}
@@ -922,37 +929,7 @@ export default function Dashboard() {
                   <option value="THIS_MONTH">Bulan Ini</option><option value="LAST_MONTH">Bulan Lalu</option><option value="THIS_YEAR">1 Tahun Terakhir (365 Hari)</option><option value="ALL">Semua Waktu (All Time)</option>
                 </select>
               </div>
-              <button onClick={exportCSV} className="w-full md:w-auto mt-auto bg-blue-600 text-white font-bold text-xs px-6 py-3 rounded-xl shadow-md">📥 EXPORT CSV</button>
             </div>
-
-            {isLoading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4 pt-2">
-            {Array.from({ length: 2 }).map((_, i) => <SkeletonCard key={i} />)}
-          </div>
-        ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4 pt-2">
-          <MetricCard
-            label="Total Omset (Gross Revenue)"
-            value={`Rp ${stats.income.toLocaleString('id-ID')}`}
-            hint={`Off ${stats.offlineIncome.toLocaleString('id-ID')} · On ${stats.onlineIncome.toLocaleString('id-ID')}`}
-            trend={trendPct(stats.income, prevStats.income)}
-            accent="sky"
-          />
-          <MetricCard
-            label="Total Net Profit"
-            value={`Rp ${stats.profit.toLocaleString('id-ID')}`}
-            hint={`OPEX Rp ${stats.expense.toLocaleString('id-ID')}`}
-            trend={trendPct(stats.profit, prevStats.profit)}
-            accent={stats.profit >= 0 ? 'emerald' : 'rose'}
-          />
-        </div>
-        )}
-
-            <AICopilotCard
-              scope="owner"
-              outletId={selectedOutlet}
-              period={period as 'THIS_MONTH' | 'LAST_MONTH' | 'THIS_YEAR' | 'ALL'}
-            />
 
             {/* TABEL LEADERBOARD SUPERVISOR & RANKING OUTLET */}
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 md:gap-6 pt-2">
@@ -1006,6 +983,12 @@ export default function Dashboard() {
                 </div>
               </div>
             </div>
+
+            <AICopilotCard
+              scope="owner"
+              outletId={selectedOutlet}
+              period={period as 'THIS_MONTH' | 'LAST_MONTH' | 'THIS_YEAR' | 'ALL'}
+            />
 
           </div>
         )}
@@ -1188,7 +1171,7 @@ export default function Dashboard() {
           <>
             {activeTab === 'settings' && (
               <div className="flex flex-col gap-6">
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 ${settingsPanel !== 'services' ? 'hidden' : ''}`}>
                   <Link href="/owner/settings/outlets" className="bg-white border border-sky-200 rounded-2xl p-4 shadow-sm hover:border-sky-400 transition">
                     <p className="text-sm font-black text-slate-900">Profil Outlet & Google</p>
                     <p className="text-[11px] text-slate-500 mt-0.5">Foto, jam buka, Coming Soon, Place ID, dan rating fallback.</p>
@@ -1209,7 +1192,7 @@ export default function Dashboard() {
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                   
                   {/* MODUL DYNAMIC SERVICES + SEARCH & LIMIT MAX 5 */}
-                  <div className="lg:col-span-2 bg-white border border-slate-200 rounded-2xl p-4 md:p-6 shadow-sm">
+                  <div className={`lg:col-span-2 bg-white border border-slate-200 rounded-2xl p-4 md:p-6 shadow-sm ${settingsPanel !== 'services' ? 'hidden' : ''}`}>
                     <div className="flex flex-col md:flex-row justify-between items-start md:items-center border-b border-slate-100 pb-4 mb-4 gap-3">
                       <div>
                         <h3 className="font-bold text-slate-800">⚙️ Dynamic Services</h3>
@@ -1282,8 +1265,8 @@ export default function Dashboard() {
                     </div>
                   </div>
 
-                  <div className="space-y-4 md:space-y-6">
-                    <form onSubmit={handleSaveOutlet} className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 md:p-6 shadow-sm space-y-3">
+                  <div className="space-y-4 md:space-y-6 lg:col-span-3">
+                    <form onSubmit={handleSaveOutlet} className={`bg-emerald-50 border border-emerald-200 rounded-2xl p-4 md:p-6 shadow-sm space-y-3 ${settingsPanel !== 'outlets' ? 'hidden' : ''}`}>
                       <div className="flex justify-between items-center border-b border-emerald-200 pb-2">
                         <h3 className="font-black text-emerald-800 text-sm">🏪 Kelola Outlet Cabang</h3>
                         <select 
@@ -1342,7 +1325,7 @@ export default function Dashboard() {
                     </form>
 
                     {/* SUPERVISOR CABANG (DENGAN CARI & LIST SCROLLABLE KOMPAK 100+ OUTLET) */}
-                    <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-4 md:p-6 shadow-sm space-y-3">
+                    <div className={`bg-indigo-50 border border-indigo-100 rounded-2xl p-4 md:p-6 shadow-sm space-y-3 ${settingsPanel !== 'supervisor' ? 'hidden' : ''}`}>
                       <div>
                         <h3 className="font-black text-indigo-800 text-sm">👔 Supervisor Cabang</h3>
                         <p className="text-[10px] text-slate-500 mt-0.5">Tentukan SPV penanggung jawab tiap cabang untuk data Leaderboard.</p>
@@ -1380,9 +1363,21 @@ export default function Dashboard() {
                       </div>
                     </div>
 
-                    <div className="bg-white border rounded-2xl p-4 md:p-6"><h3 className="font-bold text-sm mb-2">📜 Syarat Nota</h3><textarea value={receiptTerms} onChange={(e) => setReceiptTerms(e.target.value)} rows={4} className="w-full border rounded-xl p-2 text-xs font-mono"></textarea></div>
+                    <div className={settingsPanel !== 'receipt' ? 'hidden' : ''}>
+                    <ReceiptLayoutEditor
+                      layout={receiptLayout}
+                      onChange={(next) => {
+                        setReceiptLayout(next);
+                        setReceiptTerms(next.terms);
+                      }}
+                      outletName={outlets[0]?.name || 'Laundrivery'}
+                      outletPhone={outlets[0]?.whatsapp_number || ''}
+                    />
+                    </div>
+                    <div className={settingsPanel !== 'payroll' ? 'hidden' : 'space-y-4'}>
                     <div className="bg-white border rounded-2xl p-4 md:p-6"><h3 className="font-bold text-sm mb-2">💰 Gaji Pokok Default</h3><input type="number" value={basicSalary} onChange={(e) => setBasicSalary(e.target.value)} className="w-full border rounded-xl p-2 font-bold text-emerald-600" /></div>
                     <div className="bg-white border rounded-2xl p-4 md:p-6"><h3 className="font-bold text-sm mb-2">📋 COA</h3><textarea value={coaList} onChange={(e) => setCoaList(e.target.value)} rows={5} className="w-full border rounded-xl p-2 text-xs font-mono"></textarea></div>
+                    </div>
                   </div>
                 </div>
                 <button onClick={handleSaveSettings} disabled={isSaving} className="w-full bg-indigo-600 text-white font-black py-4 rounded-xl shadow-lg mt-4">{isSaving ? 'Menyimpan...' : '💾 SIMPAN SEMUA PENGATURAN'}</button>

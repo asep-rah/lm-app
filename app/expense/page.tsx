@@ -6,6 +6,7 @@ import Link from 'next/link';
 import RoleTaskInbox from '@/components/RoleTaskInbox';
 import { getStaffSession, isAdminOpsRole, isOwnerRole } from '@/lib/staffSession';
 import { toast } from '@/lib/toast';
+import { EXPENSE_COA_GROUPS, EXPENSE_COA_OPTIONS, expenseCoaLabel } from '@/lib/pnlReport';
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -18,7 +19,7 @@ export default function ExpensePage() {
 
   const [outlets, setOutlets] = useState<any[]>([]);
   const [selectedOutlet, setSelectedOutlet] = useState('');
-  const [category, setCategory] = useState('Detergen & Parfum');
+  const [category, setCategory] = useState(EXPENSE_COA_OPTIONS[0]);
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -110,12 +111,15 @@ export default function ExpensePage() {
                   onChange={(e) => setCategory(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm"
                 >
-                  <option value="Detergen & Parfum">Detergen & Parfum</option>
-                  <option value="Tagihan Listrik & Air">Tagihan Listrik & Air</option>
-                  <option value="Sewa Tempat">Sewa Tempat</option>
-                  <option value="Gaji Karyawan">Gaji Karyawan</option>
-                  <option value="Maintenance & Servis">Maintenance & Servis</option>
-                  <option value="Lain-lain">Lain-lain</option>
+                  {EXPENSE_COA_GROUPS.map((group) => (
+                    <optgroup key={group.title} label={group.title}>
+                      {group.accounts.map((a) => (
+                        <option key={a.code} value={expenseCoaLabel(a)}>
+                          {expenseCoaLabel(a)}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
                 </select>
                 <input
                   type="number"

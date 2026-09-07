@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import OwnerExecNav from '@/components/OwnerExecNav';
+import OwnerChrome from '@/components/owner/OwnerChrome';
 import { fetchRoleKpis, type KpiCard, type KpiMetricLine } from '@/lib/kpiMetrics';
 import { currentMonthYear } from '@/lib/kpiCatalog';
 import { canAccessSettings, canAccessKpiSettings, homePathForRole, isOwnerRole, isWorkspaceRole, kpiKeysVisibleForRole } from '@/lib/staffSession';
@@ -104,16 +104,13 @@ export default function OwnerKpiPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-3 md:p-8">
-      <div className="max-w-6xl mx-auto space-y-4">
-        <div className="bg-white border border-slate-200/80 p-5 md:p-6 rounded-2xl shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-sky-600">Owner Analytics</p>
-            <h1 className="text-2xl font-black text-slate-900 mt-0.5">Pencapaian KPI</h1>
-            <p className="text-xs text-slate-400 mt-0.5">Capaian vs target per divisi · {monthYear}</p>
-          </div>
-          <div className="flex flex-col items-stretch md:items-end gap-2 w-full md:w-auto">
-            <OwnerExecNav active="kpi" />
-            <div className="flex items-center gap-2">
+      <div className="max-w-6xl mx-auto space-y-4 md:space-y-6">
+        <OwnerChrome
+          activeTab="kpi"
+          title="Pencapaian KPI"
+          subtitle={`Capaian vs target per divisi · ${monthYear}`}
+          extra={
+            <>
               <input
                 type="month"
                 value={monthYear}
@@ -125,9 +122,9 @@ export default function OwnerKpiPage() {
                   Atur Target
                 </Link>
               )}
-            </div>
-          </div>
-        </div>
+            </>
+          }
+        />
 
         <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
           <div className="px-4 py-3 border-b border-slate-100 flex justify-between items-center">

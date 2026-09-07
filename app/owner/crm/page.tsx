@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import OwnerExecNav from '@/components/OwnerExecNav';
+import OwnerChrome from '@/components/owner/OwnerChrome';
 import { CRM_TIERS, DEFAULT_CRM_SETTINGS, idr, saveCrmSettings, waMeUrl, type CrmSettings } from '@/lib/crm';
 import { filterCrmAudience, loadCrmAnalytics, runRetentionSweep, type CrmAnalytics } from '@/lib/crm-automation';
 import { queuePush } from '@/lib/notifications';
@@ -147,17 +147,13 @@ export default function OwnerCrmPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-3 md:p-8">
-      <div className="max-w-6xl mx-auto space-y-4">
-        <div className="bg-white border border-slate-200/80 p-5 md:p-6 rounded-2xl shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-amber-600">Owner CRM</p>
-            <h1 className="text-2xl font-black text-slate-900 mt-0.5">Loyalty & Retensi Pelanggan</h1>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Poin dihitung saat cucian diserahkan (status Selesai), sesuai persentase tier yang Anda atur.
-            </p>
-          </div>
-          <div className="flex flex-col items-stretch md:items-end gap-2">
-            <OwnerExecNav active="crm" />
+      <div className="max-w-6xl mx-auto space-y-4 md:space-y-6">
+        <OwnerChrome
+          activeTab="promos-poin"
+          eyebrow="Owner CRM"
+          title="Loyalty & Retensi Pelanggan"
+          subtitle="Poin dihitung saat Selesai. Tier memakai belanja jendela waktu yang bisa Anda atur. Poin bisa diklaim potongan 5rb / 10rb / 20rb."
+          extra={
             <button
               type="button"
               onClick={handleRetention}
@@ -166,8 +162,8 @@ export default function OwnerCrmPage() {
             >
               {retentionBusy ? 'Menjalankan…' : 'Jalankan retensi inactive'}
             </button>
-          </div>
-        </div>
+          }
+        />
 
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Metric label="Repeat Order Rate" value={`${analytics.repeatOrderRate}%`} />
@@ -236,6 +232,37 @@ export default function OwnerCrmPage() {
                 value={settings.inactive_days}
                 onChange={(v) => setSettings((s) => ({ ...s, inactive_days: v }))}
               />
+              <NumField
+                label="Masa berlaku tier (bulan)"
+                value={settings.tier_window_months}
+                onChange={(v) => setSettings((s) => ({ ...s, tier_window_months: v }))}
+              />
+            </div>
+            <p className="text-[11px] leading-relaxed text-slate-500 bg-slate-50 border border-slate-100 rounded-xl px-3 py-2">
+              Belanja dihitung selama {settings.tier_window_months || 3} bulan. Saat periode habis, Platinum mulai lagi dari Silver ({settings.silver_rate}%). Gold, Silver, dan Standard kembali ke Standard.
+            </p>
+            <div>
+              <p className="text-[10px] font-bold text-slate-500 uppercase mb-1">Nominal klaim poin (Rp)</p>
+              <div className="grid grid-cols-3 gap-2">
+                {[0, 1, 2].map((idx) => {
+                  const fallback = [5000, 10000, 20000];
+                  const current = settings.redeem_amounts[idx] ?? fallback[idx];
+                  return (
+                    <input
+                      key={idx}
+                      type="number"
+                      value={current}
+                      onChange={(e) => {
+                        const next = [0, 1, 2].map((i) => settings.redeem_amounts[i] ?? fallback[i]);
+                        next[idx] = Number(e.target.value) || 0;
+                        setSettings((s) => ({ ...s, redeem_amounts: next }));
+                      }}
+                      className="w-full border border-slate-200 rounded-xl px-2.5 py-2 text-xs font-bold bg-slate-50"
+                    />
+                  );
+                })}
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">1 poin = Rp 1. Pelanggan hanya bisa potong total pesanan sesuai nominal ini.</p>
             </div>
             <div>
               <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Pesan retensi otomatis</label>

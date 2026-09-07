@@ -22,8 +22,11 @@ import { sendInvoiceToLiveChat } from '@/lib/chatInvoice';
 import { simulateMayarAutoPay } from '@/lib/mayar';
 import { creditCustomerDeposit, decrementCustomerDeposit } from '@/lib/depositTopup';
 import { toast } from '@/lib/toast';
+import { parseReceiptLayout, DEFAULT_RECEIPT_LAYOUT, type ReceiptLayout } from '@/lib/receiptLayout';
 import { notifyCustomerStatus } from '@/lib/notifications';
-import { maybeAwardLoyalty } from '@/lib/crm-automation';
+import { loadFreshCrmProfile, maybeAwardLoyalty } from '@/lib/crm-automation';
+import { DEFAULT_CRM_SETTINGS, idr, type CrmProfile, type CrmSettings } from '@/lib/crm';
+import { redeemLoyaltyPoints, redeemableAmounts } from '@/lib/loyaltyRedeem';
 import { dispatchThirdPartyDelivery, isThirdPartyDelivery } from '@/lib/thirdPartyDelivery';
 import ThirdPartyDispatchForm from '@/components/ThirdPartyDispatchForm';
 import ThirdPartyDeliveryCard from '@/components/ThirdPartyDeliveryCard';
@@ -183,6 +186,7 @@ interface CustomerOrder {
   items?: PickupItem[] | string;
   estimated_weight?: number | string;
   delivery_fee?: number | string;
+  courier_type?: string | null;
   status?: string;
 }
 
@@ -218,6 +222,7 @@ export function POSContent() {
   const [services, setServices] = useState<any[]>([]);
   const [outletOverrides, setOutletOverrides] = useState<any>({});
   const [receiptTerms, setReceiptTerms] = useState('');
+  const [receiptLayout, setReceiptLayout] = useState<ReceiptLayout>(DEFAULT_RECEIPT_LAYOUT);
   const [settings, setSettings] = useState<any>(null);
 
   // State Fitur Setoran Cash via Digital Wallet & QRIS Meja Kasir
@@ -289,7 +294,14 @@ export function POSContent() {
       setSelectedServiceInput(serviceName);
     }
 
-    if (data.delivery_fee) setDeliveryFee(String(data.delivery_fee));
+    const courier = String(data.courier_type || '').toUpperCase();
+    const feeRaw = data.delivery_fee;
+    const hasFee = feeRaw !== undefined && feeRaw !== null && String(feeRaw) !== '';
+    if (courier === 'INTERNAL' || (hasFee && Number(feeRaw) === 0)) {
+      setDeliveryFee('0');
+    } else if (hasFee) {
+      setDeliveryFee(String(feeRaw));
+    }
 
     // Hanya item satuan yang sudah punya harga asli yang masuk keranjang.
     // Entri tanpa harga sengaja dilewati supaya tidak muncul baris palsu
@@ -306,6 +318,19 @@ export function POSContent() {
           const kgVal = Number(it.weight || it.kg) || 0;
           const pcsVal = Number(it.qty || it.quantity) || 0;
           const existingNote = String(it.notes || it.note || '').trim();
+          const pieces = Array.isArray(it.pieces) ? it.pieces : [];
+          const piecesNote = pieces
+            .map((p: any, i: number) => {
+              const n = [p?.merk && `Merk: ${p.merk}`, p?.warna && `Warna: ${p.warna}`, p?.corak && `Corak: ${p.corak}`].filter(Boolean).join(' · ');
+              return n ? (pieces.length > 1 ? `Pcs ${i + 1}: ${n}` : n) : '';
+            })
+            .filter(Boolean)
+            .join(' · ');
+          const satuanDetail = piecesNote || [
+            it.merk && `Merk: ${it.merk}`,
+            it.warna && `Warna: ${it.warna}`,
+            it.corak && `Corak: ${it.corak}`
+          ].filter(Boolean).join(' · ');
           const pcsNote = isKg && kgVal > 0 && pcsVal > 0 ? `${pcsVal} Pcs` : '';
           return {
             id: it.id || `pickup-${idx}-${Date.now()}`,
@@ -314,7 +339,7 @@ export function POSContent() {
             basePrice: itemBase,
             price: itemPrice,
             qty: isKg ? (kgVal || pcsVal || 1) : (pcsVal || 1),
-            note: [existingNote, pcsNote].filter(Boolean).join(' · ')
+            note: [existingNote || satuanDetail, pcsNote].filter(Boolean).join(' · ')
           };
         })
         .filter((it) => it.price > 0);
@@ -390,7 +415,12 @@ export function POSContent() {
     }
     if (urlDuration) setDuration(normalizePosDuration(decodeURIComponent(urlDuration)));
     if (urlWeight && Number(urlWeight) > 0) setInputQtyKg(String(Number(urlWeight)));
-    if (urlDeliveryFee) setDeliveryFee(urlDeliveryFee);
+    const urlCourier = String(searchParams.get('courier_type') || '').toUpperCase();
+    if (urlCourier === 'INTERNAL' || urlDeliveryFee === '0') {
+      setDeliveryFee('0');
+    } else if (urlDeliveryFee) {
+      setDeliveryFee(urlDeliveryFee);
+    }
     if (urlName || urlPhone || pickupId) {
       setOrderType(urlOrderType || 'Online');
       setActiveTab('home');
@@ -712,6 +742,10 @@ const handleApplyLoan = async (e: React.FormEvent) => {
   const [discountType, setDiscountType] = useState<'nominal' | 'percent'>('nominal');
   const [discountValue, setDiscountValue] = useState('');
   const [calculatedDiscount, setCalculatedDiscount] = useState(0);
+  const [loyaltyProfile, setLoyaltyProfile] = useState<CrmProfile | null>(null);
+  const [loyaltySettings, setLoyaltySettings] = useState<CrmSettings>(DEFAULT_CRM_SETTINGS);
+  const [loyaltyRedeem, setLoyaltyRedeem] = useState(0);
+  const [appliedLoyaltyRedeem, setAppliedLoyaltyRedeem] = useState(0);
 
   const [notes, setNotes] = useState('');
   const [amount, setAmount] = useState('');
@@ -1021,13 +1055,18 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     } else {
       computedDiscount = discVal;
     }
+    const feeOngkir = Number(deliveryFee) || 0;
+    const payableBeforeLoyalty = Math.max(0, totalSubtotal - computedDiscount + feeOngkir);
+    const loyaltyAmt = Number(loyaltyRedeem) || 0;
+    const appliedLoyalty = loyaltyAmt > 0 && loyaltyAmt <= payableBeforeLoyalty ? loyaltyAmt : 0;
+    if (appliedLoyalty) computedDiscount += appliedLoyalty;
+    setAppliedLoyaltyRedeem(appliedLoyalty);
     setCalculatedDiscount(computedDiscount);
 
-    const feeOngkir = Number(deliveryFee) || 0;
     const grandTotal = Math.max(0, totalSubtotal - computedDiscount + feeOngkir);
 
     setAmount(grandTotal > 0 ? grandTotal.toString() : '');
-  }, [cartItems, duration, serviceType, selectedServiceInput, weightKg, pcsCount, inputQtyKg, inputQtyPcs, discountType, discountValue, deliveryFee, selectedOutlet, services]);
+  }, [cartItems, duration, serviceType, selectedServiceInput, weightKg, pcsCount, inputQtyKg, inputQtyPcs, discountType, discountValue, deliveryFee, selectedOutlet, services, loyaltyRedeem]);
 
   useEffect(() => {
     if (selectedTxDetail?.id) {
@@ -1124,6 +1163,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
         }
         setOutletOverrides(safeParse(dbSettings.outlet_overrides, {}));
         setReceiptTerms(dbSettings.receipt_terms || 'Komplain maksimal 1x24 jam.');
+        setReceiptLayout(parseReceiptLayout(dbSettings.receipt_layout, dbSettings.receipt_terms));
         const coas = safeParse(dbSettings.coa_categories, ['Lain-lain']); setSettings({ coas }); if (coas.length > 0) setExpCategory(coas[0]);
       }
     }
@@ -1169,7 +1209,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     async function checkCustDeposit() {
       const normalizedPhone = cleanPhone(customerPhone);
       if (!normalizedPhone || normalizedPhone.length < 8) {
-        setCustomerDeposit(null); setCustomerHistory([]); return;
+        setCustomerDeposit(null); setCustomerHistory([]); setLoyaltyProfile(null); setLoyaltyRedeem(0); return;
       }
       const { data: custData } = await supabase.from('customers').select('name, deposit_balance').eq('phone', normalizedPhone).limit(1);
       let foundName = ''; let currentDeposit = 0;
@@ -1208,6 +1248,16 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       }));
       combinedHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       setCustomerHistory(combinedHistory);
+
+      try {
+        const { profile, settings } = await loadFreshCrmProfile(normalizedPhone);
+        setLoyaltySettings(settings);
+        setLoyaltyProfile(profile);
+        const pending = Math.round(Number(profile?.pending_loyalty_discount) || 0);
+        setLoyaltyRedeem((prev) => (prev > 0 ? prev : pending));
+      } catch {
+        setLoyaltyProfile(null);
+      }
     }
     const timer = setTimeout(() => { checkCustDeposit(); }, 300);
     return () => clearTimeout(timer);
@@ -1230,7 +1280,20 @@ const handleApplyLoan = async (e: React.FormEvent) => {
   };
 
   useEffect(() => {
-    if (orderType === 'Online' && !deliveryFee) setDeliveryFee('20000'); else if (orderType === 'Offline') setDeliveryFee('');
+    if (orderType === 'Offline') {
+      setDeliveryFee('');
+      return;
+    }
+    if (orderType !== 'Online') return;
+    setDeliveryFee((prev) => {
+      if (prev !== '') return prev;
+      const courier = String(customerOrder?.courier_type || '').toUpperCase();
+      const feeRaw = customerOrder?.delivery_fee;
+      const hasFee = feeRaw !== undefined && feeRaw !== null && String(feeRaw) !== '';
+      if (courier === 'INTERNAL' || (hasFee && Number(feeRaw) === 0)) return '0';
+      if (hasFee) return String(feeRaw);
+      return '0';
+    });
   }, [orderType]);
 
   const refreshData = async () => {
@@ -1622,6 +1685,18 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       error = retry.error;
     }
     let nextDepositBal: number | null = null;
+    if (!error && newTx && appliedLoyaltyRedeem > 0 && normalizedPhone) {
+      const redeemed = await redeemLoyaltyPoints({
+        phone: normalizedPhone,
+        amount: appliedLoyaltyRedeem,
+        note: `Tukar poin potongan ${idr(appliedLoyaltyRedeem)} di POS`
+      });
+      if (redeemed.error) {
+        toast(`Nota tersimpan, klaim poin gagal: ${redeemed.error}`, 'err');
+      } else {
+        setLoyaltyProfile((p) => (p ? { ...p, loyalty_points: redeemed.pointsLeft, pending_loyalty_discount: 0 } : p));
+      }
+    }
     if (!error && newTx && depositDeductionAmount > 0 && normalizedPhone) {
       const deducted = await decrementCustomerDeposit(supabase as any, normalizedPhone, depositDeductionAmount);
       if (deducted.error) {
@@ -1733,7 +1808,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     }
       setCustomerOrder(null);
       clearPickupPrefill();
-      setAmount(''); setCustomerName(''); setCustomerPhone(''); setWeightKg(''); setPcsCount(''); setNotes(''); setDiscountValue(''); setCartItems([]); setSplitPerBag(false); setDeliveryFee(orderType === 'Online' ? '20000' : '');
+      setAmount(''); setCustomerName(''); setCustomerPhone(''); setWeightKg(''); setPcsCount(''); setNotes(''); setDiscountValue(''); setLoyaltyRedeem(0); setAppliedLoyaltyRedeem(0); setLoyaltyProfile(null); setCartItems([]); setSplitPerBag(false); setDeliveryFee(orderType === 'Online' ? '0' : '');
       setHomeModal(null);
       refreshData();
     } else alert('❌ Gagal: ' + error?.message);
@@ -2807,20 +2882,20 @@ const handleStatusChange = async (
       <div className="hidden print:block text-black bg-white">
         {printMode === 'receipt' && lastOrderInfo && (
           <div className="p-2 w-[58mm] text-[10px] font-mono leading-tight mx-auto">
-            <div className="text-center font-bold text-[14px] mb-0.5">{lastOrderInfo.outletName}</div>
+            <div className="text-center font-bold text-[14px] mb-0.5">{receiptLayout.brandName || lastOrderInfo.outletName}</div>
             <div className="text-center text-[9px] mb-1">
-              Spesialis Laundry Profesional
-              {lastOrderInfo.outletPhone && <div className="font-bold">CS: {lastOrderInfo.outletPhone}</div>}
+              {receiptLayout.tagline}
+              {lastOrderInfo.outletPhone && <div className="font-bold">{receiptLayout.csLabel}: {lastOrderInfo.outletPhone}</div>}
             </div>
             <div className="border-b border-black border-dashed mb-2"></div>
 
-            <div className="mb-0.5">Tgl Masuk: {new Date(lastOrderInfo.created_at || new Date()).toLocaleDateString('id-ID')}</div>
-            <div className="mb-0.5 font-bold">Est. Selesai: {getEstDate(lastOrderInfo.created_at, lastOrderInfo.duration)}</div>
-            <div className="mb-1 font-bold">Resi: {lastOrderInfo.receipt_number}</div>
+            <div className="mb-0.5">{receiptLayout.dateLabel}: {new Date(lastOrderInfo.created_at || new Date()).toLocaleDateString('id-ID')}</div>
+            <div className="mb-0.5 font-bold">{receiptLayout.doneLabel}: {getEstDate(lastOrderInfo.created_at, lastOrderInfo.duration)}</div>
+            <div className="mb-1 font-bold">{receiptLayout.receiptLabel}: {lastOrderInfo.receipt_number}</div>
             <div className="border-b border-black border-dashed mb-1"></div>
 
-            <div className="mb-0.5">Nama: <b>{lastOrderInfo.customer_name}</b> {lastOrderInfo.order_type === 'Online' ? '(WA)' : ''}</div>
-            <div className="mb-2">No. HP: <b>{lastOrderInfo.customer_phone || customerPhone || '-'}</b></div>
+            <div className="mb-0.5">{receiptLayout.nameLabel}: <b>{lastOrderInfo.customer_name}</b> {lastOrderInfo.order_type === 'Online' ? '(WA)' : ''}</div>
+            <div className="mb-2">{receiptLayout.phoneLabel}: <b>{lastOrderInfo.customer_phone || customerPhone || '-'}</b></div>
             
             <div className="border-b border-black border-dashed mb-2"></div>
             
@@ -2854,15 +2929,16 @@ const handleStatusChange = async (
             {lastOrderInfo.notes && <div className="mb-2 text-[9px] italic">Note: {lastOrderInfo.notes}</div>}
             
             <div className="border-b border-black border-dashed mb-2"></div>
-            <div className="flex justify-between font-bold mb-1"><span>TOTAL</span><span>Rp {Number(lastOrderInfo.amount).toLocaleString('id-ID')}</span></div>
-            <div className="flex justify-between mb-2"><span>BAYAR</span><span>{lastOrderInfo.payment_method}</span></div>
+            <div className="flex justify-between font-bold mb-1"><span>{receiptLayout.totalLabel}</span><span>Rp {Number(lastOrderInfo.amount).toLocaleString('id-ID')}</span></div>
+            <div className="flex justify-between mb-2"><span>{receiptLayout.payLabel}</span><span>{lastOrderInfo.payment_method}</span></div>
             {lastOrderInfo.remainingDeposit !== null && <div className="mb-3 flex justify-between font-bold text-[9px] bg-slate-100 p-1"><span>Sisa Saldo Deposit:</span><span>Rp {Number(lastOrderInfo.remainingDeposit).toLocaleString('id-ID')}</span></div>}
             
             <div className="border-t border-black border-dashed pt-2 text-[8px] leading-tight space-y-1">
-              <div className="font-bold text-center">SYARAT & KETENTUAN:</div>
-              <div className="whitespace-pre-line">{receiptTerms}</div>
+              <div className="font-bold text-center">{receiptLayout.termsTitle}:</div>
+              <div className="whitespace-pre-line">{receiptLayout.terms || receiptTerms}</div>
+              {receiptLayout.extraNote ? <div className="whitespace-pre-line">{receiptLayout.extraNote}</div> : null}
             </div>
-            <div className="text-center text-[8px] mt-2 font-bold">Cek Cucian: lm-coral.vercel.app/track</div>
+            {receiptLayout.footer ? <div className="text-center text-[8px] mt-2 font-bold">{receiptLayout.footer}</div> : null}
           </div>
         )}
 
@@ -3554,6 +3630,16 @@ const handleStatusChange = async (
                       <span className="font-bold text-amber-700">{customerOrder.duration || '-'}</span>
                     </div>
                     <div>
+                      <span className="block text-slate-400 font-bold uppercase text-[8px]">Kurir / Ongkir</span>
+                      <span className={`font-bold ${String(customerOrder.courier_type || '').toUpperCase() === 'INTERNAL' || Number(customerOrder.delivery_fee) === 0 ? 'text-emerald-700' : 'text-indigo-700'}`}>
+                        {String(customerOrder.courier_type || '').toUpperCase() === 'INTERNAL'
+                          ? 'Driver Internal · Rp 0 (FREE)'
+                          : `Rp ${Number(customerOrder.delivery_fee || 0).toLocaleString('id-ID')}`}
+                      </span>
+                    </div>
+                    {(Number(customerOrder.estimated_weight) > 0 || String(customerOrder.notes || '').includes('[INFO CUCIAN]')) && (
+                      <>
+                    <div>
                       <span className="block text-slate-400 font-bold uppercase text-[8px]">Jumlah Kantong</span>
                       <span className="font-bold">{customerOrder.bag_count ?? '-'}</span>
                     </div>
@@ -3567,12 +3653,8 @@ const handleStatusChange = async (
                         {customerOrder.has_fading ? '⚠️ Ya' : 'Tidak'}
                       </span>
                     </div>
-                    <div>
-                      <span className="block text-slate-400 font-bold uppercase text-[8px]">Barang Berharga</span>
-                      <span className={`font-bold ${customerOrder.has_valuables ? 'text-amber-600' : 'text-emerald-600'}`}>
-                        {customerOrder.has_valuables ? '⚠️ Ada' : 'Tidak Ada'}
-                      </span>
-                    </div>
+                      </>
+                    )}
                     <div className="col-span-2 border-t border-indigo-200 pt-1.5">
                       <span className="block text-slate-400 font-bold uppercase text-[8px]">Catatan Pelanggan</span>
                       <span className="font-semibold italic">{customerOrder.notes || 'Tidak ada catatan'}</span>
@@ -3713,7 +3795,7 @@ const handleStatusChange = async (
 
               <input
                 type="text"
-                placeholder="Catatan khusus item ini (misal: Kantong A / Kemeja Putih)"
+                placeholder="Catatan item (kiloan: Kantong A · satuan: merk / warna / corak)"
                 value={inputItemNote}
                 onChange={(e) => setInputItemNote(e.target.value)}
                 className="w-full bg-white border border-slate-200 text-slate-900 text-xs font-bold rounded-xl p-3 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
@@ -3791,13 +3873,53 @@ const handleStatusChange = async (
           />
 
           {orderType === 'Online' && (
-            <input
-              type="number"
-              placeholder="Biaya Ongkir (Rp)"
-              value={deliveryFee}
-              onChange={(e) => setDeliveryFee(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 text-slate-900 text-xs font-bold rounded-xl p-3 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
-            />
+            <div className="space-y-1">
+              <input
+                type="number"
+                placeholder="Biaya Ongkir (Rp)"
+                value={deliveryFee}
+                onChange={(e) => setDeliveryFee(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 text-slate-900 text-xs font-bold rounded-xl p-3 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+              {Number(deliveryFee) === 0 && (
+                <p className="text-[10px] font-bold text-emerald-700">
+                  Ongkir Rp 0{String(customerOrder?.courier_type || '').toUpperCase() === 'INTERNAL' ? ' — Driver Internal (gratis)' : ''}
+                </p>
+              )}
+            </div>
+          )}
+
+          {loyaltyProfile && (
+            <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-xl space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] font-black uppercase text-emerald-800">Poin loyalty</p>
+                <p className="text-[10px] font-bold text-emerald-700">
+                  {Math.round(Number(loyaltyProfile.loyalty_points) || 0).toLocaleString('id-ID')} poin · {loyaltyProfile.tier_level}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {redeemableAmounts(loyaltySettings).map((amt) => {
+                  const ok = Number(loyaltyProfile.loyalty_points) >= amt;
+                  return (
+                    <button
+                      key={amt}
+                      type="button"
+                      disabled={!ok}
+                      onClick={() => setLoyaltyRedeem((prev) => (prev === amt ? 0 : amt))}
+                      className={`px-2.5 py-1.5 rounded-lg text-[10px] font-black ${
+                        loyaltyRedeem === amt
+                          ? 'bg-emerald-600 text-white'
+                          : ok
+                          ? 'bg-white border border-emerald-200 text-emerald-800'
+                          : 'bg-white/50 border border-emerald-100 text-emerald-300'
+                      }`}
+                    >
+                      {idr(amt)}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           )}
 
           <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl flex items-center gap-2">

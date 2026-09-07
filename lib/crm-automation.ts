@@ -1,7 +1,11 @@
 import { isOrderFinished } from '@/lib/customerActivity';
 import {
   DEFAULT_CRM_SETTINGS,
+  addCalendarMonths,
+  clampTierWindowMonths,
+  crmPhoneKey,
   evaluateTier,
+  evaluateTierInWindow,
   isAtRisk,
   isVipChampion,
   loadCrmProfile,
@@ -10,8 +14,7 @@ import {
   mapCrmProfile,
   rateForTier,
   type CrmProfile,
-  type CrmSettings,
-  crmPhoneKey
+  type CrmSettings
 } from '@/lib/crm';
 import { phoneVariants } from '@/lib/csChat';
 import { queuePush } from '@/lib/notifications';
@@ -30,6 +33,13 @@ export const isLoyaltyCompleteOrder = (tx: any) => {
 };
 
 const alreadyAwarded = async (transactionId: string) => {
+  const earned = await supabase
+    .from('loyalty_point_logs')
+    .select('id')
+    .eq('transaction_id', transactionId)
+    .eq('kind', 'earn')
+    .limit(1);
+  if (!earned.error) return Boolean(earned.data?.length);
   const { data } = await supabase
     .from('loyalty_point_logs')
     .select('id')
@@ -37,6 +47,107 @@ const alreadyAwarded = async (transactionId: string) => {
     .limit(1);
   return Boolean(data?.length);
 };
+
+export async function sumWindowSpend(phone: string, since: Date, excludeTxId?: string): Promise<number> {
+  const variants = phoneVariants(phone);
+  if (!variants.length) return 0;
+  const { data } = await supabase
+    .from('transactions')
+    .select('id, amount, total_amount, grand_total, total, status, created_at, customer_phone')
+    .in('customer_phone', variants.slice(0, 20))
+    .gte('created_at', since.toISOString())
+    .limit(2000);
+  return (data || []).reduce((sum, row: any) => {
+    if (excludeTxId && String(row?.id) === String(excludeTxId)) return sum;
+    if (!isLoyaltyCompleteOrder(row)) return sum;
+    return sum + txAmountOf(row);
+  }, 0);
+}
+
+const persistTierWindow = async (
+  profile: CrmProfile,
+  patch: Partial<CrmProfile>
+): Promise<CrmProfile> => {
+  const next = { ...profile, ...patch };
+  await updateWithFallback(
+    'customer_crm_profiles',
+    [
+      {
+        window_spent: next.window_spent,
+        tier_level: next.tier_level,
+        tier_window_started_at: next.tier_window_started_at,
+        total_spent: next.total_spent,
+        loyalty_points: next.loyalty_points
+      },
+      {
+        window_spent: next.window_spent,
+        tier_level: next.tier_level,
+        tier_window_started_at: next.tier_window_started_at
+      },
+      { tier_level: next.tier_level, total_spent: next.total_spent }
+    ],
+    { column: 'phone', value: profile.phone }
+  );
+  return next;
+};
+
+/** Hitung ulang belanja jendela N bulan. Saat habis: Platinum → Silver, selain itu Standard. */
+export async function syncCrmTierWindow(
+  profile: CrmProfile,
+  settings: CrmSettings,
+  excludeTxId?: string
+): Promise<CrmProfile> {
+  const months = clampTierWindowMonths(settings.tier_window_months);
+  const now = new Date();
+  const startedRaw = profile.tier_window_started_at ? new Date(profile.tier_window_started_at) : null;
+  const startedOk = startedRaw && !Number.isNaN(startedRaw.getTime());
+
+  if (!startedOk) {
+    const started = addCalendarMonths(now, -months);
+    const spent = await sumWindowSpend(profile.phone, started, excludeTxId);
+    const nextTier = evaluateTierInWindow(spent, profile.tier_level, settings, true);
+    return persistTierWindow(profile, {
+      window_spent: spent,
+      tier_level: nextTier,
+      tier_window_started_at: started.toISOString()
+    });
+  }
+
+  let cursor = startedRaw as Date;
+  let lastTier = profile.tier_level;
+  let expired = false;
+  while (addCalendarMonths(cursor, months).getTime() <= now.getTime()) {
+    lastTier = lastTier === 'Platinum' ? 'Silver' : 'Standard';
+    cursor = addCalendarMonths(cursor, months);
+    expired = true;
+  }
+
+  const spent = await sumWindowSpend(profile.phone, cursor, excludeTxId);
+  const nextTier = evaluateTierInWindow(spent, lastTier, settings, expired);
+  if (
+    spent === profile.window_spent &&
+    nextTier === profile.tier_level &&
+    cursor.toISOString() === profile.tier_window_started_at
+  ) {
+    return profile;
+  }
+  return persistTierWindow(profile, {
+    window_spent: spent,
+    tier_level: nextTier,
+    tier_window_started_at: cursor.toISOString()
+  });
+}
+
+export async function loadFreshCrmProfile(phone?: string | null): Promise<{
+  profile: CrmProfile | null;
+  settings: CrmSettings;
+}> {
+  const settings = await loadCrmSettings();
+  const existing = await loadCrmProfile(phone);
+  if (!existing) return { profile: null, settings };
+  const profile = await syncCrmTierWindow(existing, settings);
+  return { profile, settings };
+}
 
 export async function awardLoyaltyForTransaction(tx: any): Promise<{
   awarded: boolean;
@@ -75,6 +186,9 @@ export async function awardLoyaltyForTransaction(tx: any): Promise<{
       tier_level: 'Standard' as const,
       loyalty_points: 0,
       total_spent: 0,
+      window_spent: 0,
+      tier_window_started_at: new Date().toISOString(),
+      pending_loyalty_discount: 0,
       last_order_at: null,
       last_retention_at: null,
       perfume_pref: 'Standard',
@@ -84,16 +198,28 @@ export async function awardLoyaltyForTransaction(tx: any): Promise<{
     };
     await insertWithFallback('customer_crm_profiles', [
       seeded,
+      {
+        phone,
+        name: seeded.name,
+        tier_level: 'Standard',
+        loyalty_points: 0,
+        total_spent: 0,
+        window_spent: 0,
+        tier_window_started_at: seeded.tier_window_started_at
+      },
       { phone, name: seeded.name, tier_level: 'Standard', loyalty_points: 0, total_spent: 0 },
       { phone, tier_level: 'Standard' }
     ]);
     profile = mapCrmProfile(seeded, phone);
   }
 
+  profile = await syncCrmTierWindow(profile, settings, transactionId);
+
   const rate = rateForTier(profile.tier_level, settings);
   const points = Math.floor(amount * (rate / 100));
+  const nextWindow = (Number(profile.window_spent) || 0) + amount;
   const nextSpent = (Number(profile.total_spent) || 0) + amount;
-  const nextTier = evaluateTier(nextSpent, settings);
+  const nextTier = evaluateTier(nextWindow, settings);
   const nextPoints = (Number(profile.loyalty_points) || 0) + points;
   const now = new Date().toISOString();
   const note =
@@ -132,10 +258,18 @@ export async function awardLoyaltyForTransaction(tx: any): Promise<{
       {
         loyalty_points: nextPoints,
         total_spent: nextSpent,
+        window_spent: nextWindow,
         tier_level: nextTier,
         last_order_at: now,
         name: row?.customer_name || profile.name,
         outlet_id: row?.outlet_id || profile.outlet_id
+      },
+      {
+        loyalty_points: nextPoints,
+        total_spent: nextSpent,
+        window_spent: nextWindow,
+        tier_level: nextTier,
+        last_order_at: now
       },
       {
         loyalty_points: nextPoints,

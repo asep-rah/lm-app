@@ -7,6 +7,9 @@ import StageTimeline from '@/components/StageTimeline';
 import { fetchThreadMessages, insertChatMessage, isStaffOnlyMessage, phoneVariants, threadKeyOf } from '@/lib/csChat';
 import { parseChatInvoice } from '@/lib/chatInvoice';
 import { findPromoByCode, mapDbPromo, mapSettingsPromo, promoDiscountRp, promoIsClaimable, type CatalogPromo } from '@/lib/promoCatalog';
+import { DEFAULT_CRM_SETTINGS, idr, type CrmProfile, type CrmSettings } from '@/lib/crm';
+import { loadFreshCrmProfile } from '@/lib/crm-automation';
+import { redeemLoyaltyPoints, redeemableAmounts } from '@/lib/loyaltyRedeem';
 import { createPickupRoleTasks, insertPickupOrder, requestDriverDelivery } from '@/lib/pickupDispatch';
 import { displayStatusLabel, stageKeyOf } from '@/lib/stageTimeline';
 import { laundryFallbackReply } from '@/lib/laundryFaq';
@@ -54,6 +57,8 @@ import AddressManager from '@/components/customer/AddressManager';
 import LoyaltyProfileCard from '@/components/customer/LoyaltyProfileCard';
 import PinpointMap from '@/components/customer/PinpointMap';
 import CustomerHeader from '@/components/customer/CustomerHeader';
+import { DEFAULT_RECEIPT_TERMS } from '@/components/ReceiptPreview';
+import { parseReceiptLayout } from '@/lib/receiptLayout';
 import {
   MAX_NEARBY_RADIUS_KM,
   bannerSlidesOf,
@@ -97,6 +102,7 @@ import {
   ChevronRight,
   ClipboardList,
   Clock,
+  FileText,
   Gift,
   Headphones,
   History,
@@ -104,6 +110,7 @@ import {
   Info,
   ListTodo,
   MapPin,
+  Navigation,
   Package,
   Paperclip,
   Pencil,
@@ -311,6 +318,7 @@ function CustomerDashboardPage() {
   const [showcasePromos, setShowcasePromos] = useState<ShowcasePromo[]>([]);
   const [profileOutlet, setProfileOutlet] = useState<any | null>(null);
   const [locatingGps, setLocatingGps] = useState(false);
+  const [gpsHint, setGpsHint] = useState('');
 
   const [isKiloanChecked, setIsKiloanChecked] = useState(false);
   const [selectedKiloanSvc, setSelectedKiloanSvc] = useState('');
@@ -321,14 +329,24 @@ function CustomerDashboardPage() {
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
   const [isSatuanChecked, setIsSatuanChecked] = useState(false);
-  const [cartSatuan, setCartSatuan] = useState<Array<{ name: string; basePrice: number; price: number; qty: number; duration: string }>>([]);
+  const [cartSatuan, setCartSatuan] = useState<Array<{ name: string; basePrice: number; price: number; qty: number; duration: string; pieces?: Array<{ merk: string; warna: string; corak: string }> }>>([]);
   const [selectedSatuanSvc, setSelectedSatuanSvc] = useState('');
   const [inputSatuanQty, setInputSatuanQty] = useState('1');
   const [satuanInputDuration, setSatuanInputDuration] = useState('Reguler (3 Hari)');
+  const emptySatuanPiece = () => ({ merk: '', warna: '', corak: '' });
+  const [satuanPieceNotes, setSatuanPieceNotes] = useState<Array<{ merk: string; warna: string; corak: string }>>([{ merk: '', warna: '', corak: '' }]);
+  const [satuanNotesSame, setSatuanNotesSame] = useState(true);
+  const [agreedNoValuables, setAgreedNoValuables] = useState(false);
+  const [agreedTerms, setAgreedTerms] = useState(false);
+  const [showTermsModal, setShowTermsModal] = useState(false);
+  const [receiptTerms, setReceiptTerms] = useState(DEFAULT_RECEIPT_TERMS);
 
   const [deliveryFee, setDeliveryFee] = useState<number | null>(null);
   const [distanceKm, setDistanceKm] = useState<number | null>(null);
   const [claimedPromo, setClaimedPromo] = useState<any>(null);
+  const [loyaltyProfile, setLoyaltyProfile] = useState<CrmProfile | null>(null);
+  const [loyaltySettings, setLoyaltySettings] = useState<CrmSettings>(DEFAULT_CRM_SETTINGS);
+  const [loyaltyRedeem, setLoyaltyRedeem] = useState(0);
   const [showPromoModal, setShowPromoModal] = useState(false);
   const [showEstimateInfoModal, setShowEstimateInfoModal] = useState(false);
   const [latestCreatedOrder, setLatestCreatedOrder] = useState<any>(null);
@@ -381,7 +399,6 @@ function CustomerDashboardPage() {
   const [bagCount, setBagCount] = useState('');
   const [washProcess, setWashProcess] = useState('');
   const [hasFading, setHasFading] = useState('');
-  const [hasValuables, setHasValuables] = useState('');
   const [thirdPartyVendor, setThirdPartyVendor] = useState('');
 
   const [courierType, setCourierType] = useState<'INTERNAL' | 'THIRD_PARTY'>('INTERNAL');
@@ -478,6 +495,28 @@ function CustomerDashboardPage() {
       setActivitySub(parsed);
     }
   }, [pathname, searchParams]);
+
+  useEffect(() => {
+    const phone = String(customerPhone || '').trim();
+    if (!phone) {
+      setLoyaltyProfile(null);
+      setLoyaltyRedeem(0);
+      return;
+    }
+    let cancelled = false;
+    loadFreshCrmProfile(phone)
+      .then(({ profile, settings }) => {
+        if (cancelled) return;
+        setLoyaltySettings(settings);
+        setLoyaltyProfile(profile);
+        const pending = Math.round(Number(profile?.pending_loyalty_discount) || 0);
+        if (pending > 0) setLoyaltyRedeem(pending);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [customerPhone]);
 
   const goActivity = (sub: ActivitySubTab = activitySub) => {
     setActivitySub(sub);
@@ -1043,6 +1082,9 @@ function CustomerDashboardPage() {
         const svcs = safeParse(dbSettings.dynamic_services, []);
         setDynamicServices(svcs);
         setOutletOverrides(safeParse(dbSettings.outlet_overrides, {}));
+        setReceiptTerms(String(dbSettings.receipt_terms || '').trim() || DEFAULT_RECEIPT_TERMS);
+        const layout = parseReceiptLayout((dbSettings as any).receipt_layout, dbSettings.receipt_terms);
+        if (layout.terms) setReceiptTerms(layout.terms);
 
         const { data: dbPromos } = await supabase.from('promos').select('*');
         const fromTable = (dbPromos || []).map((p: any) => mapDbPromo(p)).filter((p: CatalogPromo) => p.is_active);
@@ -1441,30 +1483,40 @@ function CustomerDashboardPage() {
   };
 
   const handleGetCurrentLocation = () => {
-    if (!navigator.geolocation) {
+    if (typeof window === 'undefined' || !navigator.geolocation) {
+      setGpsHint('Browser/HP tidak mendukung GPS. Ketik alamat atau pilih alamat tersimpan.');
       return alert('Browser/HP Anda tidak mendukung deteksi lokasi otomatis.');
     }
 
+    setLocatingGps(true);
+    setGpsHint('Mengambil lokasi GPS… izinkan akses lokasi jika diminta.');
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
         const { latitude, longitude } = pos.coords;
+        skipAddressGeocodeRef.current = true;
         setUserCoords({ lat: latitude, lon: longitude });
+        setAddressGeoStatus('idle');
+        setGpsHint('Pin dipindah ke lokasi Anda. Mengisi alamat…');
         const label = await reverseGeocodeAddress(latitude, longitude);
         if (label) {
           skipAddressGeocodeRef.current = true;
           setCustomerAddress(label);
+          setGpsHint('Lokasi sekarang terpasang. Geser pin ke gerbang jika perlu.');
+        } else {
+          setGpsHint(`GPS berhasil (${latitude.toFixed(5)}, ${longitude.toFixed(5)}). Geser pin ke gerbang, atau ketik alamat.`);
         }
-        alert(
-          label
-            ? 'Lokasi GPS terdeteksi. Alamat terisi otomatis — geser pin ke gerbang jika perlu.'
-            : `Lokasi GPS berhasil. Geser pin ke rumah/gerbang. (${latitude.toFixed(5)}, ${longitude.toFixed(5)})`
-        );
+        setLocatingGps(false);
       },
       (err) => {
-        console.error('Gagal ambil GPS:', err);
-        alert('Gagal mengambil lokasi GPS. Pastikan izin lokasi/GPS di HP Anda aktif.');
+        setLocatingGps(false);
+        const denied = err?.code === 1;
+        const msg = denied
+          ? 'Izin lokasi ditolak. Aktifkan GPS/izin lokasi di HP, lalu klik lagi.'
+          : 'Gagal mengambil GPS. Pastikan izin lokasi aktif, atau ketik alamat / pilih alamat tersimpan.';
+        setGpsHint(msg);
+        alert(msg);
       },
-      { enableHighAccuracy: true }
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
     );
   };
 
@@ -1498,21 +1550,71 @@ function CustomerDashboardPage() {
     setCartKiloan((prev) => prev.filter((_, i) => i !== idx));
   };
 
+  const formatSatuanItemNotes = (item: { merk?: string; warna?: string; corak?: string }) =>
+    [
+      item.merk?.trim() && `Merk: ${item.merk.trim()}`,
+      item.warna?.trim() && `Warna: ${item.warna.trim()}`,
+      item.corak?.trim() && `Corak: ${item.corak.trim()}`
+    ].filter(Boolean).join(' · ');
+
+  const formatSatuanPiecesNotes = (pieces?: Array<{ merk?: string; warna?: string; corak?: string }>) => {
+    if (!pieces?.length) return '';
+    const lines = pieces.map((p) => formatSatuanItemNotes(p));
+    const allSame = lines.every((line) => line === lines[0]);
+    if (allSame) return lines[0] || '';
+    return pieces
+      .map((p, i) => {
+        const n = formatSatuanItemNotes(p);
+        return n ? `Pcs ${i + 1}: ${n}` : '';
+      })
+      .filter(Boolean)
+      .join(' · ');
+  };
+
+  const patchSatuanPiece = (idx: number, field: 'merk' | 'warna' | 'corak', value: string) => {
+    setSatuanPieceNotes((prev) => {
+      if (satuanNotesSame) {
+        const first = { ...(prev[0] || emptySatuanPiece()), [field]: value };
+        return prev.map(() => ({ ...first }));
+      }
+      return prev.map((p, i) => (i === idx ? { ...p, [field]: value } : p));
+    });
+  };
+
+  useEffect(() => {
+    const n = Math.max(1, Math.min(12, Number(inputSatuanQty) || 1));
+    setSatuanPieceNotes((prev) => {
+      const next = Array.from({ length: n }, (_, i) => prev[i] || emptySatuanPiece());
+      if (satuanNotesSame) {
+        const first = next[0] || emptySatuanPiece();
+        return next.map(() => ({ ...first }));
+      }
+      return next;
+    });
+  }, [inputSatuanQty, satuanNotesSame]);
+
   const handleAddSatuanToCart = () => {
     if (!selectedSatuanSvc) return;
     const basePrice = getServiceUnitPrice(selectedSatuanSvc);
     const qty = Number(inputSatuanQty) || 1;
     const mult = getDurationMultiplier(satuanInputDuration);
     const finalPrice = Math.round(basePrice * mult);
+    const pieces = (satuanNotesSame
+      ? Array.from({ length: qty }, () => ({ ...(satuanPieceNotes[0] || emptySatuanPiece()) }))
+      : satuanPieceNotes.slice(0, qty)
+    ).map((p) => ({ merk: p.merk.trim(), warna: p.warna.trim(), corak: p.corak.trim() }));
 
     setCartSatuan([...cartSatuan, { 
       name: selectedSatuanSvc, 
       basePrice, 
       price: finalPrice, 
       qty, 
-      duration: satuanInputDuration 
+      duration: satuanInputDuration,
+      pieces
     }]);
     setInputSatuanQty('1');
+    setSatuanNotesSame(true);
+    setSatuanPieceNotes([emptySatuanPiece()]);
   };
 
   const handleRemoveSatuan = (idx: number) => {
@@ -1542,7 +1644,9 @@ function CustomerDashboardPage() {
   const promoDiscountVal = promoDiscountRp(claimedPromo, rawSubtotal, rawOngkir);
 
   const finalOngkir = Math.max(0, rawOngkir - (claimedPromo?.type === 'ongkir' ? promoDiscountVal : 0));
-  const grandTotalEstimate = Math.max(0, Math.round(rawSubtotal + rawOngkir - promoDiscountVal));
+  const basketAfterPromo = Math.max(0, rawSubtotal + rawOngkir - promoDiscountVal);
+  const loyaltyDiscountVal = loyaltyRedeem > 0 && loyaltyRedeem <= basketAfterPromo ? loyaltyRedeem : 0;
+  const grandTotalEstimate = Math.max(0, Math.round(basketAfterPromo - loyaltyDiscountVal));
 
   const handleClaimPromo = (promo: CatalogPromo) => {
     const basket = rawSubtotal + rawOngkir;
@@ -1582,6 +1686,12 @@ function CustomerDashboardPage() {
       alert('Driver internal cabang ini sedang tidak bertugas. Silakan pilih kurir instan/antar mandiri.');
       return;
     }
+    if (!agreedNoValuables) {
+      return alert('Centang pernyataan tidak ada barang berharga / selain cucian di saku atau tas.');
+    }
+    if (!agreedTerms) {
+      return alert('Centang persetujuan Syarat & Ketentuan untuk melanjutkan pesanan.');
+    }
     // PENGAMAN: Blokir total pembayaran COD
     if ((typeof paymentMethod !== 'undefined' && paymentMethod === 'COD') || (typeof paymentMethod !== 'undefined' && paymentMethod === 'Cash on Delivery')) {
       alert('Mohon maaf, Laundrivery saat ini hanya melayani pembayaran cashless / transfer online. Pembayaran COD tidak tersedia.');
@@ -1599,10 +1709,14 @@ function CustomerDashboardPage() {
       );
     }
     if (isSatuanChecked && cartSatuan.length > 0) {
-      const items = cartSatuan.map(i => `${i.name} x${i.qty}`).join(', ');
+      const items = cartSatuan.map((i) => {
+        const extra = formatSatuanPiecesNotes(i.pieces);
+        return extra ? `${i.name} x${i.qty} (${extra})` : `${i.name} x${i.qty}`;
+      }).join(', ');
       detailLines.push(`Satuan: ${items}`);
     }
     if (claimedPromo) detailLines.push(`Promo: ${claimedPromo.title}`);
+    if (loyaltyDiscountVal > 0) detailLines.push(`Poin loyalty: -${idr(loyaltyDiscountVal)}`);
     detailLines.push(`Est. Tagihan: Rp ${grandTotalEstimate.toLocaleString('id-ID')}`);
 
     const mainServiceLabel = kiloanLines.length
@@ -1624,12 +1738,17 @@ function CustomerDashboardPage() {
     }
     const isFuturePickup = !!schedule;
 
-    const detailInfo = `[INFO CUCIAN] Kantong: ${bagCount} | Cuci: ${washProcess} | Luntur: ${hasFading} | Brg Berharga: ${hasValuables}`;
-    const baseNotes = notesCombined ? `${detailInfo} | ${notesCombined}` : detailInfo;
+    const hasKiloanOrder = kiloanLines.length > 0;
+    const detailInfo = hasKiloanOrder
+      ? `[INFO CUCIAN] Kantong: ${bagCount || '-'} | Cuci: ${washProcess || '-'} | Luntur: ${hasFading || '-'}`
+      : '';
+    const statementNote = '[PERNYATAAN] Tidak ada barang berharga / selain cucian pada saku atau tas';
+    const termsNote = '[S&K] Disetujui';
+    const baseNotes = [detailInfo, notesCombined, statementNote, termsNote].filter(Boolean).join(' | ');
     const finalNotes = isFuturePickup && schedule ? withScheduleNote(baseNotes, schedule.date, schedule.time.slice(0, 5)) : baseNotes;
 
     // Rincian item satuan dikirim terstruktur agar POS bisa memuatnya langsung ke
-    // keranjang nota. Kiloan tidak dimasukkan karena beratnya baru pasti setelah ditimbang kasir.
+    // keranjang nota. Catatan merk/warna/corak ikut di `notes` per baris.
     const satuanItems = isSatuanChecked
       ? cartSatuan.map((i) => ({
           name: i.name,
@@ -1637,7 +1756,9 @@ function CustomerDashboardPage() {
           price: Number(i.price) || 0,
           basePrice: Number(i.basePrice) || 0,
           duration: i.duration || 'Reguler (3 Hari)',
-          type: 'pcs' as const
+          type: 'pcs' as const,
+          pieces: i.pieces || [],
+          notes: formatSatuanPiecesNotes(i.pieces)
         }))
       : [];
     const kiloanItems = kiloanLines.map((k) => ({
@@ -1667,10 +1788,10 @@ function CustomerDashboardPage() {
         return /^[0-9a-f-]{36}$/i.test(id) ? id : null;
       })(),
       duration: kiloanDuration || 'Reguler (3 Hari)',
-      bag_count: Number(bagCount) || 1,
-      wash_process: washProcess || 'Pisah',
-      has_fading: hasFading === 'Ya',
-      has_valuables: hasValuables === 'Ya',
+      bag_count: hasKiloanOrder ? (Number(bagCount) || 1) : 1,
+      wash_process: hasKiloanOrder ? (washProcess || 'Pisah') : '',
+      has_fading: hasKiloanOrder && hasFading === 'Ya',
+      has_valuables: false,
       items: itemsPayload,
       delivery_fee: Number(finalOngkir) || 0,
       notes: finalNotes,
@@ -1710,6 +1831,16 @@ function CustomerDashboardPage() {
         const nextUsed = (Number(claimedPromo.used_count) || 0) + 1;
         await supabase.from('promos').update({ used_count: nextUsed }).eq('id', claimedPromo.id);
       }
+      if (loyaltyDiscountVal > 0 && normPhone) {
+        const redeemed = await redeemLoyaltyPoints({
+          phone: normPhone,
+          amount: loyaltyDiscountVal,
+          note: `Tukar poin potongan ${idr(loyaltyDiscountVal)} di pesanan ${autoOrderNo}`
+        });
+        if (redeemed.error) {
+          toast(`Pesanan tersimpan, klaim poin gagal: ${redeemed.error}`, 'err');
+        }
+      }
       // Simpan data order terbaru & buka Modal Live Tracking Success
       setLatestCreatedOrder({
         ...insertedData[0],
@@ -1726,11 +1857,19 @@ function CustomerDashboardPage() {
       setCartKiloan([]);
       setNotes('');
       setClaimedPromo(null);
+      setLoyaltyRedeem(0);
       setKiloanEstKg('3');
       setKiloanQty('1');
       setKiloanDuration('Reguler (3 Hari)');
       setIsKiloanChecked(false);
       setIsSatuanChecked(false);
+      setSatuanNotesSame(true);
+      setSatuanPieceNotes([{ merk: '', warna: '', corak: '' }]);
+      setBagCount('');
+      setWashProcess('');
+      setHasFading('');
+      setAgreedNoValuables(false);
+      setAgreedTerms(false);
       setPickupLater(false);
 
       goActivity(isFuturePickup ? 'terjadwal' : 'berlangsung');
@@ -1993,17 +2132,50 @@ function CustomerDashboardPage() {
                 </div>
 
                 <div className="space-y-1.5 mt-3">
-                  <div className="flex justify-between items-center">
-                    <label className="text-[10px] font-extrabold text-slate-500 uppercase">Alamat Penjemputan *</label>
-                    <button
-                      type="button"
-                      onClick={handleGetCurrentLocation}
-                      className="text-[10px] font-bold text-indigo-600 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-lg hover:bg-indigo-100 inline-flex items-center gap-1 transition"
-                    >
-                      <MapPin className="w-3 h-3" />
-                      <span>{userCoords ? 'GPS Terdeteksi' : 'Ambil Lokasi GPS Presisi'}</span>
-                    </button>
-                  </div>
+                  <label className="text-[10px] font-extrabold text-slate-500 uppercase">Alamat Penjemputan *</label>
+                  <button
+                    type="button"
+                    onClick={handleGetCurrentLocation}
+                    disabled={locatingGps}
+                    className="w-full text-[11px] font-extrabold text-indigo-700 bg-indigo-50 border border-indigo-200 px-3 py-2.5 rounded-xl hover:bg-indigo-100 inline-flex items-center justify-center gap-1.5 transition disabled:opacity-60"
+                  >
+                    <Navigation className={`w-3.5 h-3.5 ${locatingGps ? 'animate-pulse' : ''}`} />
+                    {locatingGps ? 'Mengambil lokasi…' : 'Gunakan lokasi sekarang'}
+                  </button>
+                  {gpsHint && (
+                    <p className="text-[10px] font-bold text-indigo-700">{gpsHint}</p>
+                  )}
+                  {savedAddresses.length > 0 && (
+                    <div className="space-y-1">
+                      <p className="text-[10px] font-extrabold text-slate-500 uppercase">Atau pilih alamat tersimpan</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {savedAddresses.map((addr) => (
+                          <button
+                            key={addr.id}
+                            type="button"
+                            onClick={() => {
+                              skipAddressGeocodeRef.current = true;
+                              setCustomerAddress(addr.full_address);
+                              setAddressGeoStatus('idle');
+                              if (addr.latitude != null && addr.longitude != null) {
+                                setUserCoords({ lat: Number(addr.latitude), lon: Number(addr.longitude) });
+                              } else {
+                                skipAddressGeocodeRef.current = false;
+                                setUserCoords(null);
+                              }
+                            }}
+                            className={`text-[10px] font-extrabold px-2.5 py-1.5 rounded-lg border ${
+                              customerAddress === addr.full_address
+                                ? 'bg-blue-600 text-white border-blue-600'
+                                : 'bg-white text-slate-600 border-slate-200'
+                            }`}
+                          >
+                            {addr.label}{addr.is_primary ? ' · Utama' : ''}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <textarea
                     value={customerAddress}
                     onChange={(e) => setCustomerAddress(e.target.value)}
@@ -2022,34 +2194,6 @@ function CustomerDashboardPage() {
                     onChange={(pt) => setUserCoords({ lat: pt.lat, lon: pt.lng })}
                     onGps={handleGetCurrentLocation}
                   />
-                  {savedAddresses.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
-                      {savedAddresses.map((addr) => (
-                        <button
-                          key={addr.id}
-                          type="button"
-                          onClick={() => {
-                            skipAddressGeocodeRef.current = true;
-                            setCustomerAddress(addr.full_address);
-                            setAddressGeoStatus('idle');
-                            if (addr.latitude != null && addr.longitude != null) {
-                              setUserCoords({ lat: Number(addr.latitude), lon: Number(addr.longitude) });
-                            } else {
-                              skipAddressGeocodeRef.current = false;
-                              setUserCoords(null);
-                            }
-                          }}
-                          className={`text-[10px] font-extrabold px-2.5 py-1 rounded-lg border ${
-                            customerAddress === addr.full_address
-                              ? 'bg-blue-600 text-white border-blue-600'
-                              : 'bg-white text-slate-600 border-slate-200'
-                          }`}
-                        >
-                          {addr.label}{addr.is_primary ? ' · Utama' : ''}
-                        </button>
-                      ))}
-                    </div>
-                  )}
                   {userCoords && (
                     <p className="text-[9px] text-emerald-600 font-bold flex items-center gap-1">
                       <CheckCircle2 className="w-3 h-3" /> Lat: {userCoords.lat.toFixed(5)}, Lon: {userCoords.lon.toFixed(5)} (Pinpoint tersimpan)
@@ -2068,6 +2212,39 @@ function CustomerDashboardPage() {
                     required
                   />
                 </div>
+
+                {loyaltyProfile && (
+                  <div className="bg-emerald-50 border border-emerald-200 p-3.5 rounded-2xl space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-extrabold text-emerald-900 text-[11px]">Klaim poin loyalty</p>
+                      <p className="text-[10px] font-bold text-emerald-700">
+                        {Math.round(Number(loyaltyProfile.loyalty_points) || 0).toLocaleString('id-ID')} poin
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {redeemableAmounts(loyaltySettings).map((amt) => {
+                        const ok = Number(loyaltyProfile.loyalty_points) >= amt && basketAfterPromo >= amt;
+                        return (
+                          <button
+                            key={amt}
+                            type="button"
+                            disabled={!ok}
+                            onClick={() => setLoyaltyRedeem((prev) => (prev === amt ? 0 : amt))}
+                            className={`px-2.5 py-1.5 rounded-xl text-[10px] font-black ${
+                              loyaltyRedeem === amt
+                                ? 'bg-emerald-600 text-white'
+                                : ok
+                                ? 'bg-white border border-emerald-200 text-emerald-800'
+                                : 'bg-white/60 border border-emerald-100 text-emerald-300'
+                            }`}
+                          >
+                            {idr(amt)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200/80 p-3.5 rounded-2xl flex justify-between items-center text-xs">
                   <div>
@@ -2171,6 +2348,63 @@ function CustomerDashboardPage() {
                       <p className="text-[10px] text-blue-600 font-bold text-right">
                         Harga: Rp {kiloanActiveUnitPrice.toLocaleString('id-ID')}/Kg · Total Rp {kiloanLineTotal(kiloanActiveUnitPrice, Math.max(3, Number(kiloanEstKg) || 3)).toLocaleString('id-ID')}
                       </p>
+
+                      <div className="bg-slate-800/80 border border-slate-700/80 p-3.5 rounded-2xl space-y-3">
+                        <h3 className="text-[10px] font-black tracking-wider uppercase text-cyan-400 flex items-center gap-2">
+                          <ClipboardList className="w-3.5 h-3.5" /> Informasi Detail Cucian Kiloan
+                        </h3>
+
+                        <div className="space-y-3 text-xs text-slate-200">
+                          <div className="flex justify-between items-center">
+                            <span className="font-semibold text-slate-300">1. Jumlah Kantong:</span>
+                            <select
+                              value={bagCount}
+                              onChange={(e) => setBagCount(e.target.value)}
+                              className="bg-slate-900 border border-slate-700 text-cyan-400 font-extrabold rounded-xl px-3 py-1.5 focus:outline-none"
+                            >
+                              <option value="">-- Pilih Jumlah Kantong --</option>
+                              <option value="1 Kantong">1 Kantong</option>
+                              <option value="2 Kantong">2 Kantong</option>
+                              <option value="3 Kantong">3 Kantong</option>
+                              <option value="4+ Kantong">4+ Kantong</option>
+                            </select>
+                          </div>
+
+                          <div className="flex justify-between items-center">
+                            <span className="font-semibold text-slate-300">2. Proses Cuci:</span>
+                            <select
+                              value={washProcess}
+                              onChange={(e) => setWashProcess(e.target.value)}
+                              className="bg-slate-900 border border-slate-700 text-cyan-400 font-extrabold rounded-xl px-3 py-1.5 focus:outline-none"
+                            >
+                              <option value="">-- Pilih Proses Cuci --</option>
+                              <option value="Gabung Semua">Gabung Semua</option>
+                              <option value="Pisah Perkantong">Pisah Perkantong</option>
+                            </select>
+                          </div>
+
+                          <div className="flex justify-between items-center">
+                            <span className="font-semibold text-slate-300">3. Ada Pakaian Luntur?</span>
+                            <div className="flex gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setHasFading('Tidak')}
+                                className={`px-3 py-1 rounded-xl font-extrabold text-xs transition ${hasFading === 'Tidak' ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
+                              >
+                                Tidak
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setHasFading('Ya')}
+                                className={`px-3 py-1 rounded-xl font-extrabold text-xs transition ${hasFading === 'Ya' ? 'bg-rose-500 text-white shadow-md shadow-rose-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
+                              >
+                                Ya
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
                       <button type="button" onClick={handleAddKiloanToCart} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-sm inline-flex items-center justify-center gap-1.5">
                         Tambah Paket Kiloan Ini
                       </button>
@@ -2261,6 +2495,58 @@ function CustomerDashboardPage() {
                         </div>
                       </div>
 
+                      {Number(inputSatuanQty) > 1 && (
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={satuanNotesSame}
+                            onChange={(e) => setSatuanNotesSame(e.target.checked)}
+                            className="w-4 h-4 accent-indigo-600 rounded"
+                          />
+                          <span className="text-[10px] font-bold text-slate-600">Semua pcs sama (merk, warna, corak)</span>
+                        </label>
+                      )}
+
+                      {(satuanNotesSame || satuanPieceNotes.length === 1 ? [satuanPieceNotes[0] || emptySatuanPiece()] : satuanPieceNotes).map((piece, idx) => (
+                        <div key={idx} className="space-y-1.5">
+                          {!satuanNotesSame && satuanPieceNotes.length > 1 && (
+                            <p className="text-[10px] font-extrabold text-indigo-700">Pcs {idx + 1}</p>
+                          )}
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                            <div>
+                              <label className="block text-[10px] text-slate-500 font-bold mb-1">Merk</label>
+                              <input
+                                type="text"
+                                placeholder="Contoh: King Koil"
+                                value={piece?.merk || ''}
+                                onChange={(e) => patchSatuanPiece(idx, 'merk', e.target.value)}
+                                className="w-full bg-white border border-slate-300 rounded-xl p-2 text-xs font-semibold text-slate-800"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] text-slate-500 font-bold mb-1">Warna</label>
+                              <input
+                                type="text"
+                                placeholder="Contoh: Putih"
+                                value={piece?.warna || ''}
+                                onChange={(e) => patchSatuanPiece(idx, 'warna', e.target.value)}
+                                className="w-full bg-white border border-slate-300 rounded-xl p-2 text-xs font-semibold text-slate-800"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] text-slate-500 font-bold mb-1">Corak</label>
+                              <input
+                                type="text"
+                                placeholder="Polos / Bunga"
+                                value={piece?.corak || ''}
+                                onChange={(e) => patchSatuanPiece(idx, 'corak', e.target.value)}
+                                className="w-full bg-white border border-slate-300 rounded-xl p-2 text-xs font-semibold text-slate-800"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+
                       <button
                         type="button"
                         onClick={handleAddSatuanToCart}
@@ -2271,11 +2557,14 @@ function CustomerDashboardPage() {
 
                       {cartSatuan.length > 0 && (
                         <div className="space-y-1.5 pt-2">
-                          {cartSatuan.map((item, idx) => (
+                          {cartSatuan.map((item, idx) => {
+                            const extra = formatSatuanPiecesNotes(item.pieces);
+                            return (
                             <div key={idx} className="bg-white p-2.5 rounded-xl flex justify-between items-center text-xs border border-slate-200 shadow-sm">
                               <div>
                                 <span className="font-bold text-slate-800 block">{item.name} x{item.qty}</span>
                                 <span className="text-[9px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-bold">{item.duration}</span>
+                                {extra && <span className="block text-[9px] text-slate-500 font-semibold mt-0.5">{extra}</span>}
                               </div>
                               <div className="flex items-center gap-2">
                                 <span className="font-extrabold text-blue-600">Rp {(item.price * item.qty).toLocaleString('id-ID')}</span>
@@ -2284,87 +2573,12 @@ function CustomerDashboardPage() {
                                 </button>
                               </div>
                             </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       )}
                     </div>
                   )}
-                </div>
-
-                <div className="bg-slate-800/80 border border-slate-700/80 p-4 rounded-2xl space-y-3.5 my-4">
-                  <h3 className="text-xs font-black tracking-wider uppercase text-cyan-400 flex items-center gap-2">
-                    <ClipboardList className="w-4 h-4" /> Informasi Detail Cucian
-                  </h3>
-
-                  <div className="space-y-3 text-xs text-slate-200">
-                    <div className="flex justify-between items-center">
-                      <span className="font-semibold text-slate-300">1. Jumlah Kantong:</span>
-                      <select
-                        value={bagCount}
-                        onChange={(e) => setBagCount(e.target.value)}
-                        className="bg-slate-900 border border-slate-700 text-cyan-400 font-extrabold rounded-xl px-3 py-1.5 focus:outline-none"
-                      >
-                        <option value="">-- Pilih Jumlah Kantong --</option>
-                        <option value="1 Kantong">1 Kantong</option>
-                        <option value="2 Kantong">2 Kantong</option>
-                        <option value="3 Kantong">3 Kantong</option>
-                        <option value="4+ Kantong">4+ Kantong</option>
-                      </select>
-                    </div>
-
-                    <div className="flex justify-between items-center">
-                      <span className="font-semibold text-slate-300">2. Proses Cuci:</span>
-                      <select
-                        value={washProcess}
-                        onChange={(e) => setWashProcess(e.target.value)}
-                        className="bg-slate-900 border border-slate-700 text-cyan-400 font-extrabold rounded-xl px-3 py-1.5 focus:outline-none"
-                      >
-                        <option value="">-- Pilih Proses Cuci --</option>
-                        <option value="Gabung Semua">Gabung Semua</option>
-                        <option value="Pisah Perkantong">Pisah Perkantong</option>
-                      </select>
-                    </div>
-
-                    <div className="flex justify-between items-center">
-                      <span className="font-semibold text-slate-300">3. Ada Pakaian Luntur?</span>
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setHasFading('Tidak')}
-                          className={`px-3 py-1 rounded-xl font-extrabold text-xs transition ${hasFading === 'Tidak' ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
-                        >
-                          Tidak
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setHasFading('Ya')}
-                          className={`px-3 py-1 rounded-xl font-extrabold text-xs transition ${hasFading === 'Ya' ? 'bg-rose-500 text-white shadow-md shadow-rose-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
-                        >
-                          Ya
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="flex justify-between items-center">
-                      <span className="font-semibold text-slate-300">4. Ada Barang Berharga?</span>
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setHasValuables('Tidak')}
-                          className={`px-3 py-1 rounded-xl font-extrabold text-xs transition ${hasValuables === 'Tidak' ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
-                        >
-                          Tidak
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setHasValuables('Ya')}
-                          className={`px-3 py-1 rounded-xl font-extrabold text-xs transition ${hasValuables === 'Ya' ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
-                        >
-                          Ya
-                        </button>
-                      </div>
-                    </div>
-                  </div>
                 </div>
 
                 <div className="bg-indigo-50/70 border border-indigo-100 rounded-2xl p-3.5 space-y-3">
@@ -2434,6 +2648,12 @@ function CustomerDashboardPage() {
                     <div className="flex justify-between text-emerald-600 font-extrabold bg-emerald-50 p-1.5 rounded-lg border border-emerald-100">
                       <span>Potongan Promo ({claimedPromo?.title}):</span>
                       <span>- Rp {promoDiscountVal.toLocaleString('id-ID')}</span>
+                    </div>
+                  )}
+                  {loyaltyDiscountVal > 0 && (
+                    <div className="flex justify-between text-emerald-700 font-extrabold bg-emerald-50 p-1.5 rounded-lg border border-emerald-100">
+                      <span>Potongan poin loyalty:</span>
+                      <span>- {idr(loyaltyDiscountVal)}</span>
                     </div>
                   )}
 
@@ -2516,10 +2736,47 @@ function CustomerDashboardPage() {
                   </div>
                 </div>
 
+                <div className="bg-white border border-slate-200 p-4 rounded-2xl space-y-3">
+                  <label className="flex items-start gap-2.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={agreedNoValuables}
+                      onChange={(e) => setAgreedNoValuables(e.target.checked)}
+                      className="mt-0.5 w-4 h-4 accent-blue-600 rounded shrink-0"
+                    />
+                    <span className="text-[11px] font-semibold text-slate-700 leading-relaxed">
+                      Saya pastikan tidak ada barang berharga atau barang selain cucian pada saku atau tas cucian saya.
+                    </span>
+                  </label>
+                  <label className="flex items-start gap-2.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={agreedTerms}
+                      onChange={(e) => setAgreedTerms(e.target.checked)}
+                      className="mt-0.5 w-4 h-4 accent-blue-600 rounded shrink-0"
+                    />
+                    <span className="text-[11px] font-semibold text-slate-700 leading-relaxed">
+                      Dengan melanjutkan pesan sekarang, saya menyetujui{' '}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setShowTermsModal(true);
+                        }}
+                        className="text-blue-600 font-extrabold underline underline-offset-2"
+                      >
+                        S&amp;K
+                      </button>
+                      {' '}yang berlaku.
+                    </span>
+                  </label>
+                </div>
+
                 <button
                   type="submit"
-                  disabled={isSubmitting}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-4 rounded-2xl text-xs uppercase shadow-lg shadow-blue-200 transition inline-flex items-center justify-center gap-2"
+                  disabled={isSubmitting || !agreedNoValuables || !agreedTerms}
+                  className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:hover:bg-blue-600 text-white font-extrabold py-4 rounded-2xl text-xs uppercase shadow-lg shadow-blue-200 transition inline-flex items-center justify-center gap-2"
                 >
                   <Truck className="w-4 h-4" /> Pesan Sekarang
                 </button>
@@ -2993,6 +3250,32 @@ function CustomerDashboardPage() {
         onClaim={handleClaimPromo}
         onApplyCode={handleApplyPromoCode}
       />
+
+      {showTermsModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[90] flex items-center justify-center p-4" onClick={() => setShowTermsModal(false)}>
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl max-h-[80vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto">
+              <FileText className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="text-base font-extrabold text-slate-900 text-center">Syarat &amp; Ketentuan</h3>
+              <p className="text-xs text-slate-600 mt-3 leading-relaxed font-medium whitespace-pre-line">
+                {receiptTerms || DEFAULT_RECEIPT_TERMS}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setAgreedTerms(true);
+                setShowTermsModal(false);
+              }}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-3 rounded-2xl text-xs uppercase shadow-md transition"
+            >
+              Saya Setuju
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* MODAL INFORMASI CREDENTIAL ESTIMASI TOTAL */}
       {showEstimateInfoModal && (

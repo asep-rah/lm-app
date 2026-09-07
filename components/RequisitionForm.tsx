@@ -28,6 +28,7 @@ import { toast } from '@/lib/toast';
 import FileProofInput from '@/components/FileProofInput';
 import { updateWithFallback } from '@/lib/safeWrite';
 import { writeSubmission } from '@/lib/posSync';
+import { EXPENSE_COA_GROUPS, EXPENSE_COA_OPTIONS, expenseCoaLabel } from '@/lib/pnlReport';
 
 const formatRp = (n: any) => `Rp ${Number(n || 0).toLocaleString('id-ID')}`;
 
@@ -102,7 +103,7 @@ export default function RequisitionForm({
   const [outlets, setOutlets] = useState<any[]>([]);
   const [outletId, setOutletId] = useState(outletHint || '');
   const [title, setTitle] = useState('');
-  const [category, setCategory] = useState('Detergen & Parfum');
+  const [category, setCategory] = useState(EXPENSE_COA_OPTIONS[0]);
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
   const [quoteFile, setQuoteFile] = useState<File | null>(null);
@@ -328,7 +329,9 @@ export default function RequisitionForm({
   );
   const pending = requests.filter(isPrPending);
   const awaitingPay = requests.filter(isPrApprovedAwaiting);
-  const cats = Array.from(new Set(requests.map((r) => String(r.category || 'Lain-lain'))));
+  const cats = Array.from(
+    new Set([...EXPENSE_COA_OPTIONS, ...requests.map((r) => String(r.category || '').trim()).filter(Boolean)])
+  );
   const tableRows = [...(canCreate && !canApprove && !canPay ? mine : requests)]
     .filter((r) => {
       const hay = `${prTitle(r)} ${prRequestedBy(r)} ${r.status} ${r.category}`.toLowerCase();
@@ -376,12 +379,15 @@ export default function RequisitionForm({
                 onChange={(e) => setCategory(e.target.value)}
                 className="w-full border rounded-xl p-2.5 text-xs bg-white"
               >
-                <option>Detergen & Parfum</option>
-                <option>Sparepart Mesin</option>
-                <option>Packing & Plastik</option>
-                <option>Maintenance & Servis</option>
-                <option>ATK / Operasional</option>
-                <option>Lain-lain</option>
+                {EXPENSE_COA_GROUPS.map((group) => (
+                  <optgroup key={group.title} label={group.title}>
+                    {group.accounts.map((a) => (
+                      <option key={a.code} value={expenseCoaLabel(a)}>
+                        {expenseCoaLabel(a)}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
               </select>
             </div>
           </div>

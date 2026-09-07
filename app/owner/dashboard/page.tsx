@@ -1,13 +1,17 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
 import StageTimeline from '@/components/StageTimeline';
 import WasherBatchTimeline from '@/components/pos/WasherBatchTimeline';
-import OwnerExecNav from '@/components/OwnerExecNav';
 import FinanceAlertListener from '@/components/FinanceAlertListener';
 import WasherFraudAlertListener from '@/components/WasherFraudAlertListener';
 import AICopilotCard from '@/components/analytics/AICopilotCard';
+import ReceiptLayoutEditor from '@/components/owner/ReceiptLayoutEditor';
+import OwnerSidebar, { OwnerBellButton, OwnerMenuButton, type SettingsPanel } from '@/components/owner/OwnerSidebar';
+import { isRemoteOwnerTab, ownerHref, readOwnerSearch } from '@/components/owner/ownerNav';
+import { useOwnerDeleteNotifs } from '@/components/owner/useOwnerDeleteNotifs';
+import { DEFAULT_RECEIPT_LAYOUT, parseReceiptLayout, type ReceiptLayout } from '@/lib/receiptLayout';
 import { isVoidTransaction } from '@/lib/voidTx';
 import { canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
 import { staffRolesForForm } from '@/lib/staffRoles';
@@ -52,12 +56,14 @@ export default function Dashboard() {
   const [stats, setStats] = useState({ income: 0, onlineIncome: 0, offlineIncome: 0, expense: 0, profit: 0 });
   const [tableData, setTableData] = useState<any[]>([]);
   const [rawExportData, setRawExportData] = useState({ txs: [] as any[], mems: [] as any[], exps: [] as any[] });
+  const [pnlSource, setPnlSource] = useState({ txs: [] as any[], mems: [] as any[], exps: [] as any[] });
   
   const [outletLeaderboard, setOutletLeaderboard] = useState<any[]>([]);
   const [supervisorLeaderboard, setSupervisorLeaderboard] = useState<any[]>([]);
   const [supervisorMapping, setSupervisorMapping] = useState<any>({});
 
   const [deleteRequests, setDeleteRequests] = useState<any[]>([]);
+  const { unread: deleteUnread } = useOwnerDeleteNotifs();
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -67,6 +73,10 @@ export default function Dashboard() {
   const [services, setServices] = useState<any[]>([]);
   const [serviceSearch, setServiceSearch] = useState('');
   const [receiptTerms, setReceiptTerms] = useState('');
+  const [receiptLayout, setReceiptLayout] = useState<ReceiptLayout>(DEFAULT_RECEIPT_LAYOUT);
+  const [navOpen, setNavOpen] = useState(false);
+  const [settingsExpanded, setSettingsExpanded] = useState(false);
+  const [settingsPanel, setSettingsPanel] = useState<SettingsPanel>('services');
   const [outletOverrides, setOutletOverrides] = useState<any>({});
   const [settingViewOutlet, setSettingViewOutlet] = useState('ALL');
 
@@ -359,10 +369,18 @@ const handleApproveSubmission = async (row: any) => {
     }
     setCurrentUserRole(role);
     setCurrentUserName(user.name);
-    const tab = new URLSearchParams(window.location.search).get('tab');
+    const { tab, panel } = readOwnerSearch();
     if (tab === 'history' || tab === 'transaksi') setActiveTab('history');
-    if (tab === 'settings') setActiveTab('settings');
-    if (tab === 'approvals' || tab === 'persetujuan') setActiveTab('approvals');
+    else if (tab === 'settings') setActiveTab('settings');
+    else if (tab === 'approvals' || tab === 'persetujuan') setActiveTab('approvals');
+    else if (tab === 'loans') setActiveTab('loans');
+    else if (tab === 'employees') setActiveTab('employees');
+    else if (tab === 'delete_requests') setActiveTab('delete_requests');
+    if (panel) {
+      setSettingsPanel(panel);
+      setSettingsExpanded(true);
+      setActiveTab('settings');
+    }
   }, []);
 
   const handleLogout = () => {
@@ -401,6 +419,7 @@ setDeleteRequests(delData);
         setBasicSalary(settings.basic_salary?.toString() || '1500000');
         setNewEmpSalary(settings.basic_salary?.toString() || '1500000');
         setReceiptTerms(settings.receipt_terms || '');
+        setReceiptLayout(parseReceiptLayout(settings.receipt_layout, settings.receipt_terms));
         if (settings.coa_categories) setCoaList(safeParse(settings.coa_categories, []).join('\n'));
         if (settings.dynamic_services) setServices(safeParse(settings.dynamic_services, []));
         if (settings.outlet_overrides) setOutletOverrides(safeParse(settings.outlet_overrides, {}));
@@ -519,6 +538,12 @@ setDeleteRequests(delData);
       const filteredExps = selectedOutlet === 'ALL' ? periodExps : periodExps.filter(e => e.outlet_id === selectedOutlet);
 
       setRawExportData({ txs: filteredTxs, mems: filteredMems, exps: filteredExps });
+      const liveTxs = (allTxs || []).filter((t) => !isVoidTransaction(t));
+      setPnlSource({
+        txs: selectedOutlet === 'ALL' ? liveTxs : liveTxs.filter((t) => t.outlet_id === selectedOutlet),
+        mems: selectedOutlet === 'ALL' ? (allMems || []) : (allMems || []).filter((m) => m.outlet_id === selectedOutlet),
+        exps: selectedOutlet === 'ALL' ? (allExps || []) : (allExps || []).filter((e) => e.outlet_id === selectedOutlet)
+      });
 
       let combinedData: any[] = []; let inc = 0; let onlineInc = 0; let offlineInc = 0; let exp = 0;
       filteredTxs.forEach((t) => { 
@@ -735,12 +760,23 @@ setDeleteRequests(delData);
   const handleSaveSettings = async () => {
     setIsSaving(true);
     const coaArray = coaList.split('\n').map((item) => item.trim()).filter((item) => item !== '');
+    const nextLayout = { ...receiptLayout, terms: receiptTerms || receiptLayout.terms };
     const updatePayload: any = {
-      basic_salary: Number(basicSalary), receipt_terms: receiptTerms, coa_categories: JSON.stringify(coaArray),
-      dynamic_services: JSON.stringify(services), outlet_overrides: JSON.stringify(outletOverrides), supervisor_mapping: JSON.stringify(supervisorMapping),
+      basic_salary: Number(basicSalary),
+      receipt_terms: nextLayout.terms,
+      receipt_layout: nextLayout,
+      coa_categories: JSON.stringify(coaArray),
+      dynamic_services: JSON.stringify(services),
+      outlet_overrides: JSON.stringify(outletOverrides),
+      supervisor_mapping: JSON.stringify(supervisorMapping),
       promos_data: JSON.stringify(promosList)
     };
     let { error } = await supabase.from('app_settings').update(updatePayload).eq('id', 1);
+    if (error && String(error.message || '').includes('receipt_layout')) {
+      delete updatePayload.receipt_layout;
+      const fallbackRes = await supabase.from('app_settings').update(updatePayload).eq('id', 1);
+      error = fallbackRes.error;
+    }
     if (error && error.message?.includes('supervisor_mapping')) {
       delete updatePayload.supervisor_mapping;
       const fallbackRes = await supabase.from('app_settings').update(updatePayload).eq('id', 1);
@@ -767,29 +803,6 @@ setDeleteRequests(delData);
   const filteredServices = services.filter((svc) => 
     (svc.name || '').toLowerCase().includes(serviceSearch.toLowerCase())
   );
-
-  const exportCSV = () => {
-    const currentMonthName = new Date().toLocaleString('id-ID', { month: 'long' }).toUpperCase();
-    const outletNameStr = selectedOutlet === 'ALL' ? 'SEMUA CABANG' : outlets.find((o) => o.id === selectedOutlet)?.name?.toUpperCase() || 'OUTLET';
-    let offlineRev = 0; let onlineRev = 0; let ongkirRev = 0;
-    rawExportData.txs.forEach((tx: any) => { const amt = Number(tx.amount) || 0; const fee = Number(tx.delivery_fee) || 0; if (tx.order_type === 'Online') onlineRev += (amt - fee); else offlineRev += (amt - fee); ongkirRev += fee; });
-    rawExportData.mems.forEach((m: any) => { const prc = Number(m.price) || 0; if (m.order_type === 'Online') onlineRev += prc; else offlineRev += prc; });
-    const totalPendapatan = offlineRev + onlineRev + ongkirRev;
-
-    const expMap: Record<string, number> = {}; rawExportData.exps.forEach((ex: any) => { const cat = ex.category; expMap[cat] = (expMap[cat] || 0) + Number(ex.amount); });
-    const bppList = ['5201 - Detergent', '5202 - Gas', '5203 - Parfume', '5204 - Plastik', '5205 - Solasi & Thermal Paper', '5206 - Hanger'];
-    const opexList = ['600001 - Beban Subscribe Apps', '600019 - Beban Sewa Ruko', '600009 - Beban Gaji Crew', '600003 - Beban Listrik'];
-    const depList = ['Depresiasi Machine', 'Depresiasi Furniture'];
-
-    let totalBPP = 0; let totalOpex = 0; let totalDep = 0;
-    bppList.forEach((c) => (totalBPP += expMap[c] || 0)); opexList.forEach((c) => (totalOpex += expMap[c] || 0)); depList.forEach((c) => (totalDep += expMap[c] || 0));
-    let otherOpexStr = ''; const knownCats = new Set([...bppList, ...opexList, ...depList]);
-    Object.keys(expMap).forEach((k) => { if (!knownCats.has(k)) { totalOpex += expMap[k]; otherOpexStr += `"${k}",${expMap[k]}\n`; } });
-
-    const labaBersih = totalPendapatan - totalBPP - totalOpex; const labaSetelahDepresiasi = labaBersih - totalDep;
-    let csv = `LAPORAN LABA RUGI ${outletNameStr},,\n"Pendapatan Offline",${offlineRev}\n"Pendapatan Online",${onlineRev}\n"Total Pendapatan",${totalPendapatan}\n"Total BPP",${totalBPP}\n"Total Opex",${totalOpex}\n"LABA BERSIH",${labaBersih}\n"LABA SETELAH DEPRESIASI",${labaSetelahDepresiasi}\n`;
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `Laporan_PnL_${outletNameStr.replace(/ /g, '_')}_${currentMonthName}.csv`; link.click();
-  };
 
   const filteredHistory = fullYearHistory.filter((item) => {
     const itemDate = new Date(item.date);
@@ -837,7 +850,6 @@ setDeleteRequests(delData);
     return true;
   });
   const approvalCount = pendingPurchases.length + pendingLoans.length + openIssues.length + pendingSubs.length;
-
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-3 md:p-8">
       <div className="max-w-6xl mx-auto space-y-4 md:space-y-6">
@@ -855,55 +867,49 @@ setDeleteRequests(delData);
         )}
         
         {/* NAV HEADER */}
-        <div className="bg-white border border-slate-200 p-4 md:p-6 rounded-2xl shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-          <div>
-            <h1 className="text-xl md:text-2xl font-black text-emerald-600">Laundry ERP 🏛️</h1>
-            <p className="text-[10px] md:text-xs text-slate-500 mt-1">
-              Management <span className="font-bold text-indigo-600">({currentUserRole.toUpperCase()})</span>
-            </p>
+        <OwnerSidebar
+          open={navOpen}
+          onClose={() => setNavOpen(false)}
+          activeTab={activeTab}
+          settingsPanel={settingsPanel}
+          settingsExpanded={settingsExpanded}
+          onToggleSettings={() => {
+            setSettingsExpanded((v) => !v);
+            setActiveTab('settings');
+          }}
+          onGo={(tab, panel) => {
+            if (isRemoteOwnerTab(tab)) {
+              window.location.href = ownerHref(tab, panel);
+              return;
+            }
+            setActiveTab(tab as typeof activeTab);
+            if (panel) {
+              setSettingsPanel(panel);
+              setSettingsExpanded(true);
+            }
+          }}
+          canSettings={canAccessSettings(currentUserRole)}
+          isOwner={isOwnerRole(currentUserRole)}
+          showApprovals
+          approvalCount={approvalCount}
+          onLogout={handleLogout}
+        />
+        <div className="bg-white border border-slate-200 p-4 md:p-6 rounded-2xl shadow-sm flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <OwnerMenuButton onClick={() => setNavOpen(true)} />
+            <div className="min-w-0">
+              <h1 className="text-lg md:text-2xl font-black text-slate-900 truncate">Laundry ERP</h1>
+              <p className="text-[10px] md:text-xs text-slate-500">
+                {currentUserName || 'Owner'} · <span className="font-bold uppercase">{currentUserRole}</span>
+              </p>
+            </div>
           </div>
-          <div className="flex flex-col items-stretch md:items-end gap-2 w-full md:w-auto">
-          <OwnerExecNav active="main" />
-          <div className="flex w-full md:w-auto overflow-x-auto pb-2 md:pb-0 gap-2 hide-scrollbar items-center">
-          <button onClick={() => setActiveTab('pnl')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'pnl' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>📊 Laporan PnL</button>
-          <button onClick={() => setActiveTab('history')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'history' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>📦 Transaksi</button>
-          <button onClick={() => setActiveTab('loans')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'loans' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>💸 Kasbon Crew</button>
-          <button onClick={() => setActiveTab('approvals')} className={`relative whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'approvals' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
-            ✅ Persetujuan
-            {approvalCount > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 bg-rose-500 text-white text-[10px] font-black min-w-[18px] h-[18px] px-1 rounded-full flex items-center justify-center">
-                {approvalCount > 99 ? '99+' : approvalCount}
-              </span>
-            )}
-          </button>
-
-          {isOwnerRole(currentUserRole) && (
-            <Link href="/owner/kpi-settings" className="whitespace-nowrap bg-amber-50 border border-amber-200 text-amber-800 hover:bg-amber-500 hover:text-white text-xs px-4 py-2 rounded-xl font-bold transition">🎯 KPI Settings</Link>
-          )}
-          {canAccessSettings(currentUserRole) && (
-            <>
-              <button onClick={() => setActiveTab('settings')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'settings' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>⚙️ Settings</button>
-              <button onClick={() => setActiveTab('employees')} className={`whitespace-nowrap px-4 py-2 font-bold text-xs rounded-xl transition ${activeTab === 'employees' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>👥 Karyawan</button>
-            </>
-          )}
-
-          {/* 🔔 ICON LONCENG NOTIFIKASI REQUEST HAPUS (PENGGANTI PORTAL KASIR) */}
-          <button
-            onClick={() => setActiveTab('delete_requests')}
-            className="relative p-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl transition flex items-center justify-center cursor-pointer border border-slate-700 ml-1"
-            title="Pengajuan Hapus Transaksi"
-          >
-            🔔
-            {deleteRequests.length > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 bg-rose-500 text-white text-[10px] font-black w-5 h-5 rounded-full flex items-center justify-center animate-bounce shadow-md">
-                {deleteRequests.length}
-              </span>
-            )}
-          </button>
-
-          <button onClick={handleLogout} className="whitespace-nowrap bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold text-xs px-3 py-2 rounded-xl transition ml-1">Keluar</button>
-          </div>
-          </div>
+          <OwnerBellButton
+            count={deleteUnread}
+            onClick={() => {
+              window.location.href = ownerHref('delete_requests');
+            }}
+          />
         </div>
 
         {isOwnerRole(currentUserRole) && <FinanceAlertListener />}
@@ -937,24 +943,6 @@ setDeleteRequests(delData);
                   <option value="THIS_YEAR">1 Tahun Terakhir (365 Hari)</option>
                   <option value="ALL">Semua Waktu (All Time)</option>
                 </select>
-              </div>
-              <button type="button" onClick={exportCSV} className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-5 py-2.5 rounded-xl shadow transition whitespace-nowrap">
-                📥 EXPORT CSV
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4">
-              <div className="bg-white border border-slate-200 p-4 md:p-6 rounded-2xl shadow-sm">
-                <p className="text-[10px] md:text-xs font-bold text-slate-500 uppercase">Total Omset (Gross Revenue)</p>
-                <h2 className="text-xl md:text-2xl font-black text-emerald-600 mt-1">Rp {stats.income.toLocaleString('id-ID')}</h2>
-                <p className="mt-2 pt-2 border-t text-[11px] font-semibold text-slate-500">
-                  Off Rp {stats.offlineIncome.toLocaleString('id-ID')} · On Rp {stats.onlineIncome.toLocaleString('id-ID')}
-                </p>
-              </div>
-              <div className={`p-4 md:p-6 rounded-2xl border shadow-sm ${stats.profit >= 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-rose-50 border-rose-200'}`}>
-                <p className={`text-[10px] md:text-xs font-bold uppercase ${stats.profit >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>Total Net Profit</p>
-                <h2 className={`text-xl md:text-2xl font-black mt-1 ${stats.profit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>Rp {stats.profit.toLocaleString('id-ID')}</h2>
-                <p className="mt-2 pt-2 border-t text-[11px] font-semibold text-slate-500">OPEX Rp {stats.expense.toLocaleString('id-ID')}</p>
               </div>
             </div>
 
@@ -1272,6 +1260,7 @@ setDeleteRequests(delData);
           <>
             {activeTab === 'settings' && (
               <div className="flex flex-col gap-6">
+                {settingsPanel === 'services' && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                   <Link href="/owner/settings/outlets" className="bg-white border border-sky-200 rounded-2xl p-4 shadow-sm hover:border-sky-400 transition">
                     <p className="text-sm font-black text-slate-900">Profil Outlet & Google</p>
@@ -1290,9 +1279,11 @@ setDeleteRequests(delData);
                     <p className="text-[11px] text-slate-500 mt-0.5">Persentase poin per tier, segmen retensi, dan broadcast pelanggan.</p>
                   </Link>
                 </div>
+                )}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                   
                   {/* MODUL DYNAMIC SERVICES + SEARCH */}
+                  {settingsPanel === 'services' && (
                   <div className="lg:col-span-2 bg-white border border-slate-200 rounded-2xl p-4 md:p-6 shadow-sm">
                     <div className="flex flex-col md:flex-row justify-between items-start md:items-center border-b border-slate-100 pb-4 mb-4 gap-3">
                       <div><h3 className="font-bold text-slate-800">⚙️ Dynamic Services</h3></div>
@@ -1347,8 +1338,10 @@ setDeleteRequests(delData);
                       )}
                     </div>
                   </div>
+                  )}
 
-                  <div className="space-y-4 md:space-y-6">
+                  <div className="space-y-4 md:space-y-6 lg:col-span-3">
+                    {settingsPanel === 'outlets' && (
                     <form onSubmit={handleSaveOutlet} className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 md:p-6 shadow-sm space-y-3">
                       <div className="flex justify-between items-center border-b border-emerald-200 pb-2">
                         <h3 className="font-black text-emerald-800 text-sm">🏪 Kelola Outlet Cabang</h3>
@@ -1398,7 +1391,9 @@ setDeleteRequests(delData);
                         {selectedOutletToEdit === 'NEW' ? '➕ TAMBAH OUTLET CABANG' : '💾 PERBARUI DATA OUTLET'}
                       </button>
                     </form>
+                    )}
 
+                    {settingsPanel === 'supervisor' && (
                     <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-4 md:p-6 shadow-sm">
                       <h3 className="font-black text-indigo-800 text-sm mb-2">👔 Supervisor Cabang</h3>
                       <p className="text-[10px] text-slate-500 mb-4">Tentukan Supervisor penanggung jawab tiap cabang untuk data Leaderboard.</p>
@@ -1414,10 +1409,25 @@ setDeleteRequests(delData);
                         ))}
                       </div>
                     </div>
+                    )}
 
-                    <div className="bg-white border rounded-2xl p-4 md:p-6"><h3 className="font-bold text-sm mb-2">📜 Syarat Nota</h3><textarea value={receiptTerms} onChange={(e) => setReceiptTerms(e.target.value)} rows={4} className="w-full border rounded-xl p-2 text-xs font-mono"></textarea></div>
+                    {settingsPanel === 'receipt' && (
+                    <ReceiptLayoutEditor
+                      layout={receiptLayout}
+                      onChange={(next) => {
+                        setReceiptLayout(next);
+                        setReceiptTerms(next.terms);
+                      }}
+                      outletName={outlets[0]?.name || 'Laundrivery'}
+                      outletPhone={outlets[0]?.whatsapp_number || ''}
+                    />
+                    )}
+                    {settingsPanel === 'payroll' && (
+                    <>
                     <div className="bg-white border rounded-2xl p-4 md:p-6"><h3 className="font-bold text-sm mb-2">💰 Gaji Pokok Default</h3><input type="number" value={basicSalary} onChange={(e) => setBasicSalary(e.target.value)} className="w-full border rounded-xl p-2 font-bold text-emerald-600" /></div>
                     <div className="bg-white border rounded-2xl p-4 md:p-6"><h3 className="font-bold text-sm mb-2">📋 COA</h3><textarea value={coaList} onChange={(e) => setCoaList(e.target.value)} rows={5} className="w-full border rounded-xl p-2 text-xs font-mono"></textarea></div>
+                    </>
+                    )}
                   </div>
                 </div>
                 <button onClick={handleSaveSettings} disabled={isSaving} className="w-full bg-indigo-600 text-white font-black py-4 rounded-xl shadow-lg mt-4">{isSaving ? 'Menyimpan...' : '💾 SIMPAN SEMUA PENGATURAN'}</button>

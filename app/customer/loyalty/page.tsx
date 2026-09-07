@@ -11,14 +11,16 @@ import {
   cashbackCopy,
   ensureCrmProfile,
   idr,
-  loadCrmSettings,
   nextTierInfo,
   ownerTierGuide,
   rateForTier,
   tierBadgeClass,
+  windowSpentOf,
   type CrmProfile,
   type CrmSettings
 } from '@/lib/crm';
+import { loadFreshCrmProfile } from '@/lib/crm-automation';
+import { redeemableAmounts, setPendingLoyaltyRedeem } from '@/lib/loyaltyRedeem';
 
 export default function CustomerLoyaltyPage() {
   const router = useRouter();
@@ -26,6 +28,7 @@ export default function CustomerLoyaltyPage() {
   const [profile, setProfile] = useState<CrmProfile | null>(null);
   const [settings, setSettings] = useState<CrmSettings>(DEFAULT_CRM_SETTINGS);
   const [ready, setReady] = useState(false);
+  const [claiming, setClaiming] = useState(0);
 
   useEffect(() => {
     const stored = String(localStorage.getItem('laundry_customer_phone') || '').trim();
@@ -34,8 +37,9 @@ export default function CustomerLoyaltyPage() {
       return;
     }
     setPhone(stored);
-    Promise.all([ensureCrmProfile({ phone: stored }), loadCrmSettings()])
-      .then(([p, s]) => {
+    ensureCrmProfile({ phone: stored })
+      .then(() => loadFreshCrmProfile(stored))
+      .then(({ profile: p, settings: s }) => {
         if (p) setProfile(p);
         setSettings(s);
       })
@@ -43,10 +47,26 @@ export default function CustomerLoyaltyPage() {
       .finally(() => setReady(true));
   }, [router]);
 
+  const handleClaim = async (amount: number) => {
+    if (!phone) return;
+    setClaiming(amount);
+    const res = await setPendingLoyaltyRedeem(phone, amount);
+    setClaiming(0);
+    if (res.error) {
+      alert(res.error);
+      return;
+    }
+    if (res.profile) setProfile(res.profile);
+    alert(`Potongan ${idr(amount)} siap dipakai di pesanan berikutnya.`);
+    router.push('/order');
+  };
+
   const tier = profile?.tier_level || 'Standard';
-  const spent = Number(profile?.total_spent) || 0;
+  const spent = windowSpentOf(profile);
+  const lifetime = Number(profile?.total_spent) || 0;
   const points = Math.round(Number(profile?.loyalty_points) || 0);
-  const next = nextTierInfo(spent, settings);
+  const next = nextTierInfo(spent, settings, tier);
+  const amounts = redeemableAmounts(settings);
   const guide = ownerTierGuide(settings);
 
   return (
@@ -73,7 +93,41 @@ export default function CustomerLoyaltyPage() {
           </span>
         </div>
         <p className="mt-3 text-[11px] font-semibold text-amber-100/90 leading-relaxed">{cashbackCopy(tier, settings)}</p>
-        <p className="mt-2 text-[10px] text-white/50">Total belanja {idr(spent)}</p>
+        <p className="mt-2 text-[10px] text-white/50">
+          Belanja {settings.tier_window_months} bulan terakhir {idr(spent)}
+          {lifetime && lifetime !== spent ? ` · lifetime ${idr(lifetime)}` : ''}
+        </p>
+      </div>
+
+      <div className="mt-4 bg-white border border-slate-200 rounded-3xl p-4 shadow-sm space-y-3">
+        <h2 className="text-sm font-extrabold text-slate-900">Klaim potongan pesanan</h2>
+        <p className="text-[11px] text-slate-500 leading-relaxed">
+          1 poin = Rp 1. Pilih nominal, lalu potongan dipasang otomatis saat Anda pesan.
+        </p>
+        <div className="grid grid-cols-3 gap-2">
+          {amounts.map((amt) => {
+            const ok = points >= amt;
+            const pending = Number(profile?.pending_loyalty_discount) === amt;
+            return (
+              <button
+                key={amt}
+                type="button"
+                disabled={!ok || claiming === amt}
+                onClick={() => handleClaim(amt)}
+                className={`rounded-2xl border px-2 py-2.5 text-center ${
+                  pending
+                    ? 'border-amber-400 bg-amber-50'
+                    : ok
+                    ? 'border-slate-200 bg-slate-50'
+                    : 'border-slate-100 bg-slate-50 opacity-50'
+                }`}
+              >
+                <p className="text-[10px] font-bold text-slate-500">Potong</p>
+                <p className="text-xs font-black text-slate-900">{idr(amt)}</p>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {next.next ? (
@@ -119,7 +173,9 @@ export default function CustomerLoyaltyPage() {
                     {row.tier}
                   </span>
                   <p className="text-[10px] text-slate-500 mt-1">
-                    {row.threshold > 0 ? `Mulai ${idr(row.threshold)} total belanja` : 'Tier awal'}
+                    {row.threshold > 0
+                      ? `Mulai ${idr(row.threshold)} belanja ${settings.tier_window_months} bulan`
+                      : 'Tier awal / reset'}
                   </p>
                 </div>
                 <p className="text-sm font-black text-slate-900 tabular-nums">{row.rate}%</p>
@@ -134,6 +190,9 @@ export default function CustomerLoyaltyPage() {
         <p className="text-slate-600 leading-relaxed">
           Poin masuk otomatis saat cucian berstatus <b>Selesai</b>. Rumusnya:{' '}
           <b>nominal transaksi × {rateForTier(tier, settings)}%</b> sesuai tier Anda saat ini.
+        </p>
+        <p className="text-slate-600 leading-relaxed">
+          Tier dihitung dari belanja {settings.tier_window_months} bulan. Saat periode habis, Platinum mulai lagi dari Silver ({settings.silver_rate}%). Selain itu kembali ke Standard.
         </p>
         <p className="text-slate-600 leading-relaxed">
           Jika tidak order selama <b>{settings.inactive_days} hari</b>, kami kirim pengingat retensi.

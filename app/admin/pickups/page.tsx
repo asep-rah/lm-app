@@ -310,7 +310,7 @@ export default function AdminPickupsPage() {
               {arrivedAtOutlet.map((item) => {
                 const customerPhone = item.phone_number || item.customer_phone || item.phone || '';
                 const customerName = item.customer_name || 'Pelanggan Online';
-                const posUrl = `/pos?pickup_id=${item.id}&name=${encodeURIComponent(customerName)}&phone=${encodeURIComponent(customerPhone)}&service=${encodeURIComponent(item.service_type || '')}&notes=${encodeURIComponent(item.notes || '')}&delivery_fee=${item.delivery_fee || 0}&order_type=Online`;
+                const posUrl = `/pos?pickup_id=${item.id}&name=${encodeURIComponent(customerName)}&phone=${encodeURIComponent(customerPhone)}&service=${encodeURIComponent(item.service_type || '')}&notes=${encodeURIComponent(item.notes || '')}&delivery_fee=${item.delivery_fee || 0}&courier_type=${encodeURIComponent(item.courier_type || '')}&order_type=Online`;
 
                 return (
                   <div key={item.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3 shadow-lg hover:border-slate-700 transition-all">

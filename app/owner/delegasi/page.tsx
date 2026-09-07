@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import OwnerExecNav from '@/components/OwnerExecNav';
+import OwnerChrome from '@/components/owner/OwnerChrome';
 import HeadTaskDelegator from '@/components/HeadTaskDelegator';
 import SupervisorComplaintPanel from '@/components/SupervisorComplaintPanel';
 import { supabase } from '@/lib/supabaseClient';
@@ -98,15 +98,12 @@ export default function OwnerDelegasiPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-3 md:p-8">
-      <div className="max-w-6xl mx-auto space-y-4">
-        <div className="bg-white border border-slate-200/80 p-5 md:p-6 rounded-2xl shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-sky-600">Owner Analytics</p>
-            <h1 className="text-2xl font-black text-slate-900 mt-0.5">Delegasi Tugas & Control SLA</h1>
-            <p className="text-xs text-slate-400 mt-0.5">Tugas manajemen, batas waktu, dan aksi penyelesaian</p>
-          </div>
-          <OwnerExecNav active="delegasi" />
-        </div>
+      <div className="max-w-6xl mx-auto space-y-4 md:space-y-6">
+        <OwnerChrome
+          activeTab="delegasi"
+          title="Delegasi Tugas & Control SLA"
+          subtitle="Tugas manajemen, batas waktu, dan aksi penyelesaian"
+        />
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <HeadTaskDelegator />
