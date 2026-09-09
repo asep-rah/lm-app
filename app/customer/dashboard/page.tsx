@@ -1,9 +1,9 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
-import StageTimeline from '@/components/StageTimeline';
 import { fetchThreadMessages, insertChatMessage, isStaffOnlyMessage, phoneVariants, threadKeyOf } from '@/lib/csChat';
 import { parseChatInvoice } from '@/lib/chatInvoice';
 import { findPromoByCode, mapDbPromo, mapSettingsPromo, promoDiscountRp, promoIsClaimable, type CatalogPromo } from '@/lib/promoCatalog';
@@ -13,16 +13,11 @@ import { redeemLoyaltyPoints, redeemableAmounts } from '@/lib/loyaltyRedeem';
 import { createPickupRoleTasks, insertPickupOrder, requestDriverDelivery } from '@/lib/pickupDispatch';
 import { displayStatusLabel, stageKeyOf } from '@/lib/stageTimeline';
 import { laundryFallbackReply } from '@/lib/laundryFaq';
-import PhotoLightbox from '@/components/PhotoLightbox';
-import ChatAttachment, { visibleChatText } from '@/components/ChatAttachment';
-import ChatInvoiceCard from '@/components/ChatInvoiceCard';
-import ThirdPartyDeliveryCard from '@/components/ThirdPartyDeliveryCard';
 import {
   confirmThirdPartyReceived,
   isThirdPartyDelivery,
   thirdPartyFromOrder
 } from '@/lib/thirdPartyDelivery';
-import FileProofInput from '@/components/FileProofInput';
 import { fileToCompressedDataUrl, uploadChatAttachment, uploadProofFile } from '@/lib/uploadProof';
 import { displayItemAmount, kiloanLineTotal } from '@/lib/kiloanPrice';
 import { formatEstSelesai, formatTrxId } from '@/lib/posQueue';
@@ -34,9 +29,8 @@ import {
   decisionLabelOf,
   loadComplaintForOrder
 } from '@/lib/csCare';
-import ComplaintTicketChat from '@/components/ComplaintTicketChat';
 import { ensureComplaintTicketFromIssue, findComplaintTicket, ticketTitleOf } from '@/lib/complaintTicket';
-import { nearestOpenOutlet } from '@/lib/outletCapacity';
+import { nearestOpenOutlet, pickNearestOpenOutlets } from '@/lib/outletCapacity';
 import { toast } from '@/lib/toast';
 import {
   showComplaintActions,
@@ -47,22 +41,18 @@ import {
   readLocalFlag
 } from '@/lib/orderFeedback';
 import { IconBadge, SlaBadge, StarRating, StatusPill, StepperBtn } from '@/components/customer/ui';
+import { visibleChatText } from '@/components/ChatAttachment';
 import PromoBannerCarousel from '@/components/customer/PromoBannerCarousel';
 import NearbyOutlets from '@/components/customer/NearbyOutlets';
-import PromoVoucherModal from '@/components/customer/PromoVoucherModal';
-import PromoBannerDetailModal from '@/components/customer/PromoBannerDetailModal';
-import OutletProfileDrawer from '@/components/customer/OutletProfileDrawer';
 import BottomNavbar from '@/components/customer/BottomNavbar';
-import AddressManager from '@/components/customer/AddressManager';
 import LoyaltyProfileCard from '@/components/customer/LoyaltyProfileCard';
-import PinpointMap from '@/components/customer/PinpointMap';
 import CustomerHeader from '@/components/customer/CustomerHeader';
 import { DEFAULT_RECEIPT_TERMS } from '@/components/ReceiptPreview';
 import { parseReceiptLayout } from '@/lib/receiptLayout';
 import {
   MAX_NEARBY_RADIUS_KM,
   bannerSlidesOf,
-  citiesMatch,
+  inferCustomerCity,
   nearbyActiveOutlets,
   uniqueOutletCities,
   type BannerSlide,
@@ -76,7 +66,9 @@ import {
   upsertCustomerAddress,
   type SavedAddress
 } from '@/lib/customerAddresses';
-import { geocodeAddress, reverseGeocodeAddress, reverseGeocodeCity } from '@/lib/reverseGeocode';
+import { reverseGeocodeAddress, reverseGeocodeCity } from '@/lib/reverseGeocode';
+import { composePickupAddress, isValidHouseNumber, splitHouseNumber } from '@/lib/pickupAddress';
+import { fetchCustomerRoadKm, ongkirRoundTripFromOneWayKm } from '@/lib/roadDistance';
 import { matchOutletFromQuery, persistCustomerOutlet, readStoredCustomerOutlet } from '@/lib/outletUuid';
 import ActivitySegmentTabs from '@/components/customer/ActivitySegmentTabs';
 import {
@@ -93,6 +85,8 @@ import {
 import { updatePickupOrder } from '@/lib/pickupUpdates';
 import { updateWithFallback } from '@/lib/safeWrite';
 import { hasOnDutyDriverAtOutlet } from '@/lib/driverAttendance';
+import { isPaymentLocked } from '@/lib/paymentVerify';
+import CheckPaymentStatusButton from '@/components/payment/CheckPaymentStatusButton';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -106,7 +100,6 @@ import {
   Gift,
   Headphones,
   History,
-  Image as ImageIcon,
   Info,
   ListTodo,
   MapPin,
@@ -123,6 +116,19 @@ import {
   Wallet,
   X
 } from 'lucide-react';
+
+const StageTimeline = dynamic(() => import('@/components/StageTimeline'), { ssr: false });
+const PhotoLightbox = dynamic(() => import('@/components/PhotoLightbox'), { ssr: false });
+const ChatAttachment = dynamic(() => import('@/components/ChatAttachment'), { ssr: false });
+const ChatInvoiceCard = dynamic(() => import('@/components/ChatInvoiceCard'), { ssr: false });
+const ThirdPartyDeliveryCard = dynamic(() => import('@/components/ThirdPartyDeliveryCard'), { ssr: false });
+const FileProofInput = dynamic(() => import('@/components/FileProofInput'), { ssr: false });
+const ComplaintTicketChat = dynamic(() => import('@/components/ComplaintTicketChat'), { ssr: false });
+const PromoVoucherModal = dynamic(() => import('@/components/customer/PromoVoucherModal'), { ssr: false });
+const PromoBannerDetailModal = dynamic(() => import('@/components/customer/PromoBannerDetailModal'), { ssr: false });
+const OutletProfileDrawer = dynamic(() => import('@/components/customer/OutletProfileDrawer'), { ssr: false });
+const AddressManager = dynamic(() => import('@/components/customer/AddressManager'), { ssr: false });
+const PickupLocationPicker = dynamic(() => import('@/components/customer/PickupLocationPicker'), { ssr: false });
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -150,50 +156,6 @@ const isReadyForPickupAlert = (order: any) => {
 };
 
 const isSiapDiambil = (order: any) => isReadyForPickupAlert(order);
-
-const sortirPhotoOf = (order: any, logs?: any[]) =>
-  order?.sortir_photo_url ||
-  (logs || []).filter((l) => stageKeyOf(l?.stage) === 'sortir').slice(-1)[0]?.photo_url ||
-  null;
-
-function ProofPhotoGrid({
-  order,
-  logs,
-  onOpen,
-  compact
-}: {
-  order: any;
-  logs?: any[];
-  onOpen: (src: string) => void;
-  compact?: boolean;
-}) {
-  const h = compact ? 'h-16' : 'h-24';
-  const slots = [
-    { label: 'Jemput', src: order?.photo_pickup_url || order?.photo_url },
-    { label: 'Outlet', src: order?.photo_outlet_url },
-    { label: 'Sortir', src: sortirPhotoOf(order, logs) },
-    { label: 'Rak', src: order?.rack_photo_url },
-    { label: 'Antar', src: order?.photo_delivery_url || order?.photo_antar_url || order?.delivery_photo_url }
-  ];
-  return (
-    <div className="grid grid-cols-5 gap-1.5">
-      {slots.map((s) => (
-        <div key={s.label} className="flex flex-col gap-1 min-w-0">
-          <span className="text-[8px] font-bold text-slate-400 truncate">{s.label}</span>
-          {s.src ? (
-            <button type="button" onClick={() => onOpen(s.src)} className="block w-full">
-              <img src={s.src} alt={s.label} className={`w-full ${h} object-cover rounded-lg border border-slate-200`} />
-            </button>
-          ) : (
-            <div className={`w-full ${h} bg-slate-100 rounded-lg flex items-center justify-center text-slate-300`}>
-              <ImageIcon className="w-4 h-4" />
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
 
 const cleanPhone = (phoneStr: string) => {
   if (!phoneStr) return '';
@@ -282,10 +244,12 @@ function CustomerDashboardPage() {
   const [customerData, setCustomerData] = useState<any>(null);
   const [outletsList, setOutletsList] = useState<any[]>([]);
   const [filteredOutlets, setFilteredOutlets] = useState<any[]>([]);
+  const [pendingByOutlet, setPendingByOutlet] = useState<Record<string, number>>({});
   const [selectedOutlet, setSelectedOutlet] = useState('');
   const qrOutletLockRef = useRef(false);
-  const skipAddressGeocodeRef = useRef(false);
-  const [addressGeoStatus, setAddressGeoStatus] = useState<'idle' | 'searching' | 'found' | 'miss'>('idle');
+  const pickupPinLockedRef = useRef(false);
+  const [pickupLandmark, setPickupLandmark] = useState('');
+  const [houseNumber, setHouseNumber] = useState('');
   const outletQuery = String(searchParams.get('outlet') || '').trim();
 
   const chooseOutlet = (id: string, opts?: { fromQr?: boolean; clearQuery?: boolean }) => {
@@ -312,6 +276,7 @@ function CustomerDashboardPage() {
   const [addressBusy, setAddressBusy] = useState(false);
   const [selectedBanner, setSelectedBanner] = useState<BannerSlide | null>(null);
   const [userCoords, setUserCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [deviceCoords, setDeviceCoords] = useState<{ lat: number; lon: number } | null>(null);
   const [gpsCity, setGpsCity] = useState('');
   const [cityOverride, setCityOverride] = useState<string | null>(null);
   const [showAllCities, setShowAllCities] = useState(false);
@@ -343,6 +308,7 @@ function CustomerDashboardPage() {
 
   const [deliveryFee, setDeliveryFee] = useState<number | null>(null);
   const [distanceKm, setDistanceKm] = useState<number | null>(null);
+  const [distanceLoading, setDistanceLoading] = useState(false);
   const [claimedPromo, setClaimedPromo] = useState<any>(null);
   const [loyaltyProfile, setLoyaltyProfile] = useState<CrmProfile | null>(null);
   const [loyaltySettings, setLoyaltySettings] = useState<CrmSettings>(DEFAULT_CRM_SETTINGS);
@@ -843,7 +809,7 @@ function CustomerDashboardPage() {
         order,
         customerName: customerName || order.customer_name,
         customerPhone,
-        customerAddress,
+        customerAddress: composePickupAddress(customerAddress, houseNumber, pickupLandmark),
         selectedOutlet
       });
       if (error) throw error;
@@ -1055,6 +1021,7 @@ function CustomerDashboardPage() {
         [...(pendingPickups || []), ...(pendingTx || [])].forEach((row: any) => {
           if (row.outlet_id) pendingByOutlet[row.outlet_id] = (pendingByOutlet[row.outlet_id] || 0) + 1;
         });
+        setPendingByOutlet(pendingByOutlet);
         const open = dbOutlets.filter((o: any) => !o.is_coming_soon && !o.is_overcapacity && (pendingByOutlet[o.id] || 0) < 20);
         const visible = open.length ? open : dbOutlets;
         setOutletsList(dbOutlets);
@@ -1109,9 +1076,7 @@ function CustomerDashboardPage() {
         setCustomerPhone(savedPhone);
         fetchCustomerProfile(savedPhone);
         loadCustomerAddresses(savedPhone).then((rows) => {
-          setSavedAddresses(rows);
-          const primary = primaryAddressOf(rows);
-          if (primary) setCustomerAddress(primary);
+          applySavedAddressRows(rows);
         });
       }
 
@@ -1119,7 +1084,8 @@ function CustomerDashboardPage() {
         navigator.geolocation.getCurrentPosition((pos) => {
           const lat = pos.coords.latitude;
           const lon = pos.coords.longitude;
-          setUserCoords({ lat, lon });
+          setDeviceCoords({ lat, lon });
+          if (!pickupPinLockedRef.current) setUserCoords({ lat, lon });
 
           if (dbOutlets && dbOutlets.length > 0) {
             const nearby = dbOutlets.filter((o: any) => {
@@ -1169,80 +1135,78 @@ function CustomerDashboardPage() {
     if (!customerAddress || customerAddress.trim().length < 5) {
       setDeliveryFee(null);
       setDistanceKm(null);
+      setDistanceLoading(false);
       return;
     }
 
     const curOutlet = outletsList.find(o => o.id === selectedOutlet);
-    if (curOutlet && userCoords && curOutlet.latitude && curOutlet.longitude) {
-      const dist = calculateDistanceKm(userCoords.lat, userCoords.lon, Number(curOutlet.latitude), Number(curOutlet.longitude));
-      const roundedDist = Math.round(dist * 10) / 10;
-      setDistanceKm(roundedDist);
-
-      let lalamoveOneWay = 9000;
-      if (roundedDist > 3) {
-        lalamoveOneWay += Math.ceil(roundedDist - 3) * 2000;
-      }
-
-      const roundTripFee = lalamoveOneWay * 2;
-      setDeliveryFee(roundTripFee);
-    } else {
+    if (!curOutlet || !userCoords || !curOutlet.latitude || !curOutlet.longitude) {
       setDistanceKm(null);
       setDeliveryFee(18000);
+      setDistanceLoading(false);
+      return;
     }
+
+    let cancelled = false;
+    setDistanceLoading(true);
+    const from = { lat: userCoords.lat, lng: userCoords.lon };
+    const to = { lat: Number(curOutlet.latitude), lng: Number(curOutlet.longitude) };
+    fetchCustomerRoadKm(from, to).then((km) => {
+      if (cancelled) return;
+      setDistanceKm(km);
+      setDeliveryFee(ongkirRoundTripFromOneWayKm(km));
+      setDistanceLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [customerAddress, selectedOutlet, userCoords, outletsList]);
 
   useEffect(() => {
-    if (!userCoords) return;
+    const src = deviceCoords || userCoords;
+    if (!src) return;
     let cancelled = false;
-    reverseGeocodeCity(userCoords.lat, userCoords.lon).then((city) => {
+    reverseGeocodeCity(src.lat, src.lon).then((city) => {
       if (!cancelled && city) setGpsCity(city);
     });
     return () => {
       cancelled = true;
     };
-  }, [userCoords]);
+  }, [deviceCoords, userCoords]);
 
-  useEffect(() => {
-    const q = customerAddress.trim();
-    if (skipAddressGeocodeRef.current) {
-      skipAddressGeocodeRef.current = false;
-      return;
-    }
-    if (q.length < 8) {
-      setAddressGeoStatus('idle');
-      return;
-    }
-    setAddressGeoStatus('searching');
-    const t = window.setTimeout(() => {
-      void geocodeAddress(q).then((pt) => {
-        if (!pt) {
-          setAddressGeoStatus('miss');
-          return;
-        }
-        setAddressGeoStatus('found');
-        setUserCoords({ lat: pt.lat, lon: pt.lng });
-      });
-    }, 900);
-    return () => window.clearTimeout(t);
-  }, [customerAddress]);
-
-  const userCity = cityOverride || gpsCity;
-  const nearbyCities = useMemo(() => {
-    const fromOutlets = uniqueOutletCities(outletsList);
-    if (gpsCity && !fromOutlets.some((c) => citiesMatch(c, gpsCity))) {
-      return [gpsCity, ...fromOutlets];
-    }
-    return fromOutlets;
-  }, [outletsList, gpsCity]);
+  const inferredCity = useMemo(
+    () => inferCustomerCity(outletsList, userCoords || deviceCoords, [customerAddress, gpsCity, cityOverride]),
+    [outletsList, userCoords, deviceCoords, customerAddress, gpsCity, cityOverride]
+  );
+  const userCity = cityOverride || inferredCity || gpsCity;
+  const nearbyCities = useMemo(() => uniqueOutletCities(outletsList), [outletsList]);
   const nearbyItems = useMemo(
     () =>
-      nearbyActiveOutlets(outletsList, userCoords, {
+      nearbyActiveOutlets(outletsList, deviceCoords || userCoords, {
         city: showAllCities ? '' : userCity,
         ignoreCity: showAllCities || !userCity,
         maxKm: showAllCities ? Number.POSITIVE_INFINITY : MAX_NEARBY_RADIUS_KM
       }),
-    [outletsList, userCoords, userCity, showAllCities]
+    [outletsList, deviceCoords, userCoords, userCity, showAllCities]
   );
+  const orderOutlets = useMemo(() => {
+    const rows = pickNearestOpenOutlets(outletsList, userCoords, pendingByOutlet, 3);
+    if (outletQuery && selectedOutlet) {
+      return ensureOutletInList(rows, outletsList, selectedOutlet).slice(0, 3);
+    }
+    return rows;
+  }, [outletsList, userCoords, pendingByOutlet, outletQuery, selectedOutlet]);
+
+  useEffect(() => {
+    if (outletQuery) return;
+    if (!orderOutlets.length) return;
+    if (selectedOutlet && orderOutlets.some((o) => String(o.id) === String(selectedOutlet))) return;
+    const pick = orderOutlets[0];
+    if (pick?.id) {
+      setSelectedOutlet(String(pick.id));
+      persistCustomerOutlet(String(pick.id));
+    }
+  }, [orderOutlets, selectedOutlet, outletQuery]);
 
   const fetchCustomerProfile = async (phone: string) => {
     const norm = cleanPhone(phone);
@@ -1418,9 +1382,7 @@ function CustomerDashboardPage() {
     setCustomerData({ name: 'Pelanggan Setia', deposit_balance: 0 });
     fetchCustomerProfile(norm);
     loadCustomerAddresses(norm).then((rows) => {
-      setSavedAddresses(rows);
-      const primary = primaryAddressOf(rows);
-      if (primary) setCustomerAddress(primary);
+      applySavedAddressRows(rows);
     });
   };
 
@@ -1433,10 +1395,32 @@ function CustomerDashboardPage() {
     setActiveChatOrderId(null);
   };
 
-  const syncPrimaryAddress = (rows: SavedAddress[]) => {
+  const coordsOfSaved = (row?: SavedAddress | null) => {
+    if (!row) return null;
+    const lat = Number(row.latitude);
+    const lon = Number(row.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    return { lat, lon };
+  };
+
+  const applySavedAddressRows = (rows: SavedAddress[]) => {
     setSavedAddresses(rows);
-    const primary = primaryAddressOf(rows);
-    if (primary) setCustomerAddress(primary);
+    const primary = rows.find((r) => r.is_primary) || rows[0];
+    const text = primary?.full_address || primaryAddressOf(rows);
+    if (text) {
+      const parts = splitHouseNumber(text);
+      setCustomerAddress(parts.street);
+      if (parts.house) setHouseNumber(parts.house);
+    }
+    const pin = coordsOfSaved(primary);
+    if (pin) {
+      pickupPinLockedRef.current = true;
+      setUserCoords(pin);
+    }
+  };
+
+  const syncPrimaryAddress = (rows: SavedAddress[]) => {
+    applySavedAddressRows(rows);
   };
 
   const handleSaveAddressDraft = async (draft: {
@@ -1451,6 +1435,7 @@ function CustomerDashboardPage() {
     const next = await upsertCustomerAddress(cleanPhone(customerPhone), savedAddresses, draft);
     syncPrimaryAddress(next);
     if (draft.latitude != null && draft.longitude != null) {
+      pickupPinLockedRef.current = true;
       setUserCoords({ lat: Number(draft.latitude), lon: Number(draft.longitude) });
     }
     setAddressBusy(false);
@@ -1475,7 +1460,7 @@ function CustomerDashboardPage() {
     setLocatingGps(true);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        setUserCoords({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+        setDeviceCoords({ lat: pos.coords.latitude, lon: pos.coords.longitude });
         setLocatingGps(false);
       },
       () => setLocatingGps(false)
@@ -1493,17 +1478,16 @@ function CustomerDashboardPage() {
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
         const { latitude, longitude } = pos.coords;
-        skipAddressGeocodeRef.current = true;
+        pickupPinLockedRef.current = true;
         setUserCoords({ lat: latitude, lon: longitude });
-        setAddressGeoStatus('idle');
-        setGpsHint('Pin dipindah ke lokasi Anda. Mengisi alamat…');
+        setDeviceCoords({ lat: latitude, lon: longitude });
+        setGpsHint('Pin dipindah ke lokasi Anda. Mengisi nama jalan…');
         const label = await reverseGeocodeAddress(latitude, longitude);
         if (label) {
-          skipAddressGeocodeRef.current = true;
-          setCustomerAddress(label);
-          setGpsHint('Lokasi sekarang terpasang. Geser pin ke gerbang jika perlu.');
+          setCustomerAddress(splitHouseNumber(label).street);
+          setGpsHint('Titik GPS terpasang. Isi nomor rumah, lalu geser peta ke gerbang jika perlu.');
         } else {
-          setGpsHint(`GPS berhasil (${latitude.toFixed(5)}, ${longitude.toFixed(5)}). Geser pin ke gerbang, atau ketik alamat.`);
+          setGpsHint('GPS berhasil. Isi nomor rumah dan geser peta ke gerbang.');
         }
         setLocatingGps(false);
       },
@@ -1677,7 +1661,13 @@ function CustomerDashboardPage() {
     e.preventDefault();
     if (!customerPhone) return alert('Login terlebih dahulu!');
     if (!customerAddress || customerAddress.trim().length < 5) {
-      return alert('Isi Alamat Penjemputan terlebih dahulu!');
+      return alert('Cari dan pilih nama jalan / lokasi penjemputan dulu.');
+    }
+    if (!isValidHouseNumber(houseNumber)) {
+      return alert('Isi nomor rumah / blok. Boleh lengkap, contoh: 117, 12A, B-3, atau rumah no.117.');
+    }
+    if (!userCoords) {
+      return alert('Pasang titik di peta dulu: pilih saran, tekan GPS, atau geser peta ke gerbang.');
     }
     if (!isKiloanChecked && !kiloanLines.length && (!isSatuanChecked || cartSatuan.length === 0)) {
       return alert('Pilih minimal 1 paket Kiloan atau Satuan!');
@@ -1722,7 +1712,8 @@ function CustomerDashboardPage() {
     const mainServiceLabel = kiloanLines.length
       ? `${kiloanLines[0].name} (${kiloanLines[0].duration})`
       : `Satuan (${cartSatuan.length} Item)`;
-    const notesCombined = `Alamat: ${customerAddress} | Detail: ${detailLines.join(' | ')}${notes ? ` | Catatan: ${notes}` : ''}`;
+    const pickupFull = composePickupAddress(customerAddress, houseNumber, pickupLandmark);
+    const notesCombined = `Alamat: ${pickupFull} | Detail: ${detailLines.join(' | ')}${notes ? ` | Catatan: ${notes}` : ''}`;
     const autoOrderNo = `ORD-${Date.now().toString().slice(-8)}`;
 
     const nowIso = new Date().toISOString();
@@ -1779,12 +1770,12 @@ function CustomerDashboardPage() {
       phone_number: normPhone,
       service_type: mainServiceLabel,
       estimated_weight: kiloanLines.reduce((s, k) => s + k.kg, 0) || 0,
-      address: customerAddress || '',
-      formatted_address: customerAddress || '',
+      address: pickupFull,
+      formatted_address: pickupFull,
       latitude: userCoords?.lat ?? null,
       longitude: userCoords?.lon ?? null,
       address_id: (() => {
-        const id = savedAddresses.find((a) => a.full_address === customerAddress)?.id || '';
+        const id = savedAddresses.find((a) => a.full_address === pickupFull || a.full_address === customerAddress)?.id || '';
         return /^[0-9a-f-]{36}$/i.test(id) ? id : null;
       })(),
       duration: kiloanDuration || 'Reguler (3 Hari)',
@@ -1815,12 +1806,14 @@ function CustomerDashboardPage() {
         });
       }
       if (userCoords && customerAddress) {
-        const match = savedAddresses.find((a) => a.full_address === customerAddress);
+        const match = savedAddresses.find(
+          (a) => a.full_address === pickupFull || splitHouseNumber(a.full_address).street === customerAddress
+        );
         if (match) {
           void upsertCustomerAddress(normPhone, savedAddresses, {
             id: match.id,
             label: match.label,
-            full_address: match.full_address,
+            full_address: pickupFull,
             is_primary: match.is_primary,
             latitude: userCoords.lat,
             longitude: userCoords.lon
@@ -1939,7 +1932,8 @@ function CustomerDashboardPage() {
   const scheduledCount = scheduledOrders.length;
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-800 p-4 md:p-6 pb-32 max-w-md mx-auto relative font-sans">
+    <div className="min-h-screen bg-slate-50 text-slate-900 p-4 md:p-6 pb-32 max-w-md mx-auto relative font-sans">
+      <main>
       {readyPopup && (
         <div className="fixed inset-x-0 bottom-20 z-40 pointer-events-none flex justify-center px-4">
           <div className="pointer-events-auto bg-white rounded-2xl p-4 w-full max-w-sm shadow-xl border border-slate-200 space-y-2">
@@ -1988,8 +1982,8 @@ function CustomerDashboardPage() {
             <Phone className="w-6 h-6" />
           </div>
           <div className="text-center">
-            <h3 className="text-base font-extrabold text-slate-900">Masuk Aplikasi</h3>
-            <p className="text-xs text-slate-500 mt-1">Ketik Nomor WhatsApp Anda untuk melihat saldo deposit & status pesanan.</p>
+            <h2 className="text-base font-extrabold text-slate-900">Masuk Aplikasi</h2>
+            <p className="text-xs text-slate-600 mt-1">Ketik Nomor WhatsApp Anda untuk melihat saldo deposit & status pesanan.</p>
           </div>
           <input
             type="tel"
@@ -2113,91 +2107,79 @@ function CustomerDashboardPage() {
           {activeTab === 'order' && (
             <form onSubmit={handleOrderSubmit} className="space-y-4 pb-32">
               <div className="bg-white border border-slate-200 p-5 rounded-3xl space-y-4 shadow-sm">
-                <div className="border-b border-slate-100 pb-3">
-                  <h3 className="text-sm font-extrabold text-slate-900">Form Order Penjemputan</h3>
-                  <p className="text-[11px] text-slate-500">Layanan Jemput-Antar Langsung ke Kasir POS</p>
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Outlet Terdekat di Kota Anda</label>
-                  <select
-                    value={selectedOutlet}
-                    onChange={(e) => chooseOutlet(e.target.value, { clearQuery: true })}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-2xl px-3.5 py-3 text-xs font-bold text-slate-800"
-                  >
-                    {filteredOutlets.map((o) => (
-                      <option key={o.id} value={o.id}>{o.name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="space-y-1.5 mt-3">
+                <div className="space-y-1.5">
                   <label className="text-[10px] font-extrabold text-slate-500 uppercase">Alamat Penjemputan *</label>
-                  <button
-                    type="button"
-                    onClick={handleGetCurrentLocation}
-                    disabled={locatingGps}
-                    className="w-full text-[11px] font-extrabold text-indigo-700 bg-indigo-50 border border-indigo-200 px-3 py-2.5 rounded-xl hover:bg-indigo-100 inline-flex items-center justify-center gap-1.5 transition disabled:opacity-60"
-                  >
-                    <Navigation className={`w-3.5 h-3.5 ${locatingGps ? 'animate-pulse' : ''}`} />
-                    {locatingGps ? 'Mengambil lokasi…' : 'Gunakan lokasi sekarang'}
-                  </button>
-                  {gpsHint && (
-                    <p className="text-[10px] font-bold text-indigo-700">{gpsHint}</p>
-                  )}
                   {savedAddresses.length > 0 && (
                     <div className="space-y-1">
-                      <p className="text-[10px] font-extrabold text-slate-500 uppercase">Atau pilih alamat tersimpan</p>
                       <div className="flex flex-wrap gap-1.5">
-                        {savedAddresses.map((addr) => (
+                        {savedAddresses.map((addr) => {
+                          const parts = splitHouseNumber(addr.full_address);
+                          return (
                           <button
                             key={addr.id}
                             type="button"
                             onClick={() => {
-                              skipAddressGeocodeRef.current = true;
-                              setCustomerAddress(addr.full_address);
-                              setAddressGeoStatus('idle');
+                              setCustomerAddress(parts.street);
+                              setHouseNumber(parts.house);
+                              pickupPinLockedRef.current = Boolean(addr.latitude && addr.longitude);
                               if (addr.latitude != null && addr.longitude != null) {
                                 setUserCoords({ lat: Number(addr.latitude), lon: Number(addr.longitude) });
                               } else {
-                                skipAddressGeocodeRef.current = false;
                                 setUserCoords(null);
                               }
                             }}
                             className={`text-[10px] font-extrabold px-2.5 py-1.5 rounded-lg border ${
-                              customerAddress === addr.full_address
+                              customerAddress === parts.street
                                 ? 'bg-blue-600 text-white border-blue-600'
                                 : 'bg-white text-slate-600 border-slate-200'
                             }`}
                           >
                             {addr.label}{addr.is_primary ? ' · Utama' : ''}
                           </button>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   )}
-                  <textarea
-                    value={customerAddress}
-                    onChange={(e) => setCustomerAddress(e.target.value)}
-                    placeholder="Ketik alamat lengkap (Jalan, No. Rumah, Patokan) — pin peta akan ikut pindah..."
-                    className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3 text-xs font-bold text-slate-800 focus:outline-none"
-                    rows={2}
-                  />
-                  {addressGeoStatus === 'searching' && (
-                    <p className="text-[9px] text-indigo-600 font-bold">Mencari titik di peta dari alamat…</p>
-                  )}
-                  {addressGeoStatus === 'miss' && (
-                    <p className="text-[9px] text-amber-700 font-bold">Alamat belum ketemu di peta. Geser pin secara manual ke rumah/gerbang.</p>
-                  )}
-                  <PinpointMap
-                    value={userCoords ? { lat: userCoords.lat, lng: userCoords.lon } : null}
-                    onChange={(pt) => setUserCoords({ lat: pt.lat, lon: pt.lng })}
+                  <PickupLocationPicker
+                    street={customerAddress}
+                    houseNo={houseNumber}
+                    landmark={pickupLandmark}
+                    pin={userCoords ? { lat: userCoords.lat, lng: userCoords.lon } : null}
+                    locating={locatingGps}
+                    hint={gpsHint}
+                    onStreetChange={setCustomerAddress}
+                    onHouseNoChange={setHouseNumber}
+                    onLandmarkChange={setPickupLandmark}
                     onGps={handleGetCurrentLocation}
+                    onPin={(pt, streetLabel) => {
+                      pickupPinLockedRef.current = true;
+                      setUserCoords({ lat: pt.lat, lon: pt.lng });
+                      if (streetLabel) setCustomerAddress(splitHouseNumber(streetLabel).street);
+                    }}
                   />
-                  {userCoords && (
-                    <p className="text-[9px] text-emerald-600 font-bold flex items-center gap-1">
-                      <CheckCircle2 className="w-3 h-3" /> Lat: {userCoords.lat.toFixed(5)}, Lon: {userCoords.lon.toFixed(5)} (Pinpoint tersimpan)
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Pilih Outlet</label>
+                  {!userCoords ? (
+                    <p className="text-[11px] font-semibold text-slate-500 bg-slate-50 border border-slate-200 rounded-2xl px-3 py-2.5">
+                      Isi alamat dan pasang pin dulu. Nanti muncul 3 cabang terdekat yang bisa menerima semua durasi.
                     </p>
+                  ) : orderOutlets.length === 0 ? (
+                    <p className="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-100 rounded-2xl px-3 py-2.5">
+                      Belum ada cabang terdekat yang bisa menerima pesanan (penuh / overload).
+                    </p>
+                  ) : (
+                    <select
+                      value={selectedOutlet}
+                      onChange={(e) => chooseOutlet(e.target.value, { clearQuery: true })}
+                      className="w-full bg-slate-50 border border-slate-300 rounded-2xl px-3.5 py-3 text-xs font-bold text-slate-800"
+                    >
+                      {orderOutlets.map((o) => (
+                        <option key={o.id} value={o.id}>{o.name}</option>
+                      ))}
+                    </select>
                   )}
                 </div>
 
@@ -2634,13 +2616,15 @@ function CustomerDashboardPage() {
                   <div className="flex justify-between text-slate-500 font-medium"><span>Subtotal Satuan:</span><span>Rp {satuanSubtotal.toLocaleString('id-ID')}</span></div>
                   
                   <div className="flex justify-between text-slate-700 font-bold border-t border-slate-200/80 pt-1.5">
-                    <span>Ongkir Antar-Jemput{isInternalDriver ? '' : ` Motor ${distanceKm ? `(${distanceKm} Km PP)` : 'PP'}`}:</span>
+                    <span>Ongkir Antar-Jemput{isInternalDriver ? '' : ' Motor'}:</span>
                     <span>
                       {isInternalDriver
                         ? 'Rp 0 (FREE)'
-                        : deliveryFee !== null
-                        ? `Rp ${rawOngkir.toLocaleString('id-ID')}`
-                        : 'Isi alamat dahulu'}
+                        : distanceLoading
+                          ? 'Menghitung…'
+                          : deliveryFee !== null
+                            ? `Rp ${rawOngkir.toLocaleString('id-ID')}`
+                            : 'Isi alamat dahulu'}
                     </span>
                   </div>
 
@@ -3597,6 +3581,7 @@ function CustomerDashboardPage() {
           </div>
         </div>
       )}
+      </main>
       <BottomNavbar
         activeTab={activeTab}
         ongoingCount={ongoingCount}
@@ -3641,7 +3626,23 @@ function CustomerDashboardPage() {
           <p className="text-[11px] font-semibold text-indigo-800">Estimasi Selesai: {formatEstSelesai(detailOrder)}</p>
           <p className="text-[11px] font-semibold text-indigo-800">
             Status Cucian: {displayStatusLabel(detailOrder.status, detailOrder) || 'Menunggu'}
+            {detailOrder.is_paid || ['paid', 'lunas'].includes(String(detailOrder.payment_status || '').toLowerCase())
+              ? ' · LUNAS'
+              : isPaymentLocked(detailOrder)
+                ? ' · Menunggu Pembayaran'
+                : ''}
           </p>
+          {isPaymentLocked(detailOrder) ? (
+            <CheckPaymentStatusButton
+              orderId={String(detailOrder.id)}
+              className="w-full mt-1"
+              onPaid={() => {
+                setDetailOrder((prev: any) =>
+                  prev ? { ...prev, is_paid: true, payment_status: 'paid', status: 'Diterima' } : prev
+                );
+              }}
+            />
+          ) : null}
         </div>
 
         {/* Rincian Items + harga */}
@@ -3736,14 +3737,6 @@ function CustomerDashboardPage() {
             onOpenPhoto={setLightboxSrc}
           />
         )}
-
-        {/* Bukti Foto: jemput → outlet → sortir → rak → antar */}
-        <div className="space-y-2">
-          <h4 className="font-extrabold text-slate-800 uppercase text-[10px] inline-flex items-center gap-1">
-            <ImageIcon className="w-3.5 h-3.5" /> Bukti Foto Cucian
-          </h4>
-          <ProofPhotoGrid order={detailOrder} logs={detailWorkLogs} onOpen={setLightboxSrc} />
-        </div>
 
         {isOrderFinished(detailOrder) && (() => {
           const ui = showComplaintActions(detailOrder);

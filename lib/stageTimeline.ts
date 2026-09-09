@@ -236,6 +236,22 @@ export const buildStageTimeline = (
     }
 
     const rackPhoto = stage.key === 'siap' ? transaction?.rack_photo_url || null : null;
+    const jemputPhotos =
+      stage.key === 'jemput'
+        ? [transaction?.photo_pickup_url, transaction?.photo_url, transaction?.pickup_photo]
+        : [];
+    const outletPhotos =
+      stage.key === 'outlet'
+        ? [transaction?.photo_outlet_url, transaction?.outlet_photo]
+        : [];
+    const antarPhotos =
+      stage.key === 'selesai' || stage.key === 'siap'
+        ? [
+            transaction?.photo_delivery_url,
+            transaction?.photo_antar_url,
+            transaction?.delivery_photo_url
+          ]
+        : [];
     const photoUrls = uniqPhotoUrls([
       ...matches.map((l) => l?.photo_url),
       ...(stage.key === 'sortir'
@@ -245,7 +261,11 @@ export const buildStageTimeline = (
         ? [transaction?.packing_photo_url, ...(Array.isArray(transaction?.packing_photo_urls) ? transaction.packing_photo_urls : [])]
         : []),
       ...itemPhotosForStage(transaction, stage.key),
-      rackPhoto
+      ...jemputPhotos,
+      ...outletPhotos,
+      ...(stage.key === 'siap' ? [rackPhoto] : []),
+      // Antar hanya di tahap selesai supaya tidak dobel di "Siap"
+      ...(stage.key === 'selesai' ? antarPhotos : [])
     ]);
 
     return {

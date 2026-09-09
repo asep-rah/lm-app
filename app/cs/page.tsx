@@ -27,7 +27,8 @@ import StatusBadge from '@/components/ui/StatusBadge';
 import ChatAttachment, { visibleChatText } from '@/components/ChatAttachment';
 import PhotoLightbox from '@/components/PhotoLightbox';
 import { confirmPaymentProof, fileToCompressedDataUrl, uploadChatAttachment } from '@/lib/uploadProof';
-import { confirmTransactionPayment, isPaymentLocked, markInvoicePaid } from '@/lib/paymentVerify';
+import { confirmTransactionPayment, isPaymentLocked } from '@/lib/paymentVerify';
+import ManualMarkPaidModal from '@/components/payment/ManualMarkPaidModal';
 import { sendInvoiceToLiveChat } from '@/lib/chatInvoice';
 import ChatInvoiceCard from '@/components/ChatInvoiceCard';
 import ThirdPartyDeliveryCard from '@/components/ThirdPartyDeliveryCard';
@@ -141,6 +142,7 @@ export default function CsCommandCenter() {
   const [unpaidOrders, setUnpaidOrders] = useState<any[]>([]);
   const [openComplaints, setOpenComplaints] = useState<any[]>([]);
   const [payModal, setPayModal] = useState<any | null>(null);
+  const [manualPayOrder, setManualPayOrder] = useState<any | null>(null);
   const [payFile, setPayFile] = useState<File | null>(null);
   const [payBusy, setPayBusy] = useState(false);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
@@ -1319,24 +1321,10 @@ export default function CsCommandCenter() {
                     </button>
                     <button
                       type="button"
-                      onClick={async () => {
-                        if (!confirm(`Tandai ${o.receipt_number || 'tagihan'} sudah terbayar?`)) return;
-                        const { error } = await markInvoicePaid({
-                          transactionId: o.id,
-                          amount: Number(o.amount) || 0,
-                          receipt: o.receipt_number,
-                          agentName: agent.name,
-                          customerPhone: phone || o.customer_phone
-                        });
-                        if (error) return toast('Gagal konfirmasi: ' + error.message, 'err');
-                        toast('Pembayaran diverifikasi. POS terbuka untuk Sortir.', 'ok');
-                        if (selectedKey) loadContext(phoneFromThread(selectedKey));
-                        loadPayTasks();
-                        if (selectedKey) loadMessages(selectedKey);
-                      }}
+                      onClick={() => setManualPayOrder(o)}
                       className="w-full text-[11px] font-black bg-emerald-600 text-white py-2.5 rounded-xl"
                     >
-                      ✅ Tagihan Sudah Terbayarkan
+                      ✅ Tandai Lunas Manual
                     </button>
                     <button
                       type="button"
@@ -1425,6 +1413,19 @@ export default function CsCommandCenter() {
           </div>
         </div>
       )}
+      <ManualMarkPaidModal
+        open={Boolean(manualPayOrder)}
+        order={manualPayOrder}
+        agentName={agent.name}
+        role="cs"
+        onClose={() => setManualPayOrder(null)}
+        onSuccess={() => {
+          toast('Pembayaran diverifikasi. Sinkron ke POS & pelanggan.', 'ok');
+          if (selectedKey) loadContext(phoneFromThread(selectedKey));
+          loadPayTasks();
+          if (selectedKey) loadMessages(selectedKey);
+        }}
+      />
       <PhotoLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
       {handoverOpen && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">

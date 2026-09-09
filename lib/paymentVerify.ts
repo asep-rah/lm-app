@@ -2,6 +2,8 @@ import { supabase } from '@/lib/supabaseClient';
 import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
 import { canonicalPhone, insertChatMessage } from '@/lib/csChat';
 import { notifyCustomerPayment } from '@/lib/notifications';
+import { maybeAwardLoyalty } from '@/lib/crm-automation';
+import { insertAuditLog } from '@/lib/paymentSecurity';
 
 export const PENDING_PAY_STATUS = 'menunggu_pembayaran';
 
@@ -118,8 +120,12 @@ export async function markInvoicePaid(opts: {
   receipt?: string;
   agentName?: string;
   customerPhone?: string;
+  paidVia?: string;
+  note?: string;
+  bankRef?: string;
 }) {
   const paidAt = new Date().toISOString();
+  const paidVia = opts.paidVia || 'MANUAL_VERIFIED';
   const { error } = await updateWithFallback(
     'transactions',
     [
@@ -128,12 +134,17 @@ export async function markInvoicePaid(opts: {
         is_paid: true,
         paid_at: paidAt,
         paid_verified_by: opts.agentName || 'CS',
+        paid_via: paidVia,
         payment_proof_url: opts.proofUrl || undefined,
+        notes: opts.note
+          ? `${opts.note}${opts.bankRef ? ` · Ref: ${opts.bankRef}` : ''}`
+          : undefined,
         status: 'Diterima'
       },
       {
         payment_proof_url: opts.proofUrl || undefined,
         payment_status: 'paid',
+        paid_via: paidVia,
         status: 'Diterima'
       },
       {
@@ -170,6 +181,22 @@ export async function markInvoicePaid(opts: {
   }
 
   notifyCustomerPayment(opts.customerPhone);
+  maybeAwardLoyalty({
+    id: opts.transactionId,
+    amount: opts.amount,
+    customer_phone: opts.customerPhone,
+    status: 'Diterima',
+    is_paid: true
+  });
+  void insertAuditLog({
+    user_name: opts.agentName || 'CS',
+    role: 'cs',
+    action: 'PAYMENT_MARK_PAID',
+    entity_type: 'transactions',
+    entity_id: opts.transactionId,
+    amount: opts.amount ?? null,
+    meta: { paidVia, note: opts.note, bankRef: opts.bankRef, proofUrl: opts.proofUrl }
+  });
   return { error: null };
 }
 
@@ -184,7 +211,7 @@ export async function confirmTransactionPayment(opts: {
   return markInvoicePaid(opts);
 }
 
-export const gatewayPaidAttempts = (agentName: string) => {
+export const gatewayPaidAttempts = (agentName: string, paidVia = 'GATEWAY') => {
   const paidAt = new Date().toISOString();
   return [
     {
@@ -192,15 +219,17 @@ export const gatewayPaidAttempts = (agentName: string) => {
       is_paid: true,
       paid_at: paidAt,
       paid_verified_by: agentName,
+      paid_via: paidVia,
       status: 'paid'
     },
-    { payment_status: 'paid', is_paid: true, status: 'paid' },
+    { payment_status: 'paid', is_paid: true, paid_via: paidVia, status: 'paid' },
     { is_paid: true, status: 'paid' },
     {
       payment_status: 'paid',
       is_paid: true,
       paid_at: paidAt,
       paid_verified_by: agentName,
+      paid_via: paidVia,
       status: 'Diterima'
     },
     { payment_status: 'paid', is_paid: true, status: 'Diterima' },
@@ -215,9 +244,11 @@ export async function markGatewayPaid(opts: {
   amount?: number;
   agentName?: string;
   customerPhone?: string;
+  paidVia?: string;
 }) {
   const agent = opts.agentName || 'Mayar QRIS';
-  const { error } = await updateWithFallback('transactions', gatewayPaidAttempts(agent), {
+  const paidVia = opts.paidVia || 'GATEWAY';
+  const { error } = await updateWithFallback('transactions', gatewayPaidAttempts(agent, paidVia), {
     column: 'id',
     value: opts.transactionId
   });
@@ -234,5 +265,13 @@ export async function markGatewayPaid(opts: {
       message: `Pembayaran QRIS sebesar Rp ${nominal} sudah terkonfirmasi. Cucian masuk antrean produksi.`
     });
   }
+  notifyCustomerPayment(opts.customerPhone);
+  maybeAwardLoyalty({
+    id: opts.transactionId,
+    amount: opts.amount,
+    customer_phone: opts.customerPhone,
+    status: 'Diterima',
+    is_paid: true
+  });
   return { error: null };
 }

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import Image from 'next/image';
 import { withDefaultPromoBanner, type BannerSlide } from '@/lib/outletShowcase';
 
 const AUTO_MS = 4000;
@@ -45,24 +46,37 @@ export default function PromoBannerCarousel({
         }}
         className="flex overflow-x-auto snap-x snap-mandatory scroll-smooth rounded-2xl hide-scrollbar touch-pan-x"
       >
-        {imageSlides.map((slide) => (
-          <button
-            key={slide.id}
-            type="button"
-            onClick={() => {
-              if (slide.kind === 'promo') {
-                onOpenPromo?.(slide);
-                return;
-              }
-              if (slide.outletId) onOpenOutlet?.(slide.outletId);
-            }}
-            className="relative min-w-full snap-center h-36 sm:h-40 overflow-hidden rounded-2xl p-0 border-0 bg-slate-100"
-            aria-label={slide.title || 'Promo'}
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={slide.image} alt="" className="absolute inset-0 w-full h-full object-cover" />
-          </button>
-        ))}
+        {imageSlides.map((slide, i) => {
+          const src = String(slide.image || '').trim();
+          return (
+            <button
+              key={slide.id}
+              type="button"
+              onClick={() => {
+                if (slide.kind === 'promo') {
+                  onOpenPromo?.(slide);
+                  return;
+                }
+                if (slide.outletId) onOpenOutlet?.(slide.outletId);
+              }}
+              className="relative min-w-full snap-center h-36 sm:h-40 overflow-hidden rounded-2xl p-0 border-0 bg-slate-100"
+              aria-label={slide.title || 'Promo'}
+            >
+              {src ? (
+                <Image
+                  src={src}
+                  alt={slide.title || 'Promo'}
+                  fill
+                  sizes="(max-width: 448px) 100vw, 448px"
+                  priority={i === 0}
+                  loading={i === 0 ? 'eager' : 'lazy'}
+                  className="object-cover"
+                  unoptimized={src.startsWith('http') && !/\.supabase\.(co|in)/i.test(src)}
+                />
+              ) : null}
+            </button>
+          );
+        })}
       </div>
       {imageSlides.length > 1 && (
         <div className="flex justify-center gap-1.5 mt-2">

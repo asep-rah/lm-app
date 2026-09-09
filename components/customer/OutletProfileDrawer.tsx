@@ -20,12 +20,14 @@ export default function OutletProfileDrawer({
   onClose: () => void;
 }) {
   const [photoIdx, setPhotoIdx] = useState(0);
+  const [showGallery, setShowGallery] = useState(false);
   const [badge, setBadge] = useState('');
   const [mapsUrl, setMapsUrl] = useState('');
 
   useEffect(() => {
     if (!outlet) return;
     setPhotoIdx(0);
+    setShowGallery(false);
     const saved = dbGoogleStats(outlet);
     setBadge(googleRatingBadge(saved.rating, saved.reviewCount));
     setMapsUrl(mapsDirectionsUrl(outlet));
@@ -53,7 +55,7 @@ export default function OutletProfileDrawer({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="relative h-44 bg-slate-200">
-          {photos.length ? (
+          {photos.length && showGallery ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={photos[photoIdx % photos.length]}
@@ -62,8 +64,17 @@ export default function OutletProfileDrawer({
               onClick={() => photos.length > 1 && setPhotoIdx((i) => (i + 1) % photos.length)}
             />
           ) : (
-            <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-blue-500 to-indigo-700 text-white">
+            <div className="w-full h-full flex flex-col items-center justify-center gap-2 bg-gradient-to-br from-blue-500 to-indigo-700 text-white px-4">
               <Store className="w-10 h-10 opacity-80" />
+              {photos.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowGallery(true)}
+                  className="text-[11px] font-extrabold bg-white/20 hover:bg-white/30 border border-white/40 px-3 py-1.5 rounded-xl"
+                >
+                  Lihat foto outlet
+                </button>
+              )}
             </div>
           )}
           <button
@@ -74,7 +85,7 @@ export default function OutletProfileDrawer({
           >
             <X className="w-4 h-4" />
           </button>
-          {photos.length > 1 && (
+          {showGallery && photos.length > 1 && (
             <div className="absolute bottom-2 inset-x-0 flex justify-center gap-1.5">
               {photos.map((src, i) => (
                 <button

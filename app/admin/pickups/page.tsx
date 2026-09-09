@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import Link from 'next/link';
+import DeferredProofPhoto from '@/components/DeferredProofPhoto';
 import { getStaffSession, isCsRole, isOutletLockedRole } from '@/lib/staffSession';
 import { updateWithFallback } from '@/lib/safeWrite';
 import { isPickupConvertedToPos } from '@/lib/pickupUpdates';
@@ -329,11 +330,16 @@ export default function AdminPickupsPage() {
                     </div>
 
                     {item.photo_url && (
-                      <div className="rounded-xl overflow-hidden border border-slate-800 bg-slate-950">
-                        <p className="text-[9px] font-bold text-slate-400 p-1.5 bg-slate-800/60 border-b border-slate-800 flex items-center gap-1">
-                          📸 Foto Bukti Driver:
+                      <div className="rounded-xl border border-slate-800 bg-slate-950 p-2 space-y-1.5">
+                        <p className="text-[9px] font-bold text-slate-400 flex items-center gap-1">
+                          📸 Foto Bukti Driver
                         </p>
-                        <img src={item.photo_url} alt="Foto Bukti" className="w-full h-28 object-cover hover:scale-105 transition-all duration-300" />
+                        <DeferredProofPhoto
+                          src={item.photo_url}
+                          label="Lihat foto bukti"
+                          className="w-full !bg-slate-900 !border-slate-700 !text-slate-100 hover:!bg-slate-800"
+                          onOpen={(url) => window.open(url, '_blank')}
+                        />
                       </div>
                     )}
 

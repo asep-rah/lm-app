@@ -38,7 +38,7 @@ export default function BottomNavbar({
   onActivity: () => void;
   onProfile: () => void;
 }) {
-  const item = (on: boolean) => (on ? 'text-blue-600' : 'text-slate-400');
+  const item = (on: boolean) => (on ? 'text-blue-700' : 'text-slate-600');
   const tabClass = 'flex flex-col items-center justify-center gap-0.5 py-1 min-h-[2.75rem]';
   const [unreadChatCount, setUnreadChatCount] = useState(0);
   const inChatRef = useRef(activeTab === 'chat');
@@ -118,7 +118,7 @@ export default function BottomNavbar({
         <div className="grid grid-cols-5 items-center">
           <button type="button" onClick={onHome} className={`${tabClass} ${item(activeTab === 'home')}`}>
             <Home className="w-5 h-5" strokeWidth={2.2} />
-            <span className="text-[9px] font-extrabold">Beranda</span>
+            <span className="text-[10px] font-extrabold">Beranda</span>
           </button>
           <button type="button" onClick={openChat} className={`relative ${tabClass} ${item(activeTab === 'chat')}`}>
             <MessageSquare className="w-5 h-5" strokeWidth={2.2} />
@@ -127,7 +127,7 @@ export default function BottomNavbar({
                 {unreadChatCount > 99 ? '99+' : unreadChatCount}
               </span>
             )}
-            <span className="text-[9px] font-extrabold">Chat</span>
+            <span className="text-[10px] font-extrabold">Chat</span>
           </button>
           <button
             type="button"
@@ -148,7 +148,7 @@ export default function BottomNavbar({
               height={24}
               className="w-6 h-6 object-contain"
             />
-            <span className="text-[9px] font-extrabold">Order</span>
+            <span className="text-[10px] font-extrabold">Order</span>
           </button>
           <button type="button" onClick={onActivity} className={`relative ${tabClass} ${item(activeTab === 'activity')}`}>
             <ListTodo className="w-5 h-5" strokeWidth={2.2} />
@@ -157,11 +157,11 @@ export default function BottomNavbar({
                 {ongoingCount > 99 ? '99+' : ongoingCount}
               </span>
             )}
-            <span className="text-[9px] font-extrabold">Aktivitas</span>
+            <span className="text-[10px] font-extrabold">Aktivitas</span>
           </button>
           <button type="button" onClick={onProfile} className={`${tabClass} ${item(activeTab === 'profile')}`}>
             <User className="w-5 h-5" strokeWidth={2.2} />
-            <span className="text-[9px] font-extrabold">Profil</span>
+            <span className="text-[10px] font-extrabold">Profil</span>
           </button>
         </div>
       </div>

@@ -1,6 +1,7 @@
 'use client';
 
 import { FileText } from 'lucide-react';
+import DeferredProofPhoto from '@/components/DeferredProofPhoto';
 import { stripInvoiceTag } from '@/lib/chatInvoice';
 import { stripTpDeliveryTag } from '@/lib/thirdPartyDelivery';
 
@@ -43,13 +44,9 @@ export default function ChatAttachment({
   const isImg = att.type.includes('image') || att.url.startsWith('data:image') || IMAGE_RE.test(att.url);
   if (isImg) {
     return (
-      <button
-        type="button"
-        onClick={() => (onOpen ? onOpen(att.url) : window.open(att.url, '_blank'))}
-        className="mt-1.5 block w-full text-left"
-      >
-        <img src={att.url} alt="Lampiran" className="max-h-40 w-full object-cover rounded-xl border border-white/20" />
-      </button>
+      <div className="mt-1.5">
+        <DeferredProofPhoto src={att.url} label="Lihat foto lampiran" onOpen={onOpen} className="w-full" />
+      </div>
     );
   }
   return (

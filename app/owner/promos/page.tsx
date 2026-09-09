@@ -13,6 +13,7 @@ import {
   parseTargetOutletIds
 } from '@/lib/outletShowcase';
 import { uploadShowcaseFile } from '@/lib/uploadProof';
+import DeferredProofPhoto from '@/components/DeferredProofPhoto';
 
 type PromoRow = {
   id: string;
@@ -303,10 +304,14 @@ export default function OwnerPromoBannersPage() {
           )}
           {visiblePromos.map((p) => (
             <div key={p.id} className="bg-white border border-slate-200 rounded-2xl p-3 shadow-sm flex gap-3">
-              <div className="w-20 h-14 rounded-lg overflow-hidden bg-slate-100 shrink-0">
+              <div className="w-20 h-14 rounded-lg overflow-hidden bg-slate-100 shrink-0 flex items-center justify-center">
                 {p.banner_url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={p.banner_url} alt="" className="w-full h-full object-cover" />
+                  <DeferredProofPhoto
+                    src={p.banner_url}
+                    label="Lihat"
+                    className="!px-2 !py-1.5 !text-[9px]"
+                    onOpen={(url) => window.open(url, '_blank')}
+                  />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-400">No img</div>
                 )}

@@ -26,6 +26,8 @@ export type PnlSource = {
   txs: any[];
   mems: any[];
   exps: any[];
+  depreciation?: number;
+  depreciationByOutlet?: Record<string, number>;
 };
 
 export const PNL_PROFIT_SHARE_RATE = 0.2;
@@ -77,7 +79,8 @@ export const PNL_OPEX: PnlAccount[] = [
   { code: '600024', label: 'Pajak', aliases: ['pajak'] },
   { code: '600025', label: 'Admin Bank', aliases: ['admin bank', 'biaya admin'] },
   { code: '600027', label: 'Kerugian', aliases: ['kerugian', 'selisih kas'] },
-  { code: '600028', label: 'Biaya MDR', aliases: ['mdr'] }
+  { code: '600028', label: 'Biaya MDR', aliases: ['mdr'] },
+  { code: '600029', label: 'Penyusutan Aset', aliases: ['penyusutan', 'depresiasi', 'depreciation'] }
 ];
 
 const KNOWN_ACCOUNTS = [...PNL_COGS, ...PNL_OPEX];
@@ -183,6 +186,8 @@ export function buildPnlMonth(source: PnlSource, ref: PnlMonthRef, shareRate = P
     extraMap[label] = (extraMap[label] || 0) + amt;
   });
 
+  if ((source.depreciation || 0) > 0) opex['600029'] += Number(source.depreciation) || 0;
+
   const extraOpex = Object.entries(extraMap)
     .map(([label, amount]) => ({ label, amount }))
     .sort((a, b) => a.label.localeCompare(b.label, 'id'));
@@ -262,9 +267,15 @@ export function buildPnlByOutlets(
   outletIds: string[],
   rates?: Record<string, number>
 ): PnlMonth {
+  const depOf = (id: string) =>
+    Number(source.depreciationByOutlet?.[id] ?? (outletIds.length === 1 ? source.depreciation : 0)) || 0;
   if (!outletIds.length) return buildPnlMonth(source, ref);
   if (outletIds.length === 1) {
-    return buildPnlMonth(source, ref, shareRateOf(rates, outletIds[0]));
+    return buildPnlMonth(
+      { ...source, depreciation: depOf(outletIds[0]) },
+      ref,
+      shareRateOf(rates, outletIds[0])
+    );
   }
   const known = new Set(outletIds);
   const parts = outletIds.map((id) =>
@@ -272,7 +283,8 @@ export function buildPnlByOutlets(
       {
         txs: source.txs.filter((t) => t.outlet_id === id),
         mems: source.mems.filter((m) => m.outlet_id === id),
-        exps: source.exps.filter((e) => e.outlet_id === id)
+        exps: source.exps.filter((e) => e.outlet_id === id),
+        depreciation: depOf(id)
       },
       ref,
       shareRateOf(rates, id)

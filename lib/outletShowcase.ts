@@ -148,6 +148,70 @@ export const uniqueOutletCities = (outlets: ShowcaseOutlet[]) => {
   return [...map.values()].sort((a, b) => a.localeCompare(b, 'id'));
 };
 
+/** Ambil nama kota dari teks alamat / hasil geocode, hanya jika cocok kota cabang. */
+export const inferCityFromText = (text: string, knownCities: string[] = []) => {
+  const raw = String(text || '').trim();
+  if (!raw) return '';
+  const kota = raw.match(/\bkota\s+([a-zA-Z.\s]+?)(?:,|$)/i);
+  if (kota?.[1]) {
+    const name = kota[1].trim();
+    const hit = knownCities.find((c) => citiesMatch(c, name));
+    if (hit) return hit;
+  }
+  const n = normalizeCityName(raw);
+  return knownCities.find((c) => {
+    const k = normalizeCityName(c);
+    return k.length >= 4 && (n.includes(k) || k.includes(n));
+  }) || '';
+};
+
+/** Kota pelanggan: alamat/pin dulu, baru GPS, lalu cabang terdekat. */
+export const inferCustomerCity = (
+  outlets: ShowcaseOutlet[],
+  coords: { lat: number; lon: number } | null,
+  hints: Array<string | null | undefined> = []
+) => {
+  const known = uniqueOutletCities(outlets);
+  for (const hint of hints) {
+    const raw = String(hint || '').trim();
+    if (!raw) continue;
+    const hit = known.find((c) => citiesMatch(c, raw)) || inferCityFromText(raw, known);
+    if (hit) return hit;
+  }
+  if (coords) {
+    const near = nearbyActiveOutlets(outlets, coords, { ignoreCity: true, maxKm: MAX_NEARBY_RADIUS_KM })[0];
+    const oc = outletCityOf(near?.outlet);
+    if (oc) return oc;
+  }
+  return '';
+};
+
+export const outletsInCustomerCity = (
+  outlets: ShowcaseOutlet[],
+  city: string | null,
+  coords: { lat: number; lon: number } | null
+) => {
+  const open = (outlets || []).filter((o) => !isComingSoonOutlet(o) && !o.is_overcapacity);
+  const filtered = city
+    ? open.filter((o) => {
+        const oc = outletCityOf(o);
+        return Boolean(oc) && citiesMatch(oc, city);
+      })
+    : open.filter((o) => {
+        if (!coords) return false;
+        const km = outletDistanceKm(o, coords);
+        return km != null && km <= MAX_NEARBY_RADIUS_KM;
+      });
+  return [...filtered].sort((a, b) => {
+    const da = outletDistanceKm(a, coords);
+    const db = outletDistanceKm(b, coords);
+    if (da == null && db == null) return String(a.name || '').localeCompare(String(b.name || ''), 'id');
+    if (da == null) return 1;
+    if (db == null) return -1;
+    return da - db;
+  });
+};
+
 export const displayCityName = (raw?: string | null) => {
   const t = String(raw || '').trim();
   if (!t) return '';
@@ -183,7 +247,7 @@ export const nearbyActiveOutlets = (
     .filter((o) => {
       if (ignoreCity || !city) return true;
       const oc = outletCityOf(o);
-      if (!oc) return true;
+      if (!oc) return false;
       return citiesMatch(oc, city);
     })
     .map((o) => ({ outlet: o, km: outletDistanceKm(o, coords) }))

@@ -1,0 +1,264 @@
+'use client';
+
+import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
+import { AlertTriangle, ArrowLeft, CheckCircle2, Loader2, RefreshCw, Shield } from 'lucide-react';
+import { supabase } from '@/lib/supabaseClient';
+import { diagnosisCardOf } from '@/lib/errorDiagnosis';
+import { toast } from '@/lib/toast';
+import ManualMarkPaidModal from '@/components/payment/ManualMarkPaidModal';
+import { isPaymentLocked } from '@/lib/paymentVerify';
+
+type ErrRow = {
+  id: string;
+  source: string;
+  code?: string | null;
+  message: string;
+  hint?: string | null;
+  severity?: string;
+  transaction_id?: string | null;
+  resolved?: boolean;
+  created_at: string;
+  context?: unknown;
+};
+
+export default function SystemHealthPage() {
+  const [errors, setErrors] = useState<ErrRow[]>([]);
+  const [webhooks, setWebhooks] = useState<any[]>([]);
+  const [pending, setPending] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [resyncId, setResyncId] = useState<string | null>(null);
+  const [manualOrder, setManualOrder] = useState<any | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const [{ data: errs }, { data: hooks }, { data: txs }] = await Promise.all([
+      supabase.from('error_logs').select('*').order('created_at', { ascending: false }).limit(40),
+      supabase.from('webhook_logs').select('id, gateway, status, event_type, signature_ok, error_message, created_at, transaction_id').order('created_at', { ascending: false }).limit(20),
+      supabase
+        .from('transactions')
+        .select('id, receipt_number, amount, customer_phone, customer_name, payment_status, is_paid, status, created_at')
+        .order('created_at', { ascending: false })
+        .limit(40)
+    ]);
+    setErrors((errs as ErrRow[]) || []);
+    setWebhooks(hooks || []);
+    setPending((txs || []).filter((t: any) => isPaymentLocked(t)).slice(0, 12));
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    void load();
+    const ch = supabase
+      .channel('system_health_rt')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'error_logs' }, () => void load())
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'transactions' }, () => void load())
+      .subscribe();
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, [load]);
+
+  const resync = async (txId: string, errorLogId?: string) => {
+    setResyncId(txId);
+    try {
+      const res = await fetch('/api/pay/resync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transactionId: txId, errorLogId, agentName: 'Owner' })
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || 'Re-sync gagal');
+      if (json.status === 'still_pending') {
+        toast(json.message || 'Masih pending di gateway', 'warn');
+      } else {
+        toast('Re-sync berhasil — status LUNAS', 'ok');
+      }
+      void load();
+    } catch (e: any) {
+      toast(e?.message || 'Re-sync gagal', 'err');
+    } finally {
+      setResyncId(null);
+    }
+  };
+
+  const openCount = errors.filter((e) => !e.resolved).length;
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900 p-4 md:p-6 max-w-5xl mx-auto pb-16">
+      <div className="flex items-center justify-between gap-3 mb-5">
+        <div className="flex items-center gap-3">
+          <Link href="/owner" className="p-2 rounded-xl bg-white border border-slate-200 shadow-sm">
+            <ArrowLeft className="w-4 h-4" />
+          </Link>
+          <div>
+            <h1 className="text-lg font-black text-slate-900 inline-flex items-center gap-2">
+              <Shield className="w-5 h-5 text-indigo-600" /> Diagnosis Sistem
+            </h1>
+            <p className="text-[11px] text-slate-600">Log error, webhook, dan petunjuk perbaikan pembayaran</p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => void load()}
+          className="text-[11px] font-extrabold text-indigo-700 bg-indigo-50 border border-indigo-100 px-3 py-2 rounded-xl inline-flex items-center gap-1.5"
+        >
+          <RefreshCw className="w-3.5 h-3.5" /> Muat ulang
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
+        <div className="bg-white border border-rose-100 rounded-2xl p-4 shadow-sm">
+          <p className="text-[10px] font-extrabold text-slate-500 uppercase">Error terbuka</p>
+          <p className="text-2xl font-black text-rose-600 mt-1">{openCount}</p>
+        </div>
+        <div className="bg-white border border-amber-100 rounded-2xl p-4 shadow-sm">
+          <p className="text-[10px] font-extrabold text-slate-500 uppercase">Pending bayar</p>
+          <p className="text-2xl font-black text-amber-600 mt-1">{pending.length}</p>
+        </div>
+        <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm col-span-2 md:col-span-1">
+          <p className="text-[10px] font-extrabold text-slate-500 uppercase">Webhook terbaru</p>
+          <p className="text-2xl font-black text-slate-800 mt-1">{webhooks.length}</p>
+        </div>
+      </div>
+
+      {loading ? (
+        <p className="text-sm text-slate-500 flex items-center gap-2">
+          <Loader2 className="w-4 h-4 animate-spin" /> Memuat log…
+        </p>
+      ) : (
+        <div className="space-y-6">
+          <section className="space-y-3">
+            <h2 className="text-xs font-black uppercase tracking-wide text-slate-500">Log Error & Cara Solving</h2>
+            {errors.length === 0 ? (
+              <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-[12px] font-semibold text-emerald-800 inline-flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4" /> Belum ada error tercatat. Jalankan migrasi SQL jika tabel masih kosong.
+              </div>
+            ) : (
+              errors.map((row) => {
+                const card = diagnosisCardOf(row.message, row.code);
+                const hint = row.hint || `Error: ${card.title}. Solusi: ${card.solution}`;
+                return (
+                  <div
+                    key={row.id}
+                    className={`bg-white border rounded-2xl p-4 shadow-sm space-y-2 ${
+                      row.resolved ? 'border-slate-200 opacity-70' : 'border-rose-100'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-black text-slate-900 inline-flex items-center gap-1.5">
+                          <AlertTriangle className="w-3.5 h-3.5 text-rose-500" />
+                          {row.source} · {row.code || card.code}
+                          {row.resolved ? (
+                            <span className="text-[8px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full">RESOLVED</span>
+                          ) : (
+                            <span className="text-[8px] bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded-full">{row.severity || 'ERROR'}</span>
+                          )}
+                        </p>
+                        <p className="text-[11px] text-slate-700 mt-1 font-medium">{row.message}</p>
+                        <p className="text-[11px] text-indigo-800 bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-2 mt-2 leading-relaxed">
+                          {hint}
+                        </p>
+                        <p className="text-[9px] text-slate-400 mt-1">{new Date(row.created_at).toLocaleString('id-ID')}</p>
+                      </div>
+                    </div>
+                    {row.transaction_id && !row.resolved ? (
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          disabled={resyncId === row.transaction_id}
+                          onClick={() => void resync(row.transaction_id!, row.id)}
+                          className="text-[10px] font-extrabold bg-indigo-600 text-white px-3 py-2 rounded-xl disabled:opacity-60 inline-flex items-center gap-1"
+                        >
+                          {resyncId === row.transaction_id ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <RefreshCw className="w-3 h-3" />
+                          )}
+                          Re-sync / Pemicu Ulang
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })
+            )}
+          </section>
+
+          <section className="space-y-3">
+            <h2 className="text-xs font-black uppercase tracking-wide text-slate-500">Pesanan menunggu bayar</h2>
+            {pending.length === 0 ? (
+              <p className="text-[11px] text-slate-500">Tidak ada antrean pending.</p>
+            ) : (
+              pending.map((o) => (
+                <div key={o.id} className="bg-white border border-amber-100 rounded-2xl p-3 flex flex-wrap items-center justify-between gap-2 shadow-sm">
+                  <div>
+                    <p className="text-xs font-black text-slate-900">{o.receipt_number || o.id}</p>
+                    <p className="text-[10px] text-slate-600">
+                      {o.customer_name} · Rp {Number(o.amount || 0).toLocaleString('id-ID')}
+                    </p>
+                  </div>
+                  <div className="flex gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => void resync(o.id)}
+                      className="text-[10px] font-extrabold bg-indigo-50 text-indigo-700 border border-indigo-100 px-2.5 py-1.5 rounded-xl"
+                    >
+                      Re-sync
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setManualOrder(o)}
+                      className="text-[10px] font-extrabold bg-emerald-600 text-white px-2.5 py-1.5 rounded-xl"
+                    >
+                      Tandai Lunas Manual
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </section>
+
+          <section className="space-y-2">
+            <h2 className="text-xs font-black uppercase tracking-wide text-slate-500">Webhook logs</h2>
+            <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+              <table className="w-full text-[10px]">
+                <thead className="bg-slate-50 text-slate-500 font-extrabold uppercase">
+                  <tr>
+                    <th className="text-left p-2">Waktu</th>
+                    <th className="text-left p-2">Gateway</th>
+                    <th className="text-left p-2">Status</th>
+                    <th className="text-left p-2">Sig</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {webhooks.map((w) => (
+                    <tr key={w.id} className="border-t border-slate-100">
+                      <td className="p-2 text-slate-600">{new Date(w.created_at).toLocaleString('id-ID')}</td>
+                      <td className="p-2 font-bold">{w.gateway}</td>
+                      <td className="p-2 font-bold">{w.status}</td>
+                      <td className="p-2">{w.signature_ok === false ? '❌' : w.signature_ok ? '✅' : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      )}
+
+      <ManualMarkPaidModal
+        open={Boolean(manualOrder)}
+        order={manualOrder}
+        agentName="Owner"
+        role="owner"
+        onClose={() => setManualOrder(null)}
+        onSuccess={() => {
+          toast('Ditandai lunas — metrik & role lain akan sync realtime', 'ok');
+          void load();
+        }}
+      />
+    </div>
+  );
+}

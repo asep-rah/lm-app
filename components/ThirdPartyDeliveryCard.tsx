@@ -1,6 +1,7 @@
 'use client';
 
 import { ExternalLink, Truck } from 'lucide-react';
+import DeferredProofPhoto from '@/components/DeferredProofPhoto';
 import { parseThirdPartyDelivery, thirdPartyFromOrder, vendorMetaOf, type ThirdPartyPayload } from '@/lib/thirdPartyDelivery';
 
 export default function ThirdPartyDeliveryCard({
@@ -43,14 +44,14 @@ export default function ThirdPartyDeliveryCard({
         ) : null}
         {data.receipt ? <p className="text-[10px] font-mono font-bold text-slate-500">Resi {data.receipt}</p> : null}
         {data.photoUrl ? (
-          <button
-            type="button"
-            onClick={() => (onOpenPhoto ? onOpenPhoto(data.photoUrl) : window.open(data.photoUrl, '_blank'))}
-            className="block w-full text-left"
-          >
-            <img src={data.photoUrl} alt="Foto serah terima" className="h-24 w-full object-cover rounded-xl border border-slate-200" />
-            <p className="text-[9px] text-slate-400 font-bold mt-1">Foto serah terima ke kurir</p>
-          </button>
+          <div>
+            <DeferredProofPhoto
+              src={data.photoUrl}
+              label="Lihat foto serah terima"
+              onOpen={onOpenPhoto}
+              className="w-full"
+            />
+          </div>
         ) : null}
         {data.trackingUrl ? (
           <a

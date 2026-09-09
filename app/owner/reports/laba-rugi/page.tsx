@@ -13,6 +13,7 @@ import {
   printPnlPdf
 } from '@/lib/pnlReport';
 import { DEFAULT_PROFIT_SHARE_PCT, loadProfitShareRates, saveProfitShareRates } from '@/lib/profitShare';
+import { booksOf, loadOutletBooks, monthDepreciation, type OutletBook } from '@/lib/outletBooks';
 
 export default function LabaRugiPage() {
   const [ready, setReady] = useState(false);
@@ -20,6 +21,7 @@ export default function LabaRugiPage() {
   const [adminName, setAdminName] = useState('Owner');
   const [outlets, setOutlets] = useState<{ id: string; name: string }[]>([]);
   const [source, setSource] = useState({ txs: [] as any[], mems: [] as any[], exps: [] as any[] });
+  const [bookStore, setBookStore] = useState<Record<string, OutletBook>>({});
   const [selectedOutlet, setSelectedOutlet] = useState('ALL');
   const [period, setPeriod] = useState('THIS_MONTH');
   const [rates, setRates] = useState<Record<string, number>>({});
@@ -47,10 +49,11 @@ export default function LabaRugiPage() {
     let cancelled = false;
     (async () => {
       setLoading(true);
-      const [bundle, savedRates] = await Promise.all([loadOwnerFinanceBundle(), loadProfitShareRates()]);
+      const [bundle, savedRates, books] = await Promise.all([loadOwnerFinanceBundle(), loadProfitShareRates(), loadOutletBooks()]);
       if (cancelled) return;
       setOutlets(bundle.outlets);
       setSource({ txs: bundle.txs, mems: bundle.mems, exps: bundle.exps });
+      setBookStore(books);
       const next: Record<string, number> = {};
       bundle.outlets.forEach((o) => {
         next[o.id] = Number.isFinite(Number(savedRates[o.id])) ? Number(savedRates[o.id]) : DEFAULT_PROFIT_SHARE_PCT;
@@ -71,8 +74,24 @@ export default function LabaRugiPage() {
 
   const outletIds = selectedOutlet === 'ALL' ? outlets.map((o) => o.id) : [selectedOutlet];
   const [leftRef, rightRef] = pnlCompareMonths(period);
-  const left = useMemo(() => buildPnlByOutlets(scoped, leftRef, outletIds, rates), [scoped, leftRef.year, leftRef.month, outletIds.join(','), JSON.stringify(rates)]);
-  const right = useMemo(() => buildPnlByOutlets(scoped, rightRef, outletIds, rates), [scoped, rightRef.year, rightRef.month, outletIds.join(','), JSON.stringify(rates)]);
+  const depMaps = useMemo(() => {
+    const left: Record<string, number> = {};
+    const right: Record<string, number> = {};
+    outlets.forEach((o) => {
+      const book = booksOf(bookStore, o.id)[0];
+      left[o.id] = book ? monthDepreciation(book, leftRef) : 0;
+      right[o.id] = book ? monthDepreciation(book, rightRef) : 0;
+    });
+    return { left, right };
+  }, [bookStore, outlets, leftRef.year, leftRef.month, rightRef.year, rightRef.month]);
+  const left = useMemo(
+    () => buildPnlByOutlets({ ...scoped, depreciationByOutlet: depMaps.left, depreciation: Object.values(depMaps.left).reduce((s, n) => s + n, 0) }, leftRef, outletIds, rates),
+    [scoped, leftRef.year, leftRef.month, outletIds.join(','), JSON.stringify(rates), JSON.stringify(depMaps.left)]
+  );
+  const right = useMemo(
+    () => buildPnlByOutlets({ ...scoped, depreciationByOutlet: depMaps.right, depreciation: Object.values(depMaps.right).reduce((s, n) => s + n, 0) }, rightRef, outletIds, rates),
+    [scoped, rightRef.year, rightRef.month, outletIds.join(','), JSON.stringify(rates), JSON.stringify(depMaps.right)]
+  );
   const outletName = selectedOutlet === 'ALL' ? 'SEMUA CABANG' : outlets.find((o) => o.id === selectedOutlet)?.name?.toUpperCase() || 'OUTLET';
 
   const saveRates = async () => {

@@ -6,6 +6,15 @@ import { completePaymentVerifyTasks, gatewayPaidAttempts } from '@/lib/paymentVe
 import { isMayarPaidEvent, mayarWebhookRefs } from '@/lib/mayar';
 import { creditDepositTopup, depositPackageOf, findDepositTopup } from '@/lib/depositTopup';
 import { findCashDeposit, settleCashDeposit } from '@/lib/cashDepositQris';
+import { maybeAwardLoyalty } from '@/lib/crm-automation';
+import {
+  amountsMatch,
+  insertErrorLog,
+  insertWebhookLog,
+  pickWebhookHeaders,
+  verifyPaymentSignature,
+  verifySharedSecret
+} from '@/lib/paymentSecurity';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,8 +50,8 @@ const findTransaction = async (refs: ReturnType<typeof mayarWebhookRefs>, explic
   return null;
 };
 
-const applyPaid = async (tx: any, agentName: string) => {
-  const attempts = gatewayPaidAttempts(agentName);
+const applyPaid = async (tx: any, agentName: string, paidVia = 'GATEWAY') => {
+  const attempts = gatewayPaidAttempts(agentName, paidVia);
   let lastErr: { message: string } | null = null;
   for (const row of attempts) {
     const { error } = await supabase.from('transactions').update(row).eq('id', tx.id);
@@ -60,6 +69,7 @@ const applyPaid = async (tx: any, agentName: string) => {
         });
         notifyCustomerPayment(tx.customer_phone);
       }
+      maybeAwardLoyalty({ ...tx, is_paid: true, status: 'Diterima' });
       return { error: null };
     }
     lastErr = { message: error.message };
@@ -68,25 +78,69 @@ const applyPaid = async (tx: any, agentName: string) => {
 };
 
 export async function POST(req: Request) {
+  const rawText = await req.text();
+  let body: any = {};
   try {
-    const expected = process.env.MAYAR_WEBHOOK_TOKEN || process.env.MAYAR_WEBHOOK_SECRET || '';
-    const header =
-      req.headers.get('x-mayar-signature') ||
-      req.headers.get('x-callback-token') ||
-      req.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ||
-      '';
-    const isProd = process.env.NODE_ENV === 'production';
-    const body = await req.json().catch(() => ({}));
-    const isCashDepositSim = !!(
-      body?.simulate &&
-      (body.cashDepositId || body?.data?.cashDepositId || String(body?.receipt || body?.data?.productName || '').toUpperCase().includes('SETOR-'))
-    );
+    body = rawText ? JSON.parse(rawText) : {};
+  } catch {
+    body = {};
+  }
+
+  const expected = process.env.MAYAR_WEBHOOK_TOKEN || process.env.MAYAR_WEBHOOK_SECRET || '';
+  const header =
+    req.headers.get('x-mayar-signature') ||
+    req.headers.get('x-callback-token') ||
+    req.headers.get('x-signature') ||
+    req.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ||
+    '';
+  const isProd = process.env.NODE_ENV === 'production';
+  const isCashDepositSim = !!(
+    body?.simulate &&
+    (body.cashDepositId ||
+      body?.data?.cashDepositId ||
+      String(body?.receipt || body?.data?.productName || '')
+        .toUpperCase()
+        .includes('SETOR-'))
+  );
+
+  const sigOk =
+    verifySharedSecret(header, expected) ||
+    verifyPaymentSignature({
+      payload: rawText,
+      signature: header,
+      serverKey: process.env.PAYMENT_GATEWAY_SERVER_KEY || expected
+    });
+
+  await insertWebhookLog({
+    gateway: 'mayar',
+    event_type: String(body?.event || body?.type || 'unknown'),
+    external_id: String(body?.data?.id || body?.id || ''),
+    signature_ok: sigOk,
+    amount_received: Number(body?.data?.amount || body?.amount || 0) || null,
+    status: 'RECEIVED',
+    raw_payload: body,
+    headers: pickWebhookHeaders(req)
+  });
+
+  try {
     if (isProd && !isCashDepositSim) {
-      if (!expected || header !== expected) {
-        return NextResponse.json({ error: 'Unauthorized webhook' }, { status: 401 });
+      if (!expected || !sigOk) {
+        await insertErrorLog({
+          source: 'mayar_webhook',
+          code: 'WEBHOOK_SIGNATURE',
+          message: 'Signature Webhook Tidak Cocok',
+          context: { headerPresent: Boolean(header) }
+        });
+        return NextResponse.json({ error: 'Unauthorized webhook' }, { status: 403 });
       }
-    } else if (!isCashDepositSim && expected && header !== expected) {
-      return NextResponse.json({ error: 'Unauthorized webhook' }, { status: 401 });
+    } else if (!isCashDepositSim && expected && !sigOk) {
+      await insertErrorLog({
+        source: 'mayar_webhook',
+        code: 'WEBHOOK_SIGNATURE',
+        message: 'Signature Webhook Tidak Cocok (dev)',
+        severity: 'WARN'
+      });
+      return NextResponse.json({ error: 'Unauthorized webhook' }, { status: 403 });
     }
     if (isProd && body?.simulate && !isCashDepositSim) {
       return NextResponse.json({ error: 'Simulasi dinonaktifkan' }, { status: 403 });
@@ -98,8 +152,54 @@ export async function POST(req: Request) {
     const refs = mayarWebhookRefs(body);
     const tx = await findTransaction(refs, body.transactionId || body?.data?.transactionId);
     if (tx) {
-      const { error } = await applyPaid(tx, body.simulate ? 'Mayar Mock' : 'Mayar QRIS');
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      const expectedAmt = Number(tx.amount || tx.total_amount || 0);
+      const receivedAmt = Number(refs.amount || 0);
+      if (receivedAmt > 0 && expectedAmt > 0 && !amountsMatch(expectedAmt, receivedAmt)) {
+        await insertErrorLog({
+          source: 'mayar_webhook',
+          code: 'AMOUNT_MISMATCH',
+          message: `Nominal webhook ${receivedAmt} ≠ tagihan ${expectedAmt}`,
+          transaction_id: tx.id,
+          context: { expectedAmt, receivedAmt, receipt: tx.receipt_number }
+        });
+        await insertWebhookLog({
+          gateway: 'mayar',
+          event_type: 'amount_mismatch',
+          transaction_id: tx.id,
+          amount_expected: expectedAmt,
+          amount_received: receivedAmt,
+          status: 'ERROR',
+          error_message: 'Amount mismatch',
+          raw_payload: body
+        });
+        return NextResponse.json({ error: 'Amount mismatch' }, { status: 409 });
+      }
+
+      const { error } = await applyPaid(tx, body.simulate ? 'Mayar Mock' : 'Mayar QRIS', body.simulate ? 'CHECK_STATUS' : 'GATEWAY');
+      if (error) {
+        await insertErrorLog({
+          source: 'mayar_webhook',
+          code: 'DB_UPDATE',
+          message: error.message,
+          transaction_id: tx.id
+        });
+        await insertWebhookLog({
+          gateway: 'mayar',
+          transaction_id: tx.id,
+          status: 'ERROR',
+          error_message: error.message,
+          raw_payload: body
+        });
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
+      await insertWebhookLog({
+        gateway: 'mayar',
+        transaction_id: tx.id,
+        amount_expected: expectedAmt,
+        amount_received: receivedAmt || expectedAmt,
+        status: 'OK',
+        raw_payload: { ok: true, transactionId: tx.id }
+      });
       return NextResponse.json({ status: 'success', transactionId: tx.id, is_paid: true });
     }
 
@@ -110,7 +210,10 @@ export async function POST(req: Request) {
     });
     if (cashDeposit) {
       const { error, already } = await settleCashDeposit(supabase, cashDeposit);
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      if (error) {
+        await insertErrorLog({ source: 'mayar_webhook', message: error.message, code: 'CASH_DEPOSIT' });
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
       return NextResponse.json({
         status: 'success',
         type: 'cash_deposit',
@@ -130,7 +233,10 @@ export async function POST(req: Request) {
       const { error, already, balance } = await creditDepositTopup(supabase, topup, {
         agentName: body.simulate ? 'Mayar Mock' : 'Mayar QRIS'
       });
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      if (error) {
+        await insertErrorLog({ source: 'mayar_webhook', message: error.message, code: 'DEPOSIT_TOPUP' });
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
       return NextResponse.json({
         status: 'success',
         type: 'deposit',
@@ -160,9 +266,21 @@ export async function POST(req: Request) {
       return NextResponse.json({ status: 'success', type: 'deposit', balance });
     }
 
+    await insertErrorLog({
+      source: 'mayar_webhook',
+      code: 'TX_NOT_FOUND',
+      message: 'Transaksi / top-up tidak ditemukan',
+      context: refs
+    });
     return NextResponse.json({ error: 'Transaksi / top-up tidak ditemukan', refs }, { status: 404 });
   } catch (err: any) {
     console.error('Mayar webhook:', err);
+    await insertErrorLog({
+      source: 'mayar_webhook',
+      message: err?.message || 'Webhook error',
+      code: 'WEBHOOK_CRASH',
+      context: { raw: body }
+    });
     return NextResponse.json({ error: err?.message || 'Webhook error' }, { status: 500 });
   }
 }

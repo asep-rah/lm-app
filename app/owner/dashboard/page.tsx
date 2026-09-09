@@ -1,15 +1,15 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import Link from 'next/link';
 import StageTimeline from '@/components/StageTimeline';
 import WasherBatchTimeline from '@/components/pos/WasherBatchTimeline';
 import FinanceAlertListener from '@/components/FinanceAlertListener';
 import WasherFraudAlertListener from '@/components/WasherFraudAlertListener';
-import AICopilotCard from '@/components/analytics/AICopilotCard';
+import dynamic from 'next/dynamic';
 import ReceiptLayoutEditor from '@/components/owner/ReceiptLayoutEditor';
-import OwnerSidebar, { OwnerBellButton, OwnerMenuButton, type SettingsPanel } from '@/components/owner/OwnerSidebar';
-import { isRemoteOwnerTab, ownerHref, readOwnerSearch } from '@/components/owner/ownerNav';
+import { OwnerBellButton, type SettingsPanel } from '@/components/owner/OwnerSidebar';
+import OwnerHeaderBrand from '@/components/owner/OwnerHeaderBrand';
+import { ownerHref, readOwnerSearch } from '@/components/owner/ownerNav';
 import { useOwnerDeleteNotifs } from '@/components/owner/useOwnerDeleteNotifs';
 import { DEFAULT_RECEIPT_LAYOUT, parseReceiptLayout, type ReceiptLayout } from '@/lib/receiptLayout';
 import { isVoidTransaction } from '@/lib/voidTx';
@@ -17,6 +17,9 @@ import { canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from
 import { staffRolesForForm } from '@/lib/staffRoles';
 import { toast } from '@/lib/toast';
 import { updateWithFallback } from '@/lib/safeWrite';
+import CrewFinanceBoard from '@/components/owner/CrewFinanceBoard';
+import OutletBooksEditor from '@/components/owner/OutletBooksEditor';
+import { emptyBook, findOutletIdByName, loadOutletBooks, saveOutletBook, type OutletBook } from '@/lib/outletBooks';
 import {
   PR_STATUS,
   isPrPending,
@@ -31,6 +34,8 @@ import {
   issueDescriptionPlain,
   supervisorDecide
 } from '@/lib/csCare';
+
+const AICopilotCard = dynamic(() => import('@/components/analytics/AICopilotCard'), { ssr: false });
 
 const supabase = createClient(
   'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
@@ -74,8 +79,6 @@ export default function Dashboard() {
   const [serviceSearch, setServiceSearch] = useState('');
   const [receiptTerms, setReceiptTerms] = useState('');
   const [receiptLayout, setReceiptLayout] = useState<ReceiptLayout>(DEFAULT_RECEIPT_LAYOUT);
-  const [navOpen, setNavOpen] = useState(false);
-  const [settingsExpanded, setSettingsExpanded] = useState(false);
   const [settingsPanel, setSettingsPanel] = useState<SettingsPanel>('services');
   const [outletOverrides, setOutletOverrides] = useState<any>({});
   const [settingViewOutlet, setSettingViewOutlet] = useState('ALL');
@@ -88,6 +91,8 @@ export default function Dashboard() {
   const [newOutletLon, setNewOutletLon] = useState('');
   const [newOutletRadius, setNewOutletRadius] = useState('200');
   const [newOutletWA, setNewOutletWA] = useState(''); // STATE BARU UNTUK WA CABANG
+  const [outletBook, setOutletBook] = useState<OutletBook>(emptyBook());
+  const [outletBooksStore, setOutletBooksStore] = useState<Record<string, OutletBook>>({});
 
   // States Karyawan & Absensi
   const [employees, setEmployees] = useState<any[]>([]);
@@ -102,14 +107,6 @@ export default function Dashboard() {
   // States Kasbon & Dokumentasi
   const [loansList, setLoansList] = useState<any[]>([]);
   const [penaltiesList, setPenaltiesList] = useState<any[]>([]);
-  const [targetEmpName, setTargetEmpName] = useState('');
-  const [loanTotal, setLoanTotal] = useState('');
-  const [loanMonthly, setLoanMonthly] = useState('');
-  const [loanNotes, setLoanNotes] = useState('');
-  const [loanApprovedBy, setLoanApprovedBy] = useState('');
-  const [loanDocUrl, setLoanDocUrl] = useState('');
-  const [penaltyAmount, setPenaltyAmount] = useState('');
-  const [penaltyReason, setPenaltyReason] = useState('');
 
   // States Tab History 1 Tahun
   const [historyCategory, setHistoryCategory] = useState<'all' | 'transactions' | 'members' | 'expenses'>('all');
@@ -378,16 +375,9 @@ const handleApproveSubmission = async (row: any) => {
     else if (tab === 'delete_requests') setActiveTab('delete_requests');
     if (panel) {
       setSettingsPanel(panel);
-      setSettingsExpanded(true);
       setActiveTab('settings');
     }
   }, []);
-
-  const handleLogout = () => {
-    localStorage.removeItem('laundry_owner_user');
-    localStorage.removeItem('laundry_user');
-    window.location.href = '/login';
-  };
 
   useEffect(() => {
     async function loadData() {
@@ -396,10 +386,7 @@ const handleApproveSubmission = async (row: any) => {
       if (outletData && outletData.length > 0) setOutlets(outletData);
 
       const { data: empData } = await supabase.from('employees').select('*, outlets(name)').order('created_at', { ascending: false });
-      if (empData) {
-        setEmployees(empData);
-        if (empData.length > 0 && !targetEmpName) setTargetEmpName(empData[0].name);
-      }
+      if (empData) setEmployees(empData);
 
       const { data: attLogs } = await supabase.from('attendance_logs').select('*').order('created_at', { ascending: false }).limit(200);
       if (attLogs) setAttendances(attLogs);
@@ -429,6 +416,8 @@ setDeleteRequests(delData);
           setSupervisorMapping(loadedSupMap);
         }
       }
+      const books = await loadOutletBooks();
+      setOutletBooksStore(books);
 
       const { data: loansData } = await supabase.from('employee_loans').select('*').order('created_at', { ascending: false });
       if (loansData) setLoansList(loansData);
@@ -582,6 +571,7 @@ setDeleteRequests(delData);
   useEffect(() => {
     if (selectedOutletToEdit === 'NEW') {
       setNewOutletName(''); setNewOutletCity(''); setNewOutletLat(''); setNewOutletLon(''); setNewOutletRadius('200'); setNewOutletWA('');
+      setOutletBook(emptyBook());
     } else {
       const targetOutlet = outlets.find(o => o.id === selectedOutletToEdit);
       if (targetOutlet) {
@@ -592,8 +582,9 @@ setDeleteRequests(delData);
         setNewOutletRadius(targetOutlet.radius_meters ? String(targetOutlet.radius_meters) : '200');
         setNewOutletWA(targetOutlet.whatsapp_number || '');
       }
+      setOutletBook(outletBooksStore[selectedOutletToEdit] || emptyBook(selectedOutletToEdit));
     }
-  }, [selectedOutletToEdit, outlets]);
+  }, [selectedOutletToEdit, outlets, outletBooksStore]);
 
   const handleSaveOutlet = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -612,18 +603,29 @@ setDeleteRequests(delData);
 
     let error: any = null;
 
+    let savedOutletId = selectedOutletToEdit === 'NEW' ? '' : selectedOutletToEdit;
+
     if (selectedOutletToEdit === 'NEW') {
-      const res = await supabase.from('outlets').insert([payload]);
+      const res = await supabase.from('outlets').insert([payload]).select('id');
       error = res.error;
+      savedOutletId = res.data?.[0]?.id ? String(res.data[0].id) : '';
     } else {
       const res = await supabase.from('outlets').update(payload).eq('id', selectedOutletToEdit);
       error = res.error;
     }
 
     if (!error) {
+      if (!savedOutletId) savedOutletId = await findOutletIdByName(payload.name) || '';
+      if (savedOutletId) {
+        const book = { ...outletBook, outletId: savedOutletId };
+        const bookRes = await saveOutletBook(book);
+        if (bookRes.error) alert('Outlet tersimpan, tapi pembukuan gagal: ' + bookRes.error);
+        setOutletBooksStore((prev) => ({ ...prev, [savedOutletId]: book }));
+      }
       alert(`✅ ${selectedOutletToEdit === 'NEW' ? 'Outlet Cabang Baru Berhasil Ditambahkan!' : 'Data Outlet Berhasil Diperbarui!'}`);
       setSelectedOutletToEdit('NEW');
       setNewOutletName(''); setNewOutletCity(''); setNewOutletLat(''); setNewOutletLon(''); setNewOutletRadius('200'); setNewOutletWA('');
+      setOutletBook(emptyBook());
       const { data: outletData } = await supabase.from('outlets').select('*');
       if (outletData) setOutlets(outletData);
     } else alert('❌ Gagal menyimpan outlet: ' + error.message);
@@ -654,56 +656,16 @@ setDeleteRequests(delData);
     } else alert('❌ Gagal: ' + error.message);
   };
 
-  const handleAddLoan = async (e: React.FormEvent) => {
-    e.preventDefault(); 
-    if (!targetEmpName || !loanTotal || !loanMonthly) return alert('Mohon lengkapi data!');
-    setIsSaving(true);
-
-    const loanPayload: any = {
-      employee_name: targetEmpName,
-      total_loan: Number(loanTotal),
-      monthly_deduction: Number(loanMonthly),
-      notes: loanNotes || 'Kasbon Crew',
-      status: 'Active',
-      approved_by: loanApprovedBy || currentUserName || 'Supervisor',
-      document_url: loanDocUrl || null
-    };
-
-    let { error } = await supabase.from('employee_loans').insert([loanPayload]);
-
-    if (error && (error.message?.includes('approved_by') || error.message?.includes('document_url'))) {
-      delete loanPayload.approved_by;
-      delete loanPayload.document_url;
-      const retryRes = await supabase.from('employee_loans').insert([loanPayload]);
-      error = retryRes.error;
-    }
-
-    if (!error) { 
-      alert('✅ Kasbon & Dokumentasi Persetujuan Berhasil Dicatat!'); 
-      setLoanTotal(''); setLoanMonthly(''); setLoanNotes(''); setLoanApprovedBy(''); setLoanDocUrl('');
-      const { data } = await supabase.from('employee_loans').select('*').order('created_at', { ascending: false }); 
-      if (data) setLoansList(data); 
-    } else alert('❌ Gagal mencatat kasbon: ' + error.message);
-    
-    setIsSaving(false);
+  const handleMarkLoanPaid = async (id: string) => {
+    if (!confirm('Tandai kasbon ini sudah lunas?')) return;
+    const { error } = await updateWithFallback(
+      'employee_loans',
+      [{ status: 'Paid' }, { status: 'lunas' }],
+      { column: 'id', value: id }
+    );
+    if (error) return alert(error.message);
+    setLoansList(loansList.map((l) => (l.id === id ? { ...l, status: 'Paid' } : l)));
   };
-
-  const handleAddPenalty = async (e: React.FormEvent) => {
-    e.preventDefault(); 
-    if (!targetEmpName || !penaltyAmount || !penaltyReason) return alert('Mohon lengkapi data!');
-    setIsSaving(true);
-    const { error } = await supabase.from('employee_penalties').insert([{ employee_name: targetEmpName, penalty_amount: Number(penaltyAmount), reason: penaltyReason }]);
-    if (!error) { 
-      alert('✅ Potongan kesalahan dicatat!'); 
-      setPenaltyAmount(''); setPenaltyReason(''); 
-      const { data } = await supabase.from('employee_penalties').select('*').order('created_at', { ascending: false }); 
-      if (data) setPenaltiesList(data); 
-    } else alert('❌ Gagal mencatat potongan: ' + error.message);
-    setIsSaving(false);
-  };
-
-  const handleDeleteLoan = async (id: string) => { if (!confirm('Hapus/Lunaskan data kasbon ini?')) return; await supabase.from('employee_loans').delete().eq('id', id); setLoansList(loansList.filter(l => l.id !== id)); };
-  const handleDeletePenalty = async (id: string) => { if (!confirm('Hapus catatan kesalahan ini?')) return; await supabase.from('employee_penalties').delete().eq('id', id); setPenaltiesList(penaltiesList.filter(p => p.id !== id)); };
 
   const handleApproveDelete = async (txId: string) => {
     if (!confirm('Yakin menyetujui penghapusan transaksi ini?')) return; setIsSaving(true);
@@ -851,7 +813,7 @@ setDeleteRequests(delData);
   });
   const approvalCount = pendingPurchases.length + pendingLoans.length + openIssues.length + pendingSubs.length;
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 p-3 md:p-8">
+    <div className="min-h-screen bg-slate-50 text-slate-800 p-3 md:p-8 pb-24">
       <div className="max-w-6xl mx-auto space-y-4 md:space-y-6">
         {selectedTxDetail && (
           <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setSelectedTxDetail(null)}>
@@ -867,43 +829,16 @@ setDeleteRequests(delData);
         )}
         
         {/* NAV HEADER */}
-        <OwnerSidebar
-          open={navOpen}
-          onClose={() => setNavOpen(false)}
-          activeTab={activeTab}
-          settingsPanel={settingsPanel}
-          settingsExpanded={settingsExpanded}
-          onToggleSettings={() => {
-            setSettingsExpanded((v) => !v);
-            setActiveTab('settings');
-          }}
-          onGo={(tab, panel) => {
-            if (isRemoteOwnerTab(tab)) {
-              window.location.href = ownerHref(tab, panel);
-              return;
-            }
-            setActiveTab(tab as typeof activeTab);
-            if (panel) {
-              setSettingsPanel(panel);
-              setSettingsExpanded(true);
-            }
-          }}
-          canSettings={canAccessSettings(currentUserRole)}
-          isOwner={isOwnerRole(currentUserRole)}
-          showApprovals
-          approvalCount={approvalCount}
-          onLogout={handleLogout}
-        />
         <div className="bg-white border border-slate-200 p-4 md:p-6 rounded-2xl shadow-sm flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0">
-            <OwnerMenuButton onClick={() => setNavOpen(true)} />
-            <div className="min-w-0">
-              <h1 className="text-lg md:text-2xl font-black text-slate-900 truncate">Laundry ERP</h1>
-              <p className="text-[10px] md:text-xs text-slate-500">
+          <OwnerHeaderBrand
+            eyebrow="Owner Analytics"
+            title="Laundrivery ERP"
+            subtitle={
+              <>
                 {currentUserName || 'Owner'} · <span className="font-bold uppercase">{currentUserRole}</span>
-              </p>
-            </div>
-          </div>
+              </>
+            }
+          />
           <OwnerBellButton
             count={deleteUnread}
             onClick={() => {
@@ -1186,73 +1121,11 @@ setDeleteRequests(delData);
 
         {/* TAB KASBON & POTONGAN KESALAHAN */}
         {activeTab === 'loans' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="bg-white border border-slate-200 p-4 md:p-6 rounded-2xl shadow-sm space-y-4">
-              <h3 className="font-bold text-amber-700 border-b pb-2">💸 Catat Kasbon Crew Baru & Dokumentasi</h3>
-              <form onSubmit={handleAddLoan} className="space-y-3">
-                <div><label className="text-xs font-semibold text-slate-500 block mb-1">Pilih Karyawan</label><select value={targetEmpName} onChange={(e) => setTargetEmpName(e.target.value)} className="w-full border rounded-xl p-2.5 text-xs font-bold">{employees.map((e) => (<option key={e.id} value={e.name}>{e.name} (@{e.username})</option>))}</select></div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div><label className="text-xs font-semibold text-slate-500 block mb-1">Total Kasbon (Rp)</label><input type="number" placeholder="Contoh: 500000" value={loanTotal} onChange={(e) => setLoanTotal(e.target.value)} className="w-full border rounded-xl p-2.5 text-xs font-bold text-amber-600" required /></div>
-                  <div><label className="text-xs font-semibold text-slate-500 block mb-1">Cicilan / Bln (Rp)</label><input type="number" placeholder="Contoh: 100000" value={loanMonthly} onChange={(e) => setLoanMonthly(e.target.value)} className="w-full border rounded-xl p-2.5 text-xs font-bold text-amber-600" required /></div>
-                </div>
-                <div><label className="text-xs font-semibold text-slate-500 block mb-1">Catatan / Alasan Kasbon</label><input type="text" placeholder="Contoh: Keperluan Darurat Keluarga" value={loanNotes} onChange={(e) => setLoanNotes(e.target.value)} className="w-full border rounded-xl p-2.5 text-xs" /></div>
-                
-                <div className="bg-amber-50/60 p-3 rounded-xl border border-amber-200 space-y-2">
-                  <div>
-                    <label className="text-[10px] font-bold text-amber-900 block mb-1">👔 Supervisor yang Menyetujui</label>
-                    <input type="text" placeholder="Nama SPV / Owner" value={loanApprovedBy} onChange={(e) => setLoanApprovedBy(e.target.value)} className="w-full border rounded-lg p-2 text-xs font-bold text-amber-800 bg-white" />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-bold text-amber-900 block mb-1">📄 No. Surat / Link Bukti TTD Surat Pernyataan Kasbon</label>
-                    <input type="text" placeholder="Contoh: SP/KASBON/001 atau URL Dokumen" value={loanDocUrl} onChange={(e) => setLoanDocUrl(e.target.value)} className="w-full border rounded-lg p-2 text-xs bg-white" />
-                  </div>
-                </div>
-
-                <button type="submit" disabled={isSaving} className="w-full bg-amber-600 text-white font-bold py-3 rounded-xl text-xs shadow">➕ SIMPAN KASBON & DOKUMEN</button>
-              </form>
-
-              <div className="pt-4 border-t">
-                <h4 className="font-bold text-xs text-slate-500 mb-3 uppercase">📋 Daftar Kasbon Aktif & Dokumentasi Surat</h4>
-                <div className="space-y-2 max-h-60 overflow-y-auto">
-                  {loansList.map((loan) => (
-                    <div key={loan.id} className="border p-3 rounded-xl flex justify-between items-center text-xs bg-amber-50/40 border-amber-200">
-                      <div>
-                        <p className="font-bold text-slate-800">{loan.employee_name}</p>
-                        <p className="text-[10px] text-amber-800">Total: Rp {Number(loan.total_loan).toLocaleString('id-ID')} | Cicilan/Bln: <b>Rp {Number(loan.monthly_deduction).toLocaleString('id-ID')}</b></p>
-                        <p className="text-[9px] text-slate-500 italic">"{loan.notes}"</p>
-                        {loan.approved_by && <p className="text-[9px] text-indigo-700 font-bold mt-0.5">Disetujui: {loan.approved_by}</p>}
-                        {loan.document_url && <p className="text-[9px] text-slate-400 font-mono">Dokumen/SP: {loan.document_url}</p>}
-                      </div>
-                      <button onClick={() => handleDeleteLoan(loan.id)} className="bg-rose-100 text-rose-600 font-bold text-[10px] px-2 py-1 rounded">Lunas/Hapus</button>
-                    </div>
-                  ))}
-                  {loansList.length === 0 && <p className="text-xs text-slate-400 text-center py-4">Belum ada data kasbon aktif.</p>}
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-white border border-slate-200 p-4 md:p-6 rounded-2xl shadow-sm space-y-4">
-              <h3 className="font-bold text-rose-700 border-b pb-2">⚠️ Catat Potongan Kesalahan Crew</h3>
-              <form onSubmit={handleAddPenalty} className="space-y-3">
-                <div><label className="text-xs font-semibold text-slate-500 block mb-1">Pilih Karyawan</label><select value={targetEmpName} onChange={(e) => setTargetEmpName(e.target.value)} className="w-full border rounded-xl p-2.5 text-xs font-bold">{employees.map((e) => (<option key={e.id} value={e.name}>{e.name} (@{e.username})</option>))}</select></div>
-                <div><label className="text-xs font-semibold text-slate-500 block mb-1">Nominal Denda / Potongan (Rp)</label><input type="number" placeholder="Contoh: 50000" value={penaltyAmount} onChange={(e) => setPenaltyAmount(e.target.value)} className="w-full border rounded-xl p-2.5 text-xs font-bold text-rose-600" required /></div>
-                <div><label className="text-xs font-semibold text-slate-500 block mb-1">Deskripsi Kesalahan</label><input type="text" placeholder="Contoh: Baju Customer Hilang / Luntur Saat Cuci" value={penaltyReason} onChange={(e) => setPenaltyReason(e.target.value)} className="w-full border rounded-xl p-2.5 text-xs" required /></div>
-                <button type="submit" disabled={isSaving} className="w-full bg-rose-600 text-white font-bold py-3 rounded-xl text-xs shadow">⚠️ CATAT POTONGAN KESALAHAN</button>
-              </form>
-              <div className="pt-4 border-t">
-                <h4 className="font-bold text-xs text-slate-500 mb-3 uppercase">📋 Rekap Kesalahan Bulan Ini</h4>
-                <div className="space-y-2 max-h-60 overflow-y-auto">
-                  {penaltiesList.map((pen) => (
-                    <div key={pen.id} className="border p-3 rounded-xl flex justify-between items-center text-xs bg-rose-50/40 border-rose-200">
-                      <div><p className="font-bold text-slate-800">{pen.employee_name}</p><p className="text-[10px] text-rose-700 font-bold">Potongan: Rp {Number(pen.penalty_amount).toLocaleString('id-ID')}</p><p className="text-[9px] text-slate-500 italic">"{pen.reason}"</p></div>
-                      <button onClick={() => handleDeletePenalty(pen.id)} className="bg-slate-200 text-slate-700 font-bold text-[10px] px-2 py-1 rounded">Hapus</button>
-                    </div>
-                  ))}
-                  {penaltiesList.length === 0 && <p className="text-xs text-slate-400 text-center py-4">Tidak ada catatan kesalahan kerja.</p>}
-                </div>
-              </div>
-            </div>
-          </div>
+          <CrewFinanceBoard
+            loans={loansList}
+            penalties={penaltiesList}
+            onMarkLoanPaid={handleMarkLoanPaid}
+          />
         )}
 
         {/* TAB OWNER ONLY */}
@@ -1260,26 +1133,6 @@ setDeleteRequests(delData);
           <>
             {activeTab === 'settings' && (
               <div className="flex flex-col gap-6">
-                {settingsPanel === 'services' && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                  <Link href="/owner/settings/outlets" className="bg-white border border-sky-200 rounded-2xl p-4 shadow-sm hover:border-sky-400 transition">
-                    <p className="text-sm font-black text-slate-900">Profil Outlet & Google</p>
-                    <p className="text-[11px] text-slate-500 mt-0.5">Foto, jam buka, Coming Soon, Place ID, dan rating fallback.</p>
-                  </Link>
-                  <Link href="/owner/machines" className="bg-white border border-cyan-200 rounded-2xl p-4 shadow-sm hover:border-cyan-400 transition">
-                    <p className="text-sm font-black text-slate-900">Manajemen Mesin Cuci</p>
-                    <p className="text-[11px] text-slate-500 mt-0.5">Nama, kapasitas 15/24kg, payload, ThinQ ID. Mesin aktif dipakai POS.</p>
-                  </Link>
-                  <Link href="/owner/promos" className="bg-white border border-amber-200 rounded-2xl p-4 shadow-sm hover:border-amber-400 transition">
-                    <p className="text-sm font-black text-slate-900">Banner Promo Customer</p>
-                    <p className="text-[11px] text-slate-500 mt-0.5">Carousel pengumuman di beranda aplikasi pelanggan.</p>
-                  </Link>
-                  <Link href="/owner/crm" className="bg-white border border-violet-200 rounded-2xl p-4 shadow-sm hover:border-violet-400 transition">
-                    <p className="text-sm font-black text-slate-900">CRM Loyalty</p>
-                    <p className="text-[11px] text-slate-500 mt-0.5">Persentase poin per tier, segmen retensi, dan broadcast pelanggan.</p>
-                  </Link>
-                </div>
-                )}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                   
                   {/* MODUL DYNAMIC SERVICES + SEARCH */}
@@ -1386,6 +1239,8 @@ setDeleteRequests(delData);
                         <label className="text-[9px] font-bold text-emerald-800 block mb-1">Radius Max Absen (Meter)</label>
                         <input type="number" placeholder="200" value={newOutletRadius} onChange={(e) => setNewOutletRadius(e.target.value)} className="w-full border rounded-lg p-2 text-xs font-bold bg-white" />
                       </div>
+
+                      <OutletBooksEditor value={outletBook} onChange={setOutletBook} />
                       
                       <button type="submit" disabled={isSaving} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs shadow transition">
                         {selectedOutletToEdit === 'NEW' ? '➕ TAMBAH OUTLET CABANG' : '💾 PERBARUI DATA OUTLET'}

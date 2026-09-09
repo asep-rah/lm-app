@@ -1,5 +1,13 @@
 /** Akses Grup Koordinasi Outlet (`internal_outlet_chats`). Internal staff only. */
 
+/** Buka drawer dari dock owner (FAB disembunyikan di `/owner`). */
+export const OPEN_OUTLET_GROUP_CHAT_EVENT = 'lm:open-outlet-group-chat';
+
+export function openOutletGroupChat() {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(OPEN_OUTLET_GROUP_CHAT_EVENT));
+}
+
 const ALLOWED = new Set([
   'owner',
   'cashier',

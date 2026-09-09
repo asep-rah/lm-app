@@ -3429,6 +3429,27 @@ const handleStatusChange = async (
 
           {activeTab === 'home' && (
             <div className="space-y-4">
+              <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-xl flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
+                <div>
+                  <h4 className="font-bold text-xs text-emerald-900">📲 Setoran Cash Outlet via Wallet/QRIS</h4>
+                  <p className="text-[10px] text-emerald-700">Generate QRIS Mayar sebesar net tunai, scan dari e-wallet, otomatis BALANCED.</p>
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  <Link
+                    href="/pos/closing"
+                    className="bg-white border border-emerald-300 text-emerald-800 font-bold px-3 py-2 rounded-xl text-xs shadow-sm whitespace-nowrap"
+                  >
+                    Closing QRIS
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => setShowDepositModal(true)}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-2 rounded-xl text-xs shadow transition whitespace-nowrap"
+                  >
+                    Setor Sekarang
+                  </button>
+                </div>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <button type="button" onClick={() => setHomeModal('kasir')} className="text-left bg-emerald-50 border border-emerald-200 rounded-2xl p-4 hover:bg-emerald-100 transition">
                   <p className="text-lg">🛒</p>
@@ -4068,16 +4089,18 @@ const handleStatusChange = async (
                   </div>
                  {/* 📸 FOTO BUKTI SERAH TERIMA DRIVER DI OUTLET */}
                  {order.photo_outlet_url && (
-                    <div className="p-2 bg-purple-50 border border-purple-200 rounded-xl my-2">
-                      <p className="text-[10px] font-bold text-purple-700 mb-1 flex items-center gap-1">
+                    <div className="p-2 bg-purple-50 border border-purple-200 rounded-xl my-2 space-y-1.5">
+                      <p className="text-[10px] font-bold text-purple-700 flex items-center gap-1">
                         📸 Bukti Driver Tiba di Outlet
                       </p>
-                      <a href={order.photo_outlet_url} target="_blank" rel="noreferrer">
-                        <img 
-                          src={order.photo_outlet_url} 
-                          alt="Foto Tiba di Outlet"
-                          className="w-full h-28 object-cover rounded-lg hover:opacity-90 transition-opacity cursor-pointer" 
-                        />
+                      <a
+                        href={order.photo_outlet_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center justify-center gap-1.5 w-full rounded-xl border border-purple-200 bg-white px-3 py-2 text-[11px] font-extrabold text-purple-800 hover:bg-purple-50"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        Lihat foto
                       </a>
                     </div>
                   )}
@@ -4224,27 +4247,6 @@ const handleStatusChange = async (
 
           {activeTab === 'pengajuan' && (
             <div className="space-y-4">
-              {/* TOMBOL PEMICU SETORAN CASH */}
-          <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-xl flex justify-between items-center">
-            <div>
-              <h4 className="font-bold text-xs text-emerald-900">📲 Setoran Cash Outlet via Wallet/QRIS</h4>
-              <p className="text-[10px] text-emerald-700">Generate QRIS Mayar sebesar net tunai, scan dari e-wallet, otomatis BALANCED.</p>
-            </div>
-            <div className="flex gap-2">
-              <Link
-                href="/pos/closing"
-                className="bg-white border border-emerald-300 text-emerald-800 font-bold px-3 py-2 rounded-xl text-xs shadow-sm whitespace-nowrap"
-              >
-                Closing QRIS
-              </Link>
-              <button
-                onClick={() => setShowDepositModal(true)}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-2 rounded-xl text-xs shadow transition whitespace-nowrap"
-              >
-                Setor Sekarang
-              </button>
-            </div>
-          </div>
               <nav className="flex gap-1.5 overflow-x-auto pb-0.5 hide-scrollbar">
                 {(
                   [
@@ -4316,7 +4318,9 @@ const handleStatusChange = async (
                 <button type="submit" disabled={isSubmitting} className="w-full bg-indigo-600 text-white font-bold py-3.5 rounded-xl text-sm">SIMPAN</button>
               </form>
               )}
-            
+            </div>
+          )}
+
             {/* MODAL SETORAN CASH KASIR */}
       {showDepositModal && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50" onClick={closeDepositModal}>
@@ -4454,8 +4458,6 @@ const handleStatusChange = async (
           </div>
         </div>
       )}
-    </div>
-  )}
           {activeTab === 'profil' && (
             <div className="space-y-4">
               <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-200 space-y-3">

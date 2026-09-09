@@ -1,14 +1,15 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { Check, MapPin, Pencil, Plus, Star, Trash2 } from 'lucide-react';
-import PinpointMap from '@/components/customer/PinpointMap';
+import PickupLocationPicker from '@/components/customer/PickupLocationPicker';
 import {
   ADDRESS_LABEL_PRESETS,
   type SavedAddress
 } from '@/lib/customerAddresses';
 import type { GeoPoint } from '@/lib/mapsNav';
-import { geocodeAddress, reverseGeocodeAddress } from '@/lib/reverseGeocode';
+import { composePickupAddress, isValidHouseNumber, splitHouseNumber } from '@/lib/pickupAddress';
+import { reverseGeocodeAddress } from '@/lib/reverseGeocode';
 
 export default function AddressManager({
   addresses,
@@ -33,22 +34,29 @@ export default function AddressManager({
   const [editingId, setEditingId] = useState<string | 'NEW' | null>(null);
   const [label, setLabel] = useState('Rumah');
   const [fullAddress, setFullAddress] = useState('');
+  const [houseNo, setHouseNo] = useState('');
   const [asPrimary, setAsPrimary] = useState(false);
   const [pin, setPin] = useState<GeoPoint | null>(null);
+  const [formError, setFormError] = useState('');
 
   const startNew = () => {
     setEditingId('NEW');
     setLabel('Rumah');
     setFullAddress('');
+    setHouseNo('');
     setAsPrimary(addresses.length === 0);
     setPin(null);
+    setFormError('');
   };
 
   const startEdit = (row: SavedAddress) => {
+    const parts = splitHouseNumber(row.full_address);
     setEditingId(row.id);
     setLabel(row.label);
-    setFullAddress(row.full_address);
+    setFullAddress(parts.street);
+    setHouseNo(parts.house);
     setAsPrimary(row.is_primary);
+    setFormError('');
     setPin(
       row.latitude != null && row.longitude != null && Number.isFinite(Number(row.latitude)) && Number.isFinite(Number(row.longitude))
         ? { lat: Number(row.latitude), lng: Number(row.longitude) }
@@ -59,20 +67,38 @@ export default function AddressManager({
   const cancel = () => {
     setEditingId(null);
     setFullAddress('');
+    setHouseNo('');
     setPin(null);
+    setFormError('');
   };
 
   const submit = async () => {
-    if (fullAddress.trim().length < 5) return alert('Isi alamat lengkap (minimal 5 karakter).');
-    await onSave({
-      id: editingId === 'NEW' ? undefined : editingId || undefined,
-      label,
-      full_address: fullAddress.trim(),
-      is_primary: asPrimary || addresses.length === 0,
-      latitude: pin?.lat ?? null,
-      longitude: pin?.lng ?? null
-    });
-    cancel();
+    if (fullAddress.trim().length < 5) {
+      setFormError('Cari dan pilih nama jalan / lokasi dulu.');
+      return;
+    }
+    if (!isValidHouseNumber(houseNo)) {
+      setFormError('Isi nomor rumah / blok. Boleh lengkap, contoh: 117, 12A, B-3, atau rumah no.117.');
+      return;
+    }
+    if (!pin) {
+      setFormError('Geser peta sampai pin di tengah tepat di gerbang/pintu rumah.');
+      return;
+    }
+    setFormError('');
+    try {
+      await onSave({
+        id: editingId === 'NEW' ? undefined : editingId || undefined,
+        label,
+        full_address: composePickupAddress(fullAddress, houseNo),
+        is_primary: asPrimary || addresses.length === 0,
+        latitude: pin?.lat ?? null,
+        longitude: pin?.lng ?? null
+      });
+      cancel();
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Gagal menyimpan alamat. Coba lagi.');
+    }
   };
 
   return (
@@ -102,12 +128,15 @@ export default function AddressManager({
             key={row.id}
             label={label}
             fullAddress={fullAddress}
+            houseNo={houseNo}
             asPrimary={asPrimary}
             pin={pin}
             busy={busy}
+            formError={formError}
             submitLabel="Simpan Perubahan"
             onLabel={setLabel}
             onAddress={setFullAddress}
+            onHouseNo={setHouseNo}
             onPrimary={setAsPrimary}
             onPin={setPin}
             onSubmit={submit}
@@ -126,8 +155,10 @@ export default function AddressManager({
                   )}
                 </p>
                 <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">{row.full_address}</p>
-                {row.latitude != null && row.longitude != null && (
-                  <p className="text-[9px] text-emerald-600 font-bold mt-1">Pin {Number(row.latitude).toFixed(5)}, {Number(row.longitude).toFixed(5)}</p>
+                {row.latitude != null && row.longitude != null ? (
+                  <p className="text-[9px] text-emerald-600 font-bold mt-1">Pin gerbang tersimpan</p>
+                ) : (
+                  <p className="text-[9px] text-amber-600 font-bold mt-1">Belum ada pin — edit dan pasang titik di peta</p>
                 )}
               </div>
             </div>
@@ -169,12 +200,15 @@ export default function AddressManager({
         <AddressForm
           label={label}
           fullAddress={fullAddress}
+          houseNo={houseNo}
           asPrimary={asPrimary}
           pin={pin}
           busy={busy}
+          formError={formError}
           submitLabel="Simpan Alamat"
           onLabel={setLabel}
           onAddress={setFullAddress}
+          onHouseNo={setHouseNo}
           onPrimary={setAsPrimary}
           onPin={setPin}
           onSubmit={submit}
@@ -188,12 +222,15 @@ export default function AddressManager({
 function AddressForm({
   label,
   fullAddress,
+  houseNo,
   asPrimary,
   pin,
   busy,
+  formError,
   submitLabel,
   onLabel,
   onAddress,
+  onHouseNo,
   onPrimary,
   onPin,
   onSubmit,
@@ -201,65 +238,38 @@ function AddressForm({
 }: {
   label: string;
   fullAddress: string;
+  houseNo: string;
   asPrimary: boolean;
   pin: GeoPoint | null;
   busy?: boolean;
+  formError?: string;
   submitLabel: string;
   onLabel: (v: string) => void;
   onAddress: (v: string) => void;
+  onHouseNo: (v: string) => void;
   onPrimary: (v: boolean) => void;
   onPin: (pt: GeoPoint) => void;
   onSubmit: () => void;
   onCancel: () => void;
 }) {
-  const skipGeocode = useRef(false);
-  const onPinRef = useRef(onPin);
-  onPinRef.current = onPin;
-  const [geoStatus, setGeoStatus] = useState<'idle' | 'searching' | 'found' | 'miss'>('idle');
-  const bootstrapped = useRef(false);
-
-  useEffect(() => {
-    const q = fullAddress.trim();
-    if (!bootstrapped.current) {
-      bootstrapped.current = true;
-      if (pin) return;
-    }
-    if (skipGeocode.current) {
-      skipGeocode.current = false;
-      return;
-    }
-    if (q.length < 8) {
-      setGeoStatus('idle');
-      return;
-    }
-    setGeoStatus('searching');
-    const t = window.setTimeout(() => {
-      void geocodeAddress(q).then((pt) => {
-        if (!pt) {
-          setGeoStatus('miss');
-          return;
-        }
-        setGeoStatus('found');
-        onPinRef.current({ lat: pt.lat, lng: pt.lng });
-      });
-    }, 900);
-    return () => window.clearTimeout(t);
-  }, [fullAddress]);
+  const [locating, setLocating] = useState(false);
 
   const grabGps = () => {
     if (!navigator.geolocation) return alert('GPS tidak tersedia di perangkat ini.');
+    setLocating(true);
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
         const pt = { lat: pos.coords.latitude, lng: pos.coords.longitude };
         onPin(pt);
         const label = await reverseGeocodeAddress(pt.lat, pt.lng);
-        if (label) {
-          skipGeocode.current = true;
-          onAddress(label);
-        }
+        if (label) onAddress(splitHouseNumber(label).street);
+        setLocating(false);
       },
-      () => alert('Gagal mengambil GPS. Izinkan lokasi di browser.'),
-      { enableHighAccuracy: true }
+      () => {
+        setLocating(false);
+        alert('Gagal mengambil GPS. Izinkan lokasi di browser, atau geser peta ke gerbang.');
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
     );
   };
 
@@ -288,20 +298,22 @@ function AddressForm({
         placeholder="Label (Rumah / Kantor / Apartemen)"
         className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-800"
       />
-      <textarea
-        value={fullAddress}
-        onChange={(e) => onAddress(e.target.value)}
-        placeholder="Tulis alamat lengkap — pin peta akan ikut pindah..."
-        className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3 text-xs text-slate-800 font-medium"
-        rows={3}
+      <PickupLocationPicker
+        street={fullAddress}
+        houseNo={houseNo}
+        pin={pin}
+        locating={locating}
+        onStreetChange={onAddress}
+        onHouseNoChange={onHouseNo}
+        onGps={grabGps}
+        onPin={(pt, streetLabel) => {
+          onPin(pt);
+          if (streetLabel) onAddress(splitHouseNumber(streetLabel).street);
+        }}
       />
-      {geoStatus === 'searching' && (
-        <p className="text-[9px] text-indigo-600 font-bold">Mencari titik di peta dari alamat…</p>
-      )}
-      {geoStatus === 'miss' && (
-        <p className="text-[9px] text-amber-700 font-bold">Alamat belum ketemu di peta. Geser pin ke rumah/gerbang.</p>
-      )}
-      <PinpointMap value={pin} onChange={onPin} onGps={grabGps} />
+      {formError ? (
+        <p className="text-[11px] font-bold text-rose-600 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2">{formError}</p>
+      ) : null}
       <label className="flex items-center gap-2 text-[11px] font-bold text-slate-600">
         <input type="checkbox" checked={asPrimary} onChange={(e) => onPrimary(e.target.checked)} />
         Jadikan alamat utama (checkout jemput)

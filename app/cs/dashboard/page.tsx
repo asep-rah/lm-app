@@ -12,6 +12,7 @@ import ThirdPartyDispatchForm from '@/components/ThirdPartyDispatchForm';
 import { visibleChatText } from '@/components/ChatAttachment';
 import { dispatchThirdPartyDelivery, isThirdPartyDelivery } from '@/lib/thirdPartyDelivery';
 import GoogleMapsNavButton from '@/components/GoogleMapsNavButton';
+import DeferredProofPhoto from '@/components/DeferredProofPhoto';
 import { listAllOnDuty, type DriverAttendance } from '@/lib/driverAttendance';
 
 const supabase = createClient(
@@ -482,29 +483,27 @@ export default function CSDashboard() {
     <div>
       <span className="text-[9px] font-bold text-slate-500 block mb-0.5">1. Di Rumah Customer</span>
       {(p.photo_pickup_url || p.pickup_photo) ? (
-        <a href={p.photo_pickup_url || p.pickup_photo} target="_blank" rel="noreferrer">
-          <img 
-            src={p.photo_pickup_url || p.pickup_photo} 
-            className="w-full h-20 object-cover rounded-lg border border-slate-300 hover:opacity-90 transition-opacity" 
-            alt="Foto Ambil"
-          />
-        </a>
+        <DeferredProofPhoto
+          src={p.photo_pickup_url || p.pickup_photo}
+          label="Lihat foto"
+          className="w-full"
+          onOpen={(url) => window.open(url, '_blank')}
+        />
       ) : (
-        <div className="h-20 bg-slate-200/60 rounded-lg flex items-center justify-center text-[9px] text-slate-400 italic">Belum Ada</div>
+        <div className="h-10 bg-slate-200/60 rounded-lg flex items-center justify-center text-[9px] text-slate-400 italic">Belum Ada</div>
       )}
     </div>
     <div>
       <span className="text-[9px] font-bold text-slate-500 block mb-0.5">2. Sampai Outlet</span>
       {(p.photo_outlet_url || p.outlet_photo) ? (
-        <a href={p.photo_outlet_url || p.outlet_photo} target="_blank" rel="noreferrer">
-          <img 
-            src={p.photo_outlet_url || p.outlet_photo} 
-            className="w-full h-20 object-cover rounded-lg border border-slate-300 hover:opacity-90 transition-opacity" 
-            alt="Foto Outlet"
-          />
-        </a>
+        <DeferredProofPhoto
+          src={p.photo_outlet_url || p.outlet_photo}
+          label="Lihat foto"
+          className="w-full"
+          onOpen={(url) => window.open(url, '_blank')}
+        />
       ) : (
-        <div className="h-20 bg-slate-200/60 rounded-lg flex items-center justify-center text-[9px] text-slate-400 italic">Belum Ada</div>
+        <div className="h-10 bg-slate-200/60 rounded-lg flex items-center justify-center text-[9px] text-slate-400 italic">Belum Ada</div>
       )}
     </div>
   </div>

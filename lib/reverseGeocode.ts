@@ -40,23 +40,36 @@ export async function reverseGeocodeAddress(lat: number, lon: number): Promise<s
   }
 }
 
+export type AddressHit = GeoPoint & { label: string };
+
+const parseHits = (rows: unknown): AddressHit[] =>
+  (Array.isArray(rows) ? rows : [])
+    .map((hit: any) => {
+      const lat = Number(hit?.lat);
+      const lng = Number(hit?.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+      return { lat, lng, label: streetLabelOf(hit) };
+    })
+    .filter((h): h is AddressHit => Boolean(h?.label));
+
+/** Beberapa saran alamat Indonesia — pelanggan pilih yang paling mirip, bukan tebakan 1 hasil. */
+export async function searchAddressSuggestions(query: string): Promise<AddressHit[]> {
+  const q = String(query || '').replace(/\s+/g, ' ').trim();
+  if (q.length < 6) return [];
+  try {
+    const url = `${NOMINATIM}/search?format=jsonv2&q=${encodeURIComponent(q)}&countrycodes=id&limit=5&addressdetails=1`;
+    const res = await fetch(url, { headers: NOMINATIM_HEADERS });
+    if (!res.ok) return [];
+    return parseHits(await res.json());
+  } catch {
+    return [];
+  }
+}
+
 /** Forward-geocode typed address → pin on the map (Indonesia). */
 export async function geocodeAddress(query: string): Promise<(GeoPoint & { label: string }) | null> {
-  const q = String(query || '').replace(/\s+/g, ' ').trim();
-  if (q.length < 8) return null;
-  try {
-    const url = `${NOMINATIM}/search?format=jsonv2&q=${encodeURIComponent(q)}&countrycodes=id&limit=1&addressdetails=1`;
-    const res = await fetch(url, { headers: NOMINATIM_HEADERS });
-    if (!res.ok) return null;
-    const rows = await res.json();
-    const hit = Array.isArray(rows) ? rows[0] : null;
-    const lat = Number(hit?.lat);
-    const lng = Number(hit?.lon);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-    return { lat, lng, label: streetLabelOf(hit) || q };
-  } catch {
-    return null;
-  }
+  const hits = await searchAddressSuggestions(query);
+  return hits[0] || null;
 }
 
 /** Reverse-geocode GPS to a city name for nearby-outlet filtering. */
@@ -67,8 +80,10 @@ export async function reverseGeocodeCity(lat: number, lon: number): Promise<stri
     const res = await fetch(url);
     if (res.ok) {
       const j = await res.json();
-      const city = String(j.city || j.locality || j.principalSubdivision || '').trim();
+      const city = String(j.city || '').trim();
       if (city) return city;
+      const locality = String(j.locality || '').trim();
+      if (locality) return locality;
     }
   } catch {
     /* try nominatim */

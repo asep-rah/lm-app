@@ -39,14 +39,14 @@ export default function NearbyOutlets({
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <h3 className="text-xs font-bold text-slate-800 tracking-wide uppercase flex items-center gap-1.5 min-w-0">
+        <h2 className="text-xs font-bold text-slate-800 tracking-wide uppercase flex items-center gap-1.5 min-w-0">
           <MapPin className="w-3.5 h-3.5 text-blue-600 shrink-0" />
           Outlet Terdekat
-        </h3>
+        </h2>
         <div className="flex items-center gap-2 shrink-0">
           {onSelectCity && cities.length > 0 && (
             <label className="relative inline-flex items-center gap-0.5 text-[10px] font-bold text-slate-700">
-              <span className="text-slate-500">Kota:</span>
+              <span className="text-slate-700">Kota:</span>
               <select
                 value={
                   showAllCities
@@ -67,12 +67,12 @@ export default function NearbyOutlets({
                   </option>
                 ))}
               </select>
-              <ChevronDown className="w-3 h-3 absolute right-1.5 pointer-events-none text-slate-400" />
+              <ChevronDown className="w-3 h-3 absolute right-1.5 pointer-events-none text-slate-500" />
             </label>
           )}
           {onRequestLocation && (
-            <button type="button" onClick={onRequestLocation} className="text-[10px] font-bold text-blue-600 whitespace-nowrap">
-              {locating ? 'Mencari GPS…' : 'Perbarui lokasi'}
+            <button type="button" onClick={onRequestLocation} className="text-[10px] font-bold text-blue-700 whitespace-nowrap">
+              {locating ? 'Mencari GPS…' : 'GPS untuk cabang terdekat'}
             </button>
           )}
         </div>
@@ -87,7 +87,7 @@ export default function NearbyOutlets({
             <button
               type="button"
               onClick={onShowAllCities}
-              className="text-[11px] font-extrabold text-blue-600 underline"
+              className="text-[11px] font-extrabold text-blue-700 underline"
             >
               Lihat Semua Kota
             </button>
@@ -102,21 +102,21 @@ export default function NearbyOutlets({
                 key={String(outlet.id)}
                 type="button"
                 onClick={() => onOpen(outlet)}
-                className="w-full bg-white border border-slate-200 rounded-2xl p-3 text-left shadow-sm hover:border-blue-400 transition flex items-start gap-3"
+                className="w-full bg-white border border-slate-300 rounded-2xl p-3 text-left shadow-sm hover:border-blue-400 transition flex items-start gap-3"
               >
-                <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
+                <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-700 flex items-center justify-center shrink-0">
                   <Navigation className="w-4 h-4" />
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-extrabold text-slate-900 truncate">{String(outlet.name || 'Outlet')}</p>
-                  <p className="text-[10px] font-bold text-amber-700">
+                  <p className="text-[10px] font-bold text-amber-800">
                     {googleRatingBadge(g.rating, g.reviewCount)}
                   </p>
-                  <p className="text-[10px] text-slate-500 truncate">{outletAddressOf(outlet) || 'Alamat belum diisi'}</p>
+                  <p className="text-[10px] text-slate-600 truncate">{outletAddressOf(outlet) || 'Alamat belum diisi'}</p>
                   {km != null ? (
-                    <p className="text-[10px] font-bold text-blue-600 mt-0.5">{distanceLabelKm(km)}</p>
+                    <p className="text-[10px] font-bold text-blue-700 mt-0.5">{distanceLabelKm(km)}</p>
                   ) : (
-                    <p className="text-[10px] text-slate-400 mt-0.5">
+                    <p className="text-[10px] text-slate-600 mt-0.5">
                       {isComingSoonOutlet(outlet) ? 'Segera dibuka' : 'Jarak belum tersedia'}
                     </p>
                   )}

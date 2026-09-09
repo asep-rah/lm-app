@@ -8,6 +8,7 @@ import { toast } from '@/lib/toast';
 import { uploadProofFile } from '@/lib/uploadProof';
 import FileProofInput from '@/components/FileProofInput';
 import PhotoLightbox from '@/components/PhotoLightbox';
+import DeferredProofPhoto from '@/components/DeferredProofPhoto';
 import { notifyOps, unlockOpsAudio } from '@/lib/opsNotify';
 import ComplaintTicketChat from '@/components/ComplaintTicketChat';
 import {
@@ -267,15 +268,23 @@ export default function CsCarePage() {
               </p>
 
               {video && (
-                <video src={video} controls className="w-full max-h-48 rounded-xl border border-slate-200 bg-black" />
+                <DeferredProofPhoto
+                  src={video}
+                  label="Lihat / putar video bukti"
+                  onOpen={(url) => window.open(url, '_blank')}
+                  className="w-full"
+                />
               )}
 
               {photos.length > 0 && (
-                <div className="flex gap-1.5 overflow-x-auto">
+                <div className="flex flex-wrap gap-1.5">
                   {photos.map((src, i) => (
-                    <button type="button" key={i} onClick={() => setLightbox(src)} className="shrink-0">
-                      <img src={src} alt={`Bukti ${i + 1}`} className="h-16 w-20 object-cover rounded-lg border border-slate-200" />
-                    </button>
+                    <DeferredProofPhoto
+                      key={i}
+                      src={src}
+                      label={photos.length > 1 ? `Lihat foto ${i + 1}` : 'Lihat foto bukti'}
+                      onOpen={setLightbox}
+                    />
                   ))}
                 </div>
               )}
