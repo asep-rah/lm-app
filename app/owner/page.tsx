@@ -839,7 +839,7 @@ export default function Dashboard() {
   const isManagementAdmin = canAccessSettings(currentUserRole);
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 p-3 md:p-8 pb-24">
+    <div className="min-h-screen bg-slate-50 text-slate-800 p-3 md:p-8 pb-32">
       <div className="max-w-6xl mx-auto space-y-4 md:space-y-6">
         
         {/* MODAL POP-UP DETAIL TRANSAKSI HISTORY */}

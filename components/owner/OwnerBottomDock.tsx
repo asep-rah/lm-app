@@ -5,45 +5,62 @@ import { Menu, MessageSquare, Shield } from 'lucide-react';
 import { openOutletGroupChat } from '@/lib/outletGroupChat';
 import { useOwnerSystemHealthNotifs } from '@/components/owner/useOwnerSystemHealthNotifs';
 
-/** Bottom bar owner: Chat · Menu (tengah) · Diagnosis — fixed, bukan FAB mengambang. */
+/**
+ * Bottom bar owner ala Smartlink:
+ * [ Chat Grup ]  [ ● Menu ]  [ Diagnosa ]
+ * Menu (tengah) membuka sidebar; chat tidak pakai FAB mengambang di /owner.
+ */
 export default function OwnerBottomDock({ onMenu }: { onMenu: () => void }) {
   const { unread: healthUnread } = useOwnerSystemHealthNotifs();
 
-  const sideBtn =
-    'flex flex-1 flex-col items-center justify-center gap-0.5 min-h-[3rem] text-slate-600 hover:text-sky-700 transition';
-
   return (
     <nav
-      className="fixed inset-x-0 bottom-0 z-[60] border-t border-sky-100/80 bg-sky-50/95 backdrop-blur-md"
-      style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+      className="fixed inset-x-0 bottom-0 z-[90] border-t border-slate-200/90 bg-white/95 backdrop-blur-md shadow-[0_-4px_24px_rgba(15,23,42,0.06)]"
+      style={{ paddingBottom: 'max(0.35rem, env(safe-area-inset-bottom))' }}
       aria-label="Navigasi owner"
     >
-      <div className="mx-auto max-w-lg flex items-end px-1 pt-1 pb-1.5">
-        <button type="button" onClick={() => openOutletGroupChat()} className={sideBtn} title="Grup Outlet">
-          <MessageSquare className="w-5 h-5" strokeWidth={2.2} />
-          <span className="text-[10px] font-extrabold leading-tight">Chat Outlet</span>
+      <div className="mx-auto max-w-lg grid grid-cols-3 items-end gap-0 px-2 pt-1.5 pb-1">
+        {/* Kiri: Chat grup outlet */}
+        <button
+          type="button"
+          onClick={() => openOutletGroupChat()}
+          className="flex flex-col items-center justify-center gap-0.5 min-h-[3.25rem] text-slate-600 hover:text-sky-600 transition active:scale-[0.98]"
+          title="Chat Grup Outlet"
+        >
+          <span className="w-10 h-10 rounded-2xl bg-sky-50 border border-sky-100 flex items-center justify-center">
+            <MessageSquare className="w-5 h-5 text-sky-600" strokeWidth={2.2} />
+          </span>
+          <span className="text-[10px] font-extrabold leading-tight text-slate-700">Chat Grup</span>
         </button>
 
-        <div className="relative flex flex-col items-center justify-end px-2 -mt-5">
+        {/* Tengah: Menu (elevated) */}
+        <div className="flex flex-col items-center justify-end -mt-7 pb-0.5">
           <button
             type="button"
             onClick={onMenu}
-            className="w-14 h-14 rounded-full bg-blue-600 text-white shadow-lg shadow-blue-600/30 flex items-center justify-center ring-4 ring-sky-50 hover:bg-blue-700 active:scale-95 transition"
+            className="w-[3.75rem] h-[3.75rem] rounded-full bg-blue-600 text-white shadow-lg shadow-blue-600/35 flex items-center justify-center ring-[6px] ring-white hover:bg-blue-700 active:scale-95 transition"
             aria-label="Buka menu"
           >
-            <Menu className="w-6 h-6" strokeWidth={2.4} />
+            <Menu className="w-7 h-7" strokeWidth={2.5} />
           </button>
-          <span className="text-[10px] font-extrabold text-blue-700 mt-0.5">Menu</span>
+          <span className="text-[10px] font-black text-blue-700 mt-1 tracking-wide">Menu</span>
         </div>
 
-        <Link href="/owner/system-health" className={`relative ${sideBtn}`} title="Diagnosis Sistem">
-          <Shield className="w-5 h-5" strokeWidth={2.2} />
-          <span className="text-[10px] font-extrabold leading-tight">Diagnosa</span>
-          {healthUnread > 0 && (
-            <span className="absolute top-0.5 right-[18%] min-w-[16px] h-4 px-1 rounded-full bg-rose-500 text-white text-[9px] font-black flex items-center justify-center animate-pulse">
-              {healthUnread > 99 ? '99+' : healthUnread}
-            </span>
-          )}
+        {/* Kanan: Diagnosa sistem */}
+        <Link
+          href="/owner/system-health"
+          className="relative flex flex-col items-center justify-center gap-0.5 min-h-[3.25rem] text-slate-600 hover:text-indigo-700 transition active:scale-[0.98]"
+          title="Diagnosis Sistem"
+        >
+          <span className="relative w-10 h-10 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center">
+            <Shield className="w-5 h-5 text-indigo-600" strokeWidth={2.2} />
+            {healthUnread > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-rose-500 text-white text-[9px] font-black flex items-center justify-center animate-pulse">
+                {healthUnread > 99 ? '99+' : healthUnread}
+              </span>
+            )}
+          </span>
+          <span className="text-[10px] font-extrabold leading-tight text-slate-700">Diagnosa</span>
         </Link>
       </div>
     </nav>

@@ -1,10 +1,16 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { usePathname, useSearchParams } from 'next/navigation';
 import OwnerSidebar from '@/components/owner/OwnerSidebar';
 import OwnerBottomDock from '@/components/owner/OwnerBottomDock';
-import { ownerHref, isRemoteOwnerTab, readOwnerSearch, OWNER_TAB_EVENT, type SettingsPanel } from '@/components/owner/ownerNav';
+import {
+  ownerHref,
+  isRemoteOwnerTab,
+  readOwnerSearch,
+  OWNER_TAB_EVENT,
+  type SettingsPanel
+} from '@/components/owner/ownerNav';
 import { canAccessSettings, isOwnerRole } from '@/lib/staffSession';
 
 function tabFromPath(pathname: string): string {
@@ -37,11 +43,16 @@ function tabFromPath(pathname: string): string {
   return 'pnl';
 }
 
-/** Sidebar + dock bawah untuk semua rute `/owner/*`. */
-export default function OwnerNavHost({ children }: { children: React.ReactNode }) {
+/** Sidebar saja — boleh suspend karena useSearchParams. */
+function OwnerSidebarController({
+  navOpen,
+  setNavOpen
+}: {
+  navOpen: boolean;
+  setNavOpen: (v: boolean) => void;
+}) {
   const pathname = usePathname() || '/owner';
   const searchParams = useSearchParams();
-  const [navOpen, setNavOpen] = useState(false);
   const [settingsExpanded, setSettingsExpanded] = useState(false);
   const [role, setRole] = useState('');
   const [activeTab, setActiveTab] = useState('pnl');
@@ -80,44 +91,58 @@ export default function OwnerNavHost({ children }: { children: React.ReactNode }
   };
 
   return (
+    <OwnerSidebar
+      open={navOpen}
+      onClose={() => setNavOpen(false)}
+      activeTab={activeTab}
+      settingsPanel={settingsPanel}
+      settingsExpanded={settingsExpanded}
+      onToggleSettings={() => {
+        setSettingsExpanded((v) => !v);
+        setActiveTab('settings');
+      }}
+      onGo={(tab, panel) => {
+        if (tab === 'system-health') {
+          window.location.href = '/owner/system-health';
+          return;
+        }
+        const href = ownerHref(tab, panel);
+        const onOwnerHome = pathname === '/owner' || pathname === '/owner/dashboard';
+        if (onOwnerHome && !isRemoteOwnerTab(tab)) {
+          if (pathname === '/owner/dashboard') {
+            window.location.href = href.startsWith('/owner?') || href === '/owner' ? href : `/owner?tab=${tab}`;
+            return;
+          }
+          window.history.pushState(null, '', href);
+          setActiveTab(tab);
+          if (panel) {
+            setSettingsPanel(panel);
+            setSettingsExpanded(true);
+          }
+          window.dispatchEvent(new CustomEvent(OWNER_TAB_EVENT, { detail: { tab, panel } }));
+          return;
+        }
+        window.location.href = href;
+      }}
+      canSettings={canAccessSettings(role) || isOwnerRole(role)}
+      isOwner={isOwnerRole(role)}
+      onLogout={handleLogout}
+    />
+  );
+}
+
+/**
+ * Shell owner: dock bawah SELALU ter-render (di luar Suspense),
+ * supaya Menu tengah / Chat / Diagnosa tidak hilang saat searchParams suspend.
+ */
+export default function OwnerNavHost({ children }: { children: React.ReactNode }) {
+  const [navOpen, setNavOpen] = useState(false);
+
+  return (
     <>
-      <OwnerSidebar
-        open={navOpen}
-        onClose={() => setNavOpen(false)}
-        activeTab={activeTab}
-        settingsPanel={settingsPanel}
-        settingsExpanded={settingsExpanded}
-        onToggleSettings={() => {
-          setSettingsExpanded((v) => !v);
-          setActiveTab('settings');
-        }}
-        onGo={(tab, panel) => {
-          if (tab === 'system-health') {
-            window.location.href = '/owner/system-health';
-            return;
-          }
-          const href = ownerHref(tab, panel);
-          const onOwnerHome = pathname === '/owner' || pathname === '/owner/dashboard';
-          if (onOwnerHome && !isRemoteOwnerTab(tab)) {
-            if (pathname === '/owner/dashboard') {
-              window.location.href = href.startsWith('/owner?') || href === '/owner' ? href : `/owner?tab=${tab}`;
-              return;
-            }
-            window.history.pushState(null, '', href);
-            setActiveTab(tab);
-            if (panel) {
-              setSettingsPanel(panel);
-              setSettingsExpanded(true);
-            }
-            window.dispatchEvent(new CustomEvent(OWNER_TAB_EVENT, { detail: { tab, panel } }));
-            return;
-          }
-          window.location.href = href;
-        }}
-        canSettings={canAccessSettings(role) || isOwnerRole(role)}
-        isOwner={isOwnerRole(role)}
-        onLogout={handleLogout}
-      />
+      <Suspense fallback={null}>
+        <OwnerSidebarController navOpen={navOpen} setNavOpen={setNavOpen} />
+      </Suspense>
       {children}
       <OwnerBottomDock onMenu={() => setNavOpen(true)} />
     </>

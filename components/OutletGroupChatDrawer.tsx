@@ -159,7 +159,8 @@ export default function OutletGroupChatDrawer({ embedded = false }: { embedded?:
   const canUse = !onCustomerSurface && canAccessOutletGroupChat(role, pathname);
   const canSwitch = canSwitchOutletGroupChat(role);
   const skipRoom = onPosPath && !embedded;
-  const hideFloatFab = onOwnerPath;
+  /** Di /owner chat dibuka dari OwnerBottomDock — jangan tampilkan FAB mengambang. */
+  const hideFloatFab = onOwnerPath || embedded;
   const showListFirst = canSwitch;
 
   useEffect(() => {
@@ -599,7 +600,7 @@ export default function OutletGroupChatDrawer({ embedded = false }: { embedded?:
 
   return (
     <>
-      {!hideFloatFab && (
+      {!hideFloatFab && canUse && (
         <button
           type="button"
           onClick={() => {
