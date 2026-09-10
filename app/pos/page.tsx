@@ -12,7 +12,7 @@ import OutletIssueForm from '@/components/OutletIssueForm';
 import OutletGroupChatDrawer from '@/components/OutletGroupChatDrawer';
 import PosBottomNavbar, { type PosTab } from '@/components/pos/PosBottomNavbar';
 import { isOnlineOrderType, logCashflow, logInventoryChange, payBucket, writeSubmission } from '@/lib/posSync';
-import { updatePickupOrder, markPickupConvertedToPos } from '@/lib/pickupUpdates';
+import { updatePickupOrder, markPickupConvertedToPos, claimPickupForPos } from '@/lib/pickupUpdates';
 import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
 import { uploadProofFile } from '@/lib/uploadProof';
 import { cartLineAmount } from '@/lib/kiloanPrice';
@@ -20,7 +20,7 @@ import FileProofInput from '@/components/FileProofInput';
 import { createPaymentVerifyTask, isCsVerifiedPaid, isNonCashVerifyMethod, isPaymentLocked, PENDING_PAY_STATUS } from '@/lib/paymentVerify';
 import { sendInvoiceToLiveChat } from '@/lib/chatInvoice';
 import { simulateMayarAutoPay } from '@/lib/mayar';
-import { creditCustomerDeposit, decrementCustomerDeposit } from '@/lib/depositTopup';
+import { paymentOpsClientHeaders } from '@/lib/requirePaymentOpsAuth';
 import { toast } from '@/lib/toast';
 import { parseReceiptLayout, DEFAULT_RECEIPT_LAYOUT, type ReceiptLayout } from '@/lib/receiptLayout';
 import { notifyCustomerStatus } from '@/lib/notifications';
@@ -1610,6 +1610,17 @@ const handleApplyLoan = async (e: React.FormEvent) => {
 
     setIsSubmitting(true);
 
+    const paramsEarly = new URLSearchParams(window.location.search);
+    const pickupIdEarly = paramsEarly.get('pickup_id') || customerOrder?.id || '';
+    if (pickupIdEarly) {
+      const claimed = await claimPickupForPos(pickupIdEarly);
+      if (claimed.error) {
+        setIsSubmitting(false);
+        alert(`❌ ${claimed.error.message}`);
+        return;
+      }
+    }
+
     const generatedResi = 'TRX-' + Math.floor(100000 + Math.random() * 900000);
 
     let primaryServiceLabel = selectedServiceInput || serviceType || 'Cuci Kering Gosok';
@@ -1676,6 +1687,19 @@ const handleApplyLoan = async (e: React.FormEvent) => {
 
     let { data: newTx, error } = await supabase.from('transactions').insert([orderData]).select('*, outlets(name, whatsapp_number)').single();
     if (error && needsPayVerify) {
+      // Jangan fallback ke Diterima — tetap pending bayar (kolom opsional mungkin gagal)
+      const slim = { ...orderData } as Record<string, unknown>;
+      delete slim.paid_via;
+      delete slim.mayar_payment_id;
+      delete slim.mayar_invoice_url;
+      const retry = await supabase
+        .from('transactions')
+        .insert([{ ...slim, status: PENDING_PAY_STATUS, payment_status: 'pending' }])
+        .select('*, outlets(name, whatsapp_number)')
+        .single();
+      newTx = retry.data;
+      error = retry.error;
+    } else if (error && !needsPayVerify) {
       const retry = await supabase
         .from('transactions')
         .insert([{ ...orderData, status: 'Diterima' }])
@@ -1698,12 +1722,38 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       }
     }
     if (!error && newTx && depositDeductionAmount > 0 && normalizedPhone) {
-      const deducted = await decrementCustomerDeposit(supabase as any, normalizedPhone, depositDeductionAmount);
-      if (deducted.error) {
-        toast(`Nota tersimpan, tetapi potong deposit gagal: ${deducted.error.message}`, 'err');
-      } else {
-        nextDepositBal = deducted.balance;
-        setCustomerDeposit(deducted.balance);
+      try {
+        const staffRaw = localStorage.getItem('laundry_user');
+        let staffId = employeeId;
+        let role = 'kasir';
+        try {
+          const u = staffRaw ? JSON.parse(staffRaw) : {};
+          staffId = String(u.id || employeeId || '');
+          role = String(u.role || 'kasir').toLowerCase();
+        } catch {
+          /* ignore */
+        }
+        const depRes = await fetch('/api/deposit/mutate', {
+          method: 'POST',
+          headers: paymentOpsClientHeaders(),
+          body: JSON.stringify({
+            action: 'debit',
+            phone: normalizedPhone,
+            amount: depositDeductionAmount,
+            staffId,
+            role,
+            agentName: employeeName || 'Kasir'
+          })
+        });
+        const depJson = await depRes.json().catch(() => ({}));
+        if (!depRes.ok) {
+          toast(`Nota tersimpan, tetapi potong deposit gagal: ${depJson.error || 'error'}`, 'err');
+        } else {
+          nextDepositBal = Number(depJson.balance);
+          setCustomerDeposit(Number(depJson.balance));
+        }
+      } catch (e: any) {
+        toast(`Nota tersimpan, tetapi potong deposit gagal: ${e?.message || 'jaringan'}`, 'err');
       }
     }
     if (!error && newTx) {
@@ -1877,18 +1927,43 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       commissionOwner = existingCust[0].registered_by || employeeName;
     }
 
-    const credited = await creditCustomerDeposit(
-      supabase as any,
-      normalizedPhone,
-      balanceAdded,
-      `pos-member-${normalizedPhone}-${Date.now()}`
-    );
-    if (credited.error) {
-      alert('❌ Gagal kredit deposit: ' + credited.error.message);
+    let newBalance = balanceAdded;
+    try {
+      const staffRaw = localStorage.getItem('laundry_user');
+      let staffId = employeeId;
+      let role = 'kasir';
+      try {
+        const u = staffRaw ? JSON.parse(staffRaw) : {};
+        staffId = String(u.id || employeeId || '');
+        role = String(u.role || 'kasir').toLowerCase();
+      } catch {
+        /* ignore */
+      }
+      const depRes = await fetch('/api/deposit/mutate', {
+        method: 'POST',
+        headers: paymentOpsClientHeaders(),
+        body: JSON.stringify({
+          action: 'credit',
+          phone: normalizedPhone,
+          amount: balanceAdded,
+          paymentId: `pos-member-${normalizedPhone}-${Date.now()}`,
+          staffId,
+          role,
+          agentName: employeeName || 'Kasir'
+        })
+      });
+      const depJson = await depRes.json().catch(() => ({}));
+      if (!depRes.ok) {
+        alert('❌ Gagal kredit deposit: ' + (depJson.error || 'error'));
+        setIsSubmitting(false);
+        return;
+      }
+      newBalance = Number(depJson.balance ?? balanceAdded);
+    } catch (e: any) {
+      alert('❌ Gagal kredit deposit: ' + (e?.message || 'jaringan'));
       setIsSubmitting(false);
       return;
     }
-    const newBalance = Number(credited.balance ?? balanceAdded);
     const targetPhone = existingCust?.[0]?.phone || normalizedPhone;
     await supabase.from('customers').update({
       name: memberName.trim(),

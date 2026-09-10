@@ -92,21 +92,32 @@ export async function createPaymentVerifyTask(tx: {
 }
 
 export async function completePaymentVerifyTasks(transactionId: string, receipt?: string) {
-  const { data: rows } = await supabase
-    .from('system_tasks')
-    .select('id, source_id, title, source_type, status')
-    .in('assigned_to_role', ['cs', 'head_cs'])
-    .limit(80);
+  const ids = new Set<string>();
 
-  const ids = (rows || [])
-    .filter((t: any) => {
+  const { data: bySource } = await supabase
+    .from('system_tasks')
+    .select('id, status')
+    .eq('source_id', transactionId)
+    .limit(40);
+  for (const t of bySource || []) {
+    const st = String(t.status || '').toLowerCase();
+    if (st === 'completed' || st === 'done' || st === 'selesai') continue;
+    if (t.id) ids.add(String(t.id));
+  }
+
+  if (receipt) {
+    const { data: byTitle } = await supabase
+      .from('system_tasks')
+      .select('id, title, source_type, status')
+      .eq('source_type', 'PAYMENT_VERIFY')
+      .ilike('title', `%${receipt}%`)
+      .limit(40);
+    for (const t of byTitle || []) {
       const st = String(t.status || '').toLowerCase();
-      if (st === 'completed' || st === 'done' || st === 'selesai') return false;
-      if (String(t.source_id || '') === String(transactionId)) return true;
-      if (t.source_type === 'PAYMENT_VERIFY' && receipt && String(t.title || '').includes(receipt)) return true;
-      return Boolean(receipt && String(t.title || '').includes(receipt));
-    })
-    .map((t: any) => t.id);
+      if (st === 'completed' || st === 'done' || st === 'selesai') continue;
+      if (t.id) ids.add(String(t.id));
+    }
+  }
 
   for (const id of ids) {
     await updateWithFallback('system_tasks', [{ status: 'completed' }], { column: 'id', value: id });
@@ -124,6 +135,17 @@ export async function markInvoicePaid(opts: {
   note?: string;
   bankRef?: string;
 }) {
+  const { data: existing } = await supabase
+    .from('transactions')
+    .select('id, is_paid, payment_status, status, amount, customer_phone, receipt_number')
+    .eq('id', opts.transactionId)
+    .maybeSingle();
+
+  if (existing && !isPaymentLocked(existing)) {
+    await completePaymentVerifyTasks(opts.transactionId, opts.receipt || existing.receipt_number);
+    return { error: null, alreadyPaid: true as const };
+  }
+
   const paidAt = new Date().toISOString();
   const paidVia = opts.paidVia || 'MANUAL_VERIFIED';
   const { error } = await updateWithFallback(
@@ -156,19 +178,19 @@ export async function markInvoicePaid(opts: {
       },
       { payment_status: 'paid', is_paid: true, status: 'Diterima' },
       { payment_status: 'paid', status: 'Diterima' },
-      { is_paid: true, status: 'Diterima' },
-      { status: 'Diterima' }
+      { is_paid: true, status: 'Diterima' }
     ],
     { column: 'id', value: opts.transactionId }
   );
   if (error) return { error };
 
-  await completePaymentVerifyTasks(opts.transactionId, opts.receipt);
+  await completePaymentVerifyTasks(opts.transactionId, opts.receipt || existing?.receipt_number);
 
-  if (opts.customerPhone) {
-    const nominal = Number(opts.amount || 0).toLocaleString('id-ID');
+  const phone = opts.customerPhone || existing?.customer_phone;
+  if (phone) {
+    const nominal = Number(opts.amount || existing?.amount || 0).toLocaleString('id-ID');
     await insertChatMessage({
-      customer_phone: opts.customerPhone,
+      customer_phone: phone,
       pickup_order_id: null,
       transaction_id: opts.transactionId,
       sender_type: 'cs',
@@ -180,11 +202,11 @@ export async function markInvoicePaid(opts: {
     });
   }
 
-  notifyCustomerPayment(opts.customerPhone);
+  notifyCustomerPayment(phone);
   maybeAwardLoyalty({
     id: opts.transactionId,
-    amount: opts.amount,
-    customer_phone: opts.customerPhone,
+    amount: opts.amount || existing?.amount,
+    customer_phone: phone,
     status: 'Diterima',
     is_paid: true
   });
@@ -194,10 +216,10 @@ export async function markInvoicePaid(opts: {
     action: 'PAYMENT_MARK_PAID',
     entity_type: 'transactions',
     entity_id: opts.transactionId,
-    amount: opts.amount ?? null,
+    amount: opts.amount ?? existing?.amount ?? null,
     meta: { paidVia, note: opts.note, bankRef: opts.bankRef, proofUrl: opts.proofUrl }
   });
-  return { error: null };
+  return { error: null, alreadyPaid: false as const };
 }
 
 export async function confirmTransactionPayment(opts: {
@@ -234,7 +256,7 @@ export const gatewayPaidAttempts = (agentName: string, paidVia = 'GATEWAY') => {
     },
     { payment_status: 'paid', is_paid: true, status: 'Diterima' },
     { is_paid: true, status: 'Diterima' },
-    { status: 'Diterima' }
+    { payment_status: 'paid', is_paid: true }
   ];
 };
 
@@ -245,7 +267,19 @@ export async function markGatewayPaid(opts: {
   agentName?: string;
   customerPhone?: string;
   paidVia?: string;
+  pickupId?: string | null;
 }) {
+  const { data: existing } = await supabase
+    .from('transactions')
+    .select('id, is_paid, payment_status, status, amount, customer_phone, receipt_number, pickup_id')
+    .eq('id', opts.transactionId)
+    .maybeSingle();
+
+  if (existing && !isPaymentLocked(existing)) {
+    await completePaymentVerifyTasks(opts.transactionId, opts.receipt || existing.receipt_number);
+    return { error: null, alreadyPaid: true as const };
+  }
+
   const agent = opts.agentName || 'Mayar QRIS';
   const paidVia = opts.paidVia || 'GATEWAY';
   const { error } = await updateWithFallback('transactions', gatewayPaidAttempts(agent, paidVia), {
@@ -253,25 +287,35 @@ export async function markGatewayPaid(opts: {
     value: opts.transactionId
   });
   if (error) return { error };
-  await completePaymentVerifyTasks(opts.transactionId, opts.receipt);
-  if (opts.customerPhone) {
-    const nominal = Number(opts.amount || 0).toLocaleString('id-ID');
+  await completePaymentVerifyTasks(opts.transactionId, opts.receipt || existing?.receipt_number);
+  const phone = opts.customerPhone || existing?.customer_phone;
+  if (phone) {
+    const nominal = Number(opts.amount || existing?.amount || 0).toLocaleString('id-ID');
     await insertChatMessage({
-      customer_phone: opts.customerPhone,
-      pickup_order_id: null,
+      customer_phone: phone,
+      pickup_order_id: opts.pickupId || existing?.pickup_id || null,
       transaction_id: opts.transactionId,
       sender_type: 'cs',
       sender_name: agent,
       message: `Pembayaran QRIS sebesar Rp ${nominal} sudah terkonfirmasi. Cucian masuk antrean produksi.`
     });
   }
-  notifyCustomerPayment(opts.customerPhone);
+  notifyCustomerPayment(phone);
   maybeAwardLoyalty({
     id: opts.transactionId,
-    amount: opts.amount,
-    customer_phone: opts.customerPhone,
+    amount: opts.amount || existing?.amount,
+    customer_phone: phone,
     status: 'Diterima',
     is_paid: true
   });
-  return { error: null };
+  void insertAuditLog({
+    user_name: agent,
+    role: 'system',
+    action: 'PAYMENT_GATEWAY_PAID',
+    entity_type: 'transactions',
+    entity_id: opts.transactionId,
+    amount: opts.amount ?? existing?.amount ?? null,
+    meta: { paidVia }
+  });
+  return { error: null, alreadyPaid: false as const };
 }

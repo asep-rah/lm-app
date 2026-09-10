@@ -1,16 +1,10 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
 import { isPaymentLocked, markGatewayPaid } from '@/lib/paymentVerify';
-import { insertAuditLog, insertErrorLog, clientIp } from '@/lib/paymentSecurity';
+import { insertAuditLog, insertErrorLog, clientIp, paymentServiceDb } from '@/lib/paymentSecurity';
 import { isMayarPaidEvent } from '@/lib/mayar';
+import { resolveMayarApiKey } from '@/lib/mayarOutletKey';
 
 export const dynamic = 'force-dynamic';
-
-const db = () =>
-  createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '',
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
-  );
 
 async function fetchMayarStatus(paymentId: string, apiKey: string) {
   const urls = [
@@ -38,7 +32,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'order_id wajib' }, { status: 400 });
   }
 
-  const supabase = db();
+  const supabase = paymentServiceDb();
   const { data: tx, error } = await supabase.from('transactions').select('*').eq('id', orderId).maybeSingle();
   if (error || !tx) {
     const byResi = await supabase
@@ -57,7 +51,7 @@ export async function GET(req: Request) {
   return handleTx(tx, req, supabase);
 }
 
-async function handleTx(tx: any, req: Request, supabase: ReturnType<typeof db>) {
+async function handleTx(tx: any, req: Request, supabase: ReturnType<typeof paymentServiceDb>) {
   if (!isPaymentLocked(tx)) {
     return NextResponse.json({
       status: 'PAID',
@@ -68,7 +62,7 @@ async function handleTx(tx: any, req: Request, supabase: ReturnType<typeof db>) 
   }
 
   const paymentId = String(tx.mayar_payment_id || '').trim();
-  const apiKey = String(process.env.MAYAR_API_KEY || '').trim();
+  const apiKey = await resolveMayarApiKey(supabase, tx.outlet_id);
 
   if (paymentId && apiKey && !paymentId.startsWith('mock_')) {
     try {
@@ -80,7 +74,8 @@ async function handleTx(tx: any, req: Request, supabase: ReturnType<typeof db>) 
           amount: Number(tx.amount || 0),
           agentName: 'Cek Status (Mayar)',
           customerPhone: tx.customer_phone,
-          paidVia: 'CHECK_STATUS'
+          paidVia: 'CHECK_STATUS',
+          pickupId: tx.pickup_id
         });
         if (error) {
           await insertErrorLog({
@@ -114,7 +109,6 @@ async function handleTx(tx: any, req: Request, supabase: ReturnType<typeof db>) 
     }
   }
 
-  // Mock / local: if invoice was simulated or payment id missing, report still pending
   const { data: fresh } = await supabase.from('transactions').select('*').eq('id', tx.id).maybeSingle();
   return NextResponse.json({
     status: isPaymentLocked(fresh || tx) ? 'PENDING' : 'PAID',

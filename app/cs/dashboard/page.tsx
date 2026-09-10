@@ -156,7 +156,10 @@ export default function CSDashboard() {
     const { data: outletData } = await supabase.from('outlets').select('*');
     if (outletData) setOutlets(outletData);
 
-    const { data: driverData } = await supabase.from('employees').select('*').eq('role', 'driver');
+    const { data: driverData } = await supabase
+      .from('employees')
+      .select('id, name, role, outlet_id, username')
+      .eq('role', 'driver');
     if (driverData) setDrivers(driverData);
     setOnDutyShifts(await listAllOnDuty());
 

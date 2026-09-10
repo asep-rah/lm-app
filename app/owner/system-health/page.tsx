@@ -3,11 +3,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { AlertTriangle, ArrowLeft, CheckCircle2, Loader2, RefreshCw, Shield } from 'lucide-react';
-import { supabase } from '@/lib/supabaseClient';
 import { diagnosisCardOf } from '@/lib/errorDiagnosis';
 import { toast } from '@/lib/toast';
+import { paymentOpsClientHeaders } from '@/lib/requirePaymentOpsAuth';
 import ManualMarkPaidModal from '@/components/payment/ManualMarkPaidModal';
-import { isPaymentLocked } from '@/lib/paymentVerify';
 
 type ErrRow = {
   id: string;
@@ -32,40 +31,67 @@ export default function SystemHealthPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [{ data: errs }, { data: hooks }, { data: txs }] = await Promise.all([
-      supabase.from('error_logs').select('*').order('created_at', { ascending: false }).limit(40),
-      supabase.from('webhook_logs').select('id, gateway, status, event_type, signature_ok, error_message, created_at, transaction_id').order('created_at', { ascending: false }).limit(20),
-      supabase
-        .from('transactions')
-        .select('id, receipt_number, amount, customer_phone, customer_name, payment_status, is_paid, status, created_at')
-        .order('created_at', { ascending: false })
-        .limit(40)
-    ]);
-    setErrors((errs as ErrRow[]) || []);
-    setWebhooks(hooks || []);
-    setPending((txs || []).filter((t: any) => isPaymentLocked(t)).slice(0, 12));
-    setLoading(false);
+    try {
+      const raw = localStorage.getItem('laundry_owner_user') || localStorage.getItem('laundry_user');
+      let staffId = '';
+      let role = 'owner';
+      let agentName = 'Owner';
+      try {
+        const u = raw ? JSON.parse(raw) : {};
+        staffId = String(u.id || u.username || '');
+        role = String(u.role || 'owner').toLowerCase();
+        agentName = String(u.name || 'Owner');
+      } catch {
+        /* ignore */
+      }
+      const q = new URLSearchParams({ staffId, role, agentName });
+      const res = await fetch(`/api/owner/system-health?${q}`, {
+        headers: paymentOpsClientHeaders()
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || 'Gagal muat diagnosis');
+      setErrors((json.errors as ErrRow[]) || []);
+      setWebhooks(json.webhooks || []);
+      setPending(json.pending || []);
+    } catch (e: any) {
+      toast(e?.message || 'Gagal muat diagnosis (cek PAYMENT_OPS_SECRET)', 'err');
+      setErrors([]);
+      setWebhooks([]);
+      setPending([]);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
     void load();
-    const ch = supabase
-      .channel('system_health_rt')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'error_logs' }, () => void load())
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'transactions' }, () => void load())
-      .subscribe();
-    return () => {
-      supabase.removeChannel(ch);
-    };
+    const t = window.setInterval(() => void load(), 60_000);
+    return () => window.clearInterval(t);
   }, [load]);
 
   const resync = async (txId: string, errorLogId?: string) => {
     setResyncId(txId);
     try {
+      const raw = localStorage.getItem('laundry_owner_user') || localStorage.getItem('laundry_user');
+      let staffId = '';
+      let role = 'owner';
+      try {
+        const u = raw ? JSON.parse(raw) : {};
+        staffId = String(u.id || u.username || '');
+        role = String(u.role || 'owner').toLowerCase();
+      } catch {
+        /* ignore */
+      }
       const res = await fetch('/api/pay/resync', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transactionId: txId, errorLogId, agentName: 'Owner' })
+        headers: paymentOpsClientHeaders(),
+        body: JSON.stringify({
+          transactionId: txId,
+          errorLogId,
+          agentName: 'Owner',
+          staffId,
+          role
+        })
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || 'Re-sync gagal');

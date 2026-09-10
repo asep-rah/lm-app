@@ -1,57 +1,52 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabaseClient';
+import { paymentOpsClientHeaders } from '@/lib/requirePaymentOpsAuth';
 
-/** Jumlah error diagnosis terbuka + transaksi pending bayar (untuk badge icon). */
+function staffQuery() {
+  const raw = localStorage.getItem('laundry_owner_user') || localStorage.getItem('laundry_user');
+  let staffId = '';
+  let role = 'owner';
+  let agentName = 'Owner';
+  try {
+    const u = raw ? JSON.parse(raw) : {};
+    staffId = String(u.id || u.username || '');
+    role = String(u.role || 'owner').toLowerCase();
+    agentName = String(u.name || 'Owner');
+  } catch {
+    /* ignore */
+  }
+  return new URLSearchParams({ staffId, role, agentName, summary: '1' });
+}
+
+/** Badge diagnosis — lewat API (service role), bukan anon ke error_logs. */
 export function useOwnerSystemHealthNotifs() {
   const [errorCount, setErrorCount] = useState(0);
   const [pendingPayCount, setPendingPayCount] = useState(0);
 
   const refresh = async () => {
     try {
-      const [{ count: errs }, { data: txs }] = await Promise.all([
-        supabase
-          .from('error_logs')
-          .select('id', { count: 'exact', head: true })
-          .eq('resolved', false),
-        supabase
-          .from('transactions')
-          .select('id, payment_status, is_paid, status')
-          .order('created_at', { ascending: false })
-          .limit(60)
-      ]);
-      setErrorCount(Number(errs) || 0);
-      const pending = (txs || []).filter((t: any) => {
-        if (t?.is_paid === true) return false;
-        const pay = String(t?.payment_status || '').toLowerCase();
-        const st = String(t?.status || '').toLowerCase();
-        if (['paid', 'lunas', 'verified'].includes(pay)) return false;
-        return (
-          pay === 'pending' ||
-          pay === 'menunggu' ||
-          st.includes('menunggu_pembayaran') ||
-          st.includes('menunggu pembayaran')
-        );
-      }).length;
-      setPendingPayCount(pending);
+      const res = await fetch(`/api/owner/system-health?${staffQuery()}`, {
+        headers: paymentOpsClientHeaders()
+      });
+      if (!res.ok) {
+        setErrorCount(0);
+        setPendingPayCount(0);
+        return;
+      }
+      const json = await res.json().catch(() => ({}));
+      setErrorCount(Number(json.errorCount) || 0);
+      setPendingPayCount(Number(json.pendingPayCount) || 0);
     } catch {
-      /* tabel mungkin belum dimigrasi */
+      setErrorCount(0);
+      setPendingPayCount(0);
     }
   };
 
   useEffect(() => {
     void refresh();
-    const ch = supabase
-      .channel('owner_health_badge')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'error_logs' }, () => void refresh())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => void refresh())
-      .subscribe();
-    const t = window.setInterval(() => void refresh(), 60_000);
-    return () => {
-      window.clearInterval(t);
-      supabase.removeChannel(ch);
-    };
+    const t = window.setInterval(() => void refresh(), 90_000);
+    return () => window.clearInterval(t);
   }, []);
 
   const unread = errorCount + pendingPayCount;

@@ -4,14 +4,20 @@ import { diagnosisHintOf } from '@/lib/errorDiagnosis';
 
 export type GatewayName = 'mayar' | 'xendit' | 'manual' | 'cron' | 'check-status';
 
-const serviceClient = () =>
-  createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '',
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-      '',
-    { auth: { persistSession: false, autoRefreshToken: false } }
-  );
+const serviceClient = () => {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+  if (!url || !key) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('SUPABASE_SERVICE_ROLE_KEY wajib di production untuk operasi pembayaran');
+    }
+    // Dev saja: anon sebagai fallback terbatas
+    return createClient(url || 'http://127.0.0.1', process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'dev', {
+      auth: { persistSession: false, autoRefreshToken: false }
+    });
+  }
+  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+};
 
 export const paymentServiceDb = (): SupabaseClient => serviceClient();
 

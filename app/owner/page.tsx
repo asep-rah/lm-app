@@ -8,7 +8,7 @@ import { isVoidTransaction } from '@/lib/voidTx';
 import { canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
 import { isMultiOutletRole, staffRolesForForm } from '@/lib/staffRoles';
 import { parseAssignedOutletIds } from '@/lib/driverAttendance';
-import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
+import { updateWithFallback } from '@/lib/safeWrite';
 import FinanceAlertListener from '@/components/FinanceAlertListener';
 import WasherFraudAlertListener from '@/components/WasherFraudAlertListener';
 import dynamic from 'next/dynamic';
@@ -20,7 +20,9 @@ import { useOwnerDeleteNotifs } from '@/components/owner/useOwnerDeleteNotifs';
 import { DEFAULT_RECEIPT_LAYOUT, parseReceiptLayout, type ReceiptLayout } from '@/lib/receiptLayout';
 import CrewFinanceBoard from '@/components/owner/CrewFinanceBoard';
 import OutletBooksEditor from '@/components/owner/OutletBooksEditor';
+import OwnerApprovalsTab from '@/components/owner/OwnerApprovalsTab';
 import { emptyBook, findOutletIdByName, loadOutletBooks, saveOutletBook, type OutletBook } from '@/lib/outletBooks';
+import { paymentOpsClientHeaders } from '@/lib/requirePaymentOpsAuth';
 
 const AICopilotCard = dynamic(() => import('@/components/analytics/AICopilotCard'), { ssr: false });
 
@@ -36,7 +38,7 @@ const safeParse = (data: any, fallback: any) => {
 };
 
 export default function Dashboard() {
-  const [activeTab, setActiveTab] = useState<'pnl' | 'settings' | 'employees' | 'delete_requests' | 'loans' | 'history'>('pnl');
+  const [activeTab, setActiveTab] = useState<'pnl' | 'settings' | 'employees' | 'delete_requests' | 'loans' | 'history' | 'approvals'>('pnl');
   
   const [currentUserRole, setCurrentUserRole] = useState('');
   const [currentUserName, setCurrentUserName] = useState('');
@@ -176,6 +178,7 @@ export default function Dashboard() {
     else if (tab === 'loans') setActiveTab('loans');
     else if (tab === 'employees') setActiveTab('employees');
     else if (tab === 'delete_requests') setActiveTab('delete_requests');
+    else if (tab === 'approvals' || tab === 'persetujuan') setActiveTab('approvals');
     else if (tab === 'settings') setActiveTab('settings');
     if (panel) {
       setSettingsPanel(panel);
@@ -191,6 +194,7 @@ export default function Dashboard() {
       else if (tab === 'loans') setActiveTab('loans');
       else if (tab === 'employees') setActiveTab('employees');
       else if (tab === 'delete_requests') setActiveTab('delete_requests');
+      else if (tab === 'approvals' || tab === 'persetujuan') setActiveTab('approvals');
       else if (tab === 'settings') setActiveTab('settings');
       else if (tab === 'pnl') setActiveTab('pnl');
       if (detail.panel) {
@@ -202,17 +206,49 @@ export default function Dashboard() {
     return () => window.removeEventListener(OWNER_TAB_EVENT, onTab);
   }, []);
 
+  const staffOpsIdentity = () => {
+    try {
+      const raw = localStorage.getItem('laundry_owner_user') || localStorage.getItem('laundry_user');
+      const u = raw ? JSON.parse(raw) : {};
+      return {
+        staffId: String(u.id || u.username || ''),
+        role: String(u.role || currentUserRole || 'owner').toLowerCase(),
+        agentName: String(u.name || currentUserName || 'Owner')
+      };
+    } catch {
+      return { staffId: '', role: 'owner', agentName: currentUserName || 'Owner' };
+    }
+  };
+
+  const refreshEmployees = async () => {
+    const id = staffOpsIdentity();
+    const q = new URLSearchParams({ staffId: id.staffId, role: id.role, agentName: id.agentName });
+    const res = await fetch(`/api/owner/employees?${q}`, { headers: paymentOpsClientHeaders() });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok && Array.isArray(json.employees)) {
+      setEmployees(json.employees);
+      return;
+    }
+    // Fallback baca kolom aman (password sudah di-revoke di DB)
+    const { data } = await supabase
+      .from('employees')
+      .select('id, name, role, outlet_id, username, phone, whatsapp, basic_salary, access_outlets, assigned_outlet_ids, created_at, outlets(name)')
+      .order('created_at', { ascending: false });
+    if (data) setEmployees(data);
+  };
+
   useEffect(() => {
     
     async function loadData() {
       setIsLoading(true);
-      const { data: outletData } = await supabase.from('outlets').select('*');
+      const { data: outletData } = await supabase
+        .from('outlets')
+        .select('id, name, city, latitude, longitude, radius_meters, whatsapp_number, mayar_api_key, mayar_payout_account_id');
       if (outletData && outletData.length > 0) setOutlets(outletData);
 
-      const { data: empData } = await supabase.from('employees').select('*, outlets(name)').order('created_at', { ascending: false });
-      if (empData) setEmployees(empData);
+      await refreshEmployees();
 
-      const { data: attLogs } = await supabase.from('attendance_logs').select('*').order('created_at', { ascending: false }).limit(200);
+      const { data: attLogs } = await supabase.from('attendance_logs').select('id, employee_name, log_date, check_in, check_out, created_at').order('created_at', { ascending: false }).limit(200);
       if (attLogs) setAttendances(attLogs);
 
       let loadedSupMap = {};
@@ -242,9 +278,28 @@ export default function Dashboard() {
       const { data: delReqs } = await supabase.from('transactions').select('*, outlets(name)').eq('delete_requested', true).order('created_at', { ascending: false });
       if (delReqs) setDeleteRequests(delReqs);
 
-      let txQuery = supabase.from('transactions').select('*, outlets(name)');
-      let memQuery = supabase.from('membership_logs').select('*, outlets(name)');
-      let expQuery = supabase.from('expenses').select('*');
+      const since = new Date();
+      since.setFullYear(since.getFullYear() - 1);
+      const sinceIso = since.toISOString();
+
+      let txQuery = supabase
+        .from('transactions')
+        .select(
+          'id, outlet_id, amount, delivery_fee, order_type, service_type, customer_name, receipt_number, created_at, status, is_void, delete_requested, delete_reason, outlets(name)'
+        )
+        .gte('created_at', sinceIso)
+        .order('created_at', { ascending: false })
+        .limit(3000);
+      let memQuery = supabase
+        .from('membership_logs')
+        .select('id, outlet_id, price, package_name, customer_phone, order_type, created_at, outlets(name)')
+        .gte('created_at', sinceIso)
+        .limit(2000);
+      let expQuery = supabase
+        .from('expenses')
+        .select('id, outlet_id, amount, category, description, created_at, status')
+        .gte('created_at', sinceIso)
+        .limit(2000);
 
       const [{ data: allTxs }, { data: allMems }, { data: allExps }] = await Promise.all([txQuery, memQuery, expQuery]);
 
@@ -517,8 +572,14 @@ export default function Dashboard() {
 
   const handleUpdateEmployeeOutlet = async (empId: string, newOutletVal: string) => {
     const outletValue = newOutletVal === 'ALL' ? null : newOutletVal;
-    const { error } = await supabase.from('employees').update({ outlet_id: outletValue }).eq('id', empId);
-    if (!error) {
+    const ident = staffOpsIdentity();
+    const res = await fetch('/api/owner/employees', {
+      method: 'POST',
+      headers: paymentOpsClientHeaders(),
+      body: JSON.stringify({ ...ident, op: 'update', id: empId, outlet_id: outletValue })
+    });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok) {
       setEmployees(employees.map(emp => {
         if (emp.id === empId) {
           const matchedOutlet = outlets.find(o => o.id === newOutletVal);
@@ -527,15 +588,21 @@ export default function Dashboard() {
         return emp;
       }));
       alert('✅ Penempatan cabang karyawan berhasil diperbarui!');
-    } else alert('❌ Gagal: ' + error.message);
+    } else alert('❌ Gagal: ' + (json.error || 'error'));
   };
 
   const handleUpdateEmployeeRole = async (empId: string, newRole: string) => {
-    const { error } = await supabase.from('employees').update({ role: newRole }).eq('id', empId);
-    if (!error) {
+    const ident = staffOpsIdentity();
+    const res = await fetch('/api/owner/employees', {
+      method: 'POST',
+      headers: paymentOpsClientHeaders(),
+      body: JSON.stringify({ ...ident, op: 'update', id: empId, role: newRole })
+    });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok) {
       setEmployees(employees.map(emp => emp.id === empId ? { ...emp, role: newRole } : emp));
       alert('✅ Role/peran karyawan diperbarui!');
-    } else alert('❌ Gagal: ' + error.message);
+    } else alert('❌ Gagal: ' + (json.error || 'error'));
   };
 
   const handleMarkLoanPaid = async (id: string) => {
@@ -550,9 +617,14 @@ export default function Dashboard() {
   };
 
   const handleApproveDelete = async (txId: string) => {
-    if (!confirm('Yakin menyetujui penghapusan transaksi ini?')) return; setIsSaving(true);
-    const { error } = await supabase.from('transactions').delete().eq('id', txId);
-    if (!error) { alert('✅ Transaksi dihapus!'); setDeleteRequests(deleteRequests.filter((r) => r.id !== txId)); } else alert('❌ Gagal: ' + error.message);
+    if (!confirm('Yakin menyetujui void transaksi ini? Data tetap tersimpan (soft-void), tidak dihapus permanen.')) return;
+    setIsSaving(true);
+    const { softVoidTransaction } = await import('@/lib/voidTx');
+    const { error } = await softVoidTransaction(txId, { reason: 'Owner approve delete request', approvedBy: 'owner' });
+    if (!error) {
+      alert('✅ Transaksi di-void (jejak tetap ada untuk audit).');
+      setDeleteRequests(deleteRequests.filter((r) => r.id !== txId));
+    } else alert('❌ Gagal: ' + error.message);
     setIsSaving(false);
   };
 
@@ -569,10 +641,10 @@ export default function Dashboard() {
   };
 
   const handleAddEmployee = async (e: React.FormEvent) => {
-    e.preventDefault(); if (!newEmpName || !newEmpUsername || !newEmpPassword) return alert('Semua data wajib diisi!'); setIsSaving(true);
-    const { data: checkUser } = await supabase.from('employees').select('id').eq('username', newEmpUsername).single();
-    if (checkUser) { alert('❌ Username sudah digunakan!'); setIsSaving(false); return; }
-    
+    e.preventDefault();
+    if (!newEmpName || !newEmpUsername || !newEmpPassword) return alert('Semua data wajib diisi!');
+    setIsSaving(true);
+
     const driverOutlets = newEmpRole === 'driver' ? newEmpAccessOutlets : [];
     const singleOutletValue =
       newEmpRole === 'driver'
@@ -583,43 +655,35 @@ export default function Dashboard() {
         ? null
         : newEmpOutlet;
     const multiOutletValue = newEmpRole === 'investor' ? JSON.stringify(newEmpAccessOutlets) : '[]';
+    const id = staffOpsIdentity();
 
-    const { error } = await insertWithFallback('employees', [
-      {
+    const res = await fetch('/api/owner/employees', {
+      method: 'POST',
+      headers: paymentOpsClientHeaders(),
+      body: JSON.stringify({
+        ...id,
+        op: 'create',
         name: newEmpName,
-        outlet_id: singleOutletValue,
         username: newEmpUsername,
         password: newEmpPassword,
         role: newEmpRole,
         basic_salary: Number(newEmpSalary),
+        outlet_id: singleOutletValue,
         access_outlets: multiOutletValue,
         assigned_outlet_ids: driverOutlets.length ? driverOutlets : undefined
-      },
-      {
-        name: newEmpName,
-        outlet_id: singleOutletValue,
-        username: newEmpUsername,
-        password: newEmpPassword,
-        role: newEmpRole,
-        basic_salary: Number(newEmpSalary),
-        access_outlets: multiOutletValue
-      },
-      {
-        name: newEmpName,
-        outlet_id: singleOutletValue,
-        username: newEmpUsername,
-        password: newEmpPassword,
-        role: newEmpRole,
-        basic_salary: Number(newEmpSalary)
-      }
-    ]);
-
-    if (!error) { 
-      alert('✅ Karyawan/User ditambahkan!'); 
-      setNewEmpName(''); setNewEmpUsername(''); setNewEmpPassword(''); setNewEmpAccessOutlets([]);
-      const { data } = await supabase.from('employees').select('*, outlets(name)').order('created_at', { ascending: false }); 
-      if (data) setEmployees(data); 
-    } else alert('❌ Gagal: ' + error.message);
+      })
+    });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok) {
+      alert('✅ Karyawan/User ditambahkan!');
+      setNewEmpName('');
+      setNewEmpUsername('');
+      setNewEmpPassword('');
+      setNewEmpAccessOutlets([]);
+      await refreshEmployees();
+    } else {
+      alert('❌ Gagal: ' + (json.error || 'error'));
+    }
     setIsSaving(false);
   };
   const handleSaveEditEmployee = async (e: React.FormEvent) => {
@@ -627,41 +691,52 @@ export default function Dashboard() {
     if (!editingEmp) return;
     setIsSaving(true);
 
-    const payload: any = {
+    const id = staffOpsIdentity();
+    const payload: Record<string, unknown> = {
+      ...id,
+      op: 'update',
+      id: editingEmp.id,
       role: editEmpRole,
-      outlet_id: editEmpRole === 'driver'
-        ? (editEmpOutlets[0] || (editEmpOutlet === 'ALL' ? null : editEmpOutlet))
-        : editEmpOutlet === 'ALL'
-        ? null
-        : editEmpOutlet,
+      outlet_id:
+        editEmpRole === 'driver'
+          ? editEmpOutlets[0] || (editEmpOutlet === 'ALL' ? null : editEmpOutlet)
+          : editEmpOutlet === 'ALL'
+          ? null
+          : editEmpOutlet,
       assigned_outlet_ids: editEmpRole === 'driver' ? editEmpOutlets : undefined
     };
+    if (editEmpPassword.trim()) payload.password = editEmpPassword.trim();
 
-    if (editEmpPassword.trim()) {
-      payload.password = editEmpPassword.trim();
-    }
-
-    const { error } = await updateWithFallback(
-      'employees',
-      [payload, { role: payload.role, outlet_id: payload.outlet_id, password: payload.password }, { role: payload.role, outlet_id: payload.outlet_id }],
-      { column: 'id', value: editingEmp.id }
-    );
-
-    if (!error) {
+    const res = await fetch('/api/owner/employees', {
+      method: 'POST',
+      headers: paymentOpsClientHeaders(),
+      body: JSON.stringify(payload)
+    });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok) {
       alert('✅ Data karyawan berhasil diperbarui!');
       setEditingEmp(null);
       setEditEmpPassword('');
-      const { data } = await supabase.from('employees').select('*, outlets(name)').order('created_at', { ascending: false });
-      if (data) setEmployees(data);
+      await refreshEmployees();
     } else {
-      alert('❌ Gagal memperbarui karyawan: ' + error.message);
+      alert('❌ Gagal memperbarui karyawan: ' + (json.error || 'error'));
     }
     setIsSaving(false);
   };
   const handleDeleteEmployee = async (id: string) => {
-    if (!confirm('Yakin ingin menghapus karyawan ini?')) return; setIsSaving(true);
-    const { error } = await supabase.from('employees').delete().eq('id', id);
-    if (!error) { setEmployees(employees.filter((emp) => emp.id !== id)); alert('✅ Karyawan dihapus!'); } else alert('❌ Gagal: ' + error.message);
+    if (!confirm('Yakin ingin menghapus karyawan ini?')) return;
+    setIsSaving(true);
+    const ident = staffOpsIdentity();
+    const res = await fetch('/api/owner/employees', {
+      method: 'POST',
+      headers: paymentOpsClientHeaders(),
+      body: JSON.stringify({ ...ident, op: 'delete', id })
+    });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok) {
+      setEmployees(employees.filter((emp) => emp.id !== id));
+      alert('✅ Karyawan dihapus!');
+    } else alert('❌ Gagal: ' + (json.error || 'error'));
     setIsSaving(false);
   };
 
@@ -1388,9 +1463,11 @@ export default function Dashboard() {
               </div>
             )}
 
+            {activeTab === 'approvals' && <OwnerApprovalsTab currentUserName={currentUserName} />}
+
             {activeTab === 'delete_requests' && (
               <div className="bg-white border rounded-2xl p-4 md:p-6 space-y-4">
-                <h3 className="font-bold text-rose-600 text-sm md:text-lg">🗑️ Permintaan Hapus Transaksi</h3>
+                <h3 className="font-bold text-rose-600 text-sm md:text-lg">🗑️ Permintaan Void Transaksi</h3>
                 {deleteRequests.map((req) => (
                   <div key={req.id} className="border border-rose-200 bg-rose-50/50 rounded-xl p-3 md:p-4 flex flex-col md:flex-row justify-between gap-3">
                     <div>
@@ -1401,7 +1478,7 @@ export default function Dashboard() {
                     </div>
                     <div className="flex gap-2">
                       <button onClick={() => handleRejectDelete(req.id)} disabled={isSaving} className="flex-1 bg-slate-200 px-3 py-2 rounded-lg text-xs font-bold">Tolak</button>
-                      <button onClick={() => handleApproveDelete(req.id)} disabled={isSaving} className="flex-1 bg-rose-600 text-white px-3 py-2 rounded-lg text-xs font-bold">Hapus Permanen</button>
+                      <button onClick={() => handleApproveDelete(req.id)} disabled={isSaving} className="flex-1 bg-rose-600 text-white px-3 py-2 rounded-lg text-xs font-bold">Setujui Void</button>
                     </div>
                   </div>
                 ))}

@@ -100,7 +100,7 @@ export default function OwnerNavHost({ children }: { children: React.ReactNode }
           const onOwnerHome = pathname === '/owner' || pathname === '/owner/dashboard';
           if (onOwnerHome && !isRemoteOwnerTab(tab)) {
             if (pathname === '/owner/dashboard') {
-              window.location.href = href;
+              window.location.href = href.startsWith('/owner?') || href === '/owner' ? href : `/owner?tab=${tab}`;
               return;
             }
             window.history.pushState(null, '', href);

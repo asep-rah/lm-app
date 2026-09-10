@@ -48,7 +48,7 @@ export default function DeferredProofPhoto({
   );
 }
 
-/** Beberapa URL — satu tombol; buka foto pertama (atau via onOpenEach). */
+/** Beberapa URL — satu tombol; buka foto pertama via onOpen, atau galeri internal. */
 export function DeferredProofPhotos({
   urls,
   onOpen,
@@ -59,13 +59,42 @@ export function DeferredProofPhotos({
   className?: string;
 }) {
   const list = urls.map((u) => String(u || '').trim()).filter(Boolean);
+  const [idx, setIdx] = useState(0);
+  const [open, setOpen] = useState(false);
   if (!list.length) return null;
+
+  const openAt = (i: number) => {
+    const url = list[i] || list[0];
+    if (onOpen) {
+      onOpen(url);
+      return;
+    }
+    setIdx(i);
+    setOpen(true);
+  };
+
   return (
-    <DeferredProofPhoto
-      src={list[0]}
-      count={list.length}
-      onOpen={onOpen}
-      className={className}
-    />
+    <>
+      <div className={`inline-flex flex-wrap gap-1 ${className}`}>
+        {list.length === 1 ? (
+          <DeferredProofPhoto src={list[0]} label="Lihat foto" onOpen={() => openAt(0)} />
+        ) : (
+          list.map((url, i) => (
+            <DeferredProofPhoto
+              key={`${url.slice(0, 32)}-${i}`}
+              src={url}
+              label={`Lihat ${i + 1}`}
+              onOpen={() => openAt(i)}
+            />
+          ))
+        )}
+      </div>
+      {!onOpen && (
+        <PhotoLightbox
+          src={open ? list[idx] || null : null}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </>
   );
 }

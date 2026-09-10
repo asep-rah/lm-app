@@ -1,12 +1,9 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { insertChatMessage } from '@/lib/csChat';
-import { notifyCustomerPayment } from '@/lib/notifications';
-import { completePaymentVerifyTasks, gatewayPaidAttempts } from '@/lib/paymentVerify';
 import { isMayarPaidEvent, mayarWebhookRefs } from '@/lib/mayar';
 import { creditDepositTopup, depositPackageOf, findDepositTopup } from '@/lib/depositTopup';
 import { findCashDeposit, settleCashDeposit } from '@/lib/cashDepositQris';
-import { maybeAwardLoyalty } from '@/lib/crm-automation';
+import { markGatewayPaid } from '@/lib/paymentVerify';
 import {
   amountsMatch,
   insertErrorLog,
@@ -18,11 +15,15 @@ import {
 
 export const dynamic = 'force-dynamic';
 
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+if (!supabaseUrl || !supabaseKey) {
+  console.warn('mayar webhook: SUPABASE_SERVICE_ROLE_KEY / URL missing');
+}
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || 'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-    'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs'
+  supabaseUrl || 'https://placeholder.supabase.co',
+  supabaseKey || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'missing',
+  { auth: { persistSession: false, autoRefreshToken: false } }
 );
 
 const findTransaction = async (refs: ReturnType<typeof mayarWebhookRefs>, explicitId?: string) => {
@@ -48,33 +49,6 @@ const findTransaction = async (refs: ReturnType<typeof mayarWebhookRefs>, explic
     if (data?.[0]) return data[0];
   }
   return null;
-};
-
-const applyPaid = async (tx: any, agentName: string, paidVia = 'GATEWAY') => {
-  const attempts = gatewayPaidAttempts(agentName, paidVia);
-  let lastErr: { message: string } | null = null;
-  for (const row of attempts) {
-    const { error } = await supabase.from('transactions').update(row).eq('id', tx.id);
-    if (!error) {
-      await completePaymentVerifyTasks(tx.id, tx.receipt_number);
-      if (tx.customer_phone) {
-        const nominal = Number(tx.amount || 0).toLocaleString('id-ID');
-        await insertChatMessage({
-          customer_phone: tx.customer_phone,
-          pickup_order_id: tx.pickup_id || null,
-          transaction_id: tx.id,
-          sender_type: 'cs',
-          sender_name: agentName,
-          message: `Pembayaran QRIS sebesar Rp ${nominal} sudah terkonfirmasi (${agentName}). Cucian masuk antrean produksi.`
-        });
-        notifyCustomerPayment(tx.customer_phone);
-      }
-      maybeAwardLoyalty({ ...tx, is_paid: true, status: 'Diterima' });
-      return { error: null };
-    }
-    lastErr = { message: error.message };
-  }
-  return { error: lastErr || { message: 'Gagal update transaksi' } };
 };
 
 export async function POST(req: Request) {
@@ -175,7 +149,15 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: 'Amount mismatch' }, { status: 409 });
       }
 
-      const { error } = await applyPaid(tx, body.simulate ? 'Mayar Mock' : 'Mayar QRIS', body.simulate ? 'CHECK_STATUS' : 'GATEWAY');
+      const { error } = await markGatewayPaid({
+        transactionId: tx.id,
+        receipt: tx.receipt_number,
+        amount: Number(tx.amount || 0),
+        agentName: body.simulate ? 'Mayar Mock' : 'Mayar QRIS',
+        customerPhone: tx.customer_phone,
+        paidVia: body.simulate ? 'CHECK_STATUS' : 'GATEWAY',
+        pickupId: tx.pickup_id
+      });
       if (error) {
         await insertErrorLog({
           source: 'mayar_webhook',

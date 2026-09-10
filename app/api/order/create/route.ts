@@ -1,16 +1,22 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-import { computeServerOrderTotal, insertAuditLog, insertErrorLog, clientIp } from '@/lib/paymentSecurity';
+import { computeServerOrderTotal, insertAuditLog, insertErrorLog, clientIp, paymentServiceDb } from '@/lib/paymentSecurity';
 import { PENDING_PAY_STATUS } from '@/lib/paymentVerify';
+import { requirePaymentOpsAuth } from '@/lib/requirePaymentOpsAuth';
 
 export const dynamic = 'force-dynamic';
 
 /**
- * Server-authoritative order create — total dihitung di server, bukan dari client.
+ * Server-authoritative order create — total dihitung di server.
+ * Wajib auth ops (sama mark-manual).
  */
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
+    const auth = await requirePaymentOpsAuth(req, body, 'manual');
+    if (!auth.ok) {
+      return NextResponse.json({ error: auth.error }, { status: auth.status });
+    }
+
     const lines = Array.isArray(body.lines) ? body.lines : Array.isArray(body.items) ? body.items : [];
     const computed = computeServerOrderTotal({
       lines: lines.map((l: any) => ({
@@ -44,11 +50,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Total tidak valid' }, { status: 400 });
     }
 
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '',
-      process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
-    );
-
+    const supabase = paymentServiceDb();
     const method = String(body.payment_method || body.paymentMethod || 'QRIS');
     const nonCash = /qris|transfer/i.test(method);
     const payload: Record<string, unknown> = {
@@ -60,7 +62,7 @@ export async function POST(req: Request) {
       delivery_fee: computed.delivery,
       discount_amount: computed.discount,
       payment_method: method,
-      payment_status: nonCash ? PENDING_PAY_STATUS : 'paid',
+      payment_status: nonCash ? 'pending' : 'paid',
       is_paid: !nonCash,
       status: nonCash ? PENDING_PAY_STATUS : body.status || 'Diterima',
       receipt_number: body.receipt_number || body.receipt || `TRX-${Date.now().toString(36).toUpperCase()}`,
@@ -78,6 +80,8 @@ export async function POST(req: Request) {
     const tx = data?.[0];
     void insertAuditLog({
       action: 'ORDER_CREATE_SERVER',
+      user_name: auth.agentName,
+      role: auth.role,
       entity_type: 'transactions',
       entity_id: tx?.id,
       amount: computed.total,
@@ -88,10 +92,10 @@ export async function POST(req: Request) {
     return NextResponse.json({
       ok: true,
       transaction: tx,
-      totals: computed
+      serverTotal: computed.total
     });
   } catch (err: any) {
     await insertErrorLog({ source: 'order_create', message: err?.message || 'create failed' });
-    return NextResponse.json({ error: err?.message || 'Gagal buat order' }, { status: 500 });
+    return NextResponse.json({ error: err?.message || 'Gagal' }, { status: 500 });
   }
 }

@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { CheckCircle2, Loader2, Upload, X } from 'lucide-react';
 import { fileToCompressedDataUrl, uploadProofFile } from '@/lib/uploadProof';
+import { paymentOpsClientHeaders } from '@/lib/requirePaymentOpsAuth';
 
 type Props = {
   open: boolean;
@@ -50,7 +51,7 @@ export default function ManualMarkPaidModal({ open, order, agentName = 'CS', rol
       }
       const res = await fetch('/api/pay/mark-manual', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: paymentOpsClientHeaders(),
         body: JSON.stringify({
           transactionId: order.id,
           amount: order.amount,
@@ -58,6 +59,17 @@ export default function ManualMarkPaidModal({ open, order, agentName = 'CS', rol
           customerPhone: order.customer_phone,
           agentName,
           role,
+          staffId: typeof window !== 'undefined'
+            ? (() => {
+                try {
+                  const raw = localStorage.getItem('laundry_owner_user') || localStorage.getItem('laundry_user');
+                  const u = raw ? JSON.parse(raw) : {};
+                  return String(u.id || u.username || '');
+                } catch {
+                  return '';
+                }
+              })()
+            : '',
           note: note.trim(),
           bankRef: bankRef.trim(),
           proofUrl: url

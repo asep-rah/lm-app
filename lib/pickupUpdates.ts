@@ -81,19 +81,35 @@ export const isPickupConvertedToPos = (p: any) => {
   );
 };
 
+/** Ambil pickup untuk dikonversi POS; gagal jika sudah punya transaction_id / status POS. */
+export const claimPickupForPos = async (pickupId: string) => {
+  const { data, error } = await supabase.from('pickup_orders').select('*').eq('id', pickupId).maybeSingle();
+  if (error) return { error, pickup: null as any };
+  if (!data) return { error: new Error('Pickup tidak ditemukan'), pickup: null as any };
+  if (isPickupConvertedToPos(data)) {
+    return { error: new Error('Pickup sudah dikonversi ke nota POS'), pickup: data, already: true as const };
+  }
+  return { error: null, pickup: data, already: false as const };
+};
+
 export const markPickupConvertedToPos = async (pickupId: string, transactionId: string) => {
-  const attempts = [
+  if (!transactionId) return { error: new Error('transactionId wajib') };
+  // Prefer link transaction_id; jangan "sukses" hanya dengan status jika kolom id tersedia.
+  const withId = [
     { status: 'diproses_pos', transaction_id: transactionId },
     { status: 'pos_created', transaction_id: transactionId },
-    { status: 'diproses_pos' },
-    { status: 'pos_created' },
     { transaction_id: transactionId }
   ];
-  for (const payload of attempts) {
+  for (const payload of withId) {
     const { error } = await supabase.from('pickup_orders').update(payload).eq('id', pickupId);
-    if (!error) return { error: null };
+    if (!error) return { error: null, linked: true as const };
   }
-  return updatePickupOrder(pickupId, { status: 'diproses_pos', transaction_id: transactionId });
+  const statusOnly = await updatePickupOrder(pickupId, { status: 'diproses_pos', transaction_id: transactionId });
+  if (!statusOnly.error) {
+    console.warn('pickup→POS: transaction_id mungkin tidak tersimpan; status diproses_pos dipakai');
+    return { error: null, linked: false as const };
+  }
+  return { error: statusOnly.error || new Error('Gagal menandai pickup ke POS') };
 };
 
 /** Catatan waktu kurir ke work_logs bila ada transaction_id; gagal tidak membatalkan status. */
