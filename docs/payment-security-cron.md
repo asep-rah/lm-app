@@ -1,13 +1,28 @@
 # Cron rekonsiliasi pembayaran
 
-Jadwal ada di `vercel.json` → `GET /api/cron/sync-payments` tiap **15 menit**.
+## Batasan Vercel Hobby
+
+Akun **Hobby** hanya mengizinkan cron **sekali per hari** per job.  
+Karena itu `vercel.json` memakai jadwal harian untuk `/api/cron/sync-payments` (`10 1 * * *` UTC).
+
+Untuk catch-up pembayaran tiap **15 menit** (disarankan production):
+
+1. Pakai layanan cron eksternal (cron-job.org / EasyCron / GitHub Actions), **atau**
+2. Upgrade Vercel ke **Pro**, lalu kembalikan schedule ke `*/15 * * * *`.
+
+### Contoh hit eksternal tiap 15 menit
+
+```bash
+curl -H "Authorization: Bearer ISI_CRON_SECRET" \
+  "https://lm-coral.vercel.app/api/cron/sync-payments"
+```
 
 ## Setup Vercel
 1. Project → Settings → Environment Variables
 2. Tambah `CRON_SECRET` (string rahasia panjang, Production + Preview)
 3. Redeploy
 
-Vercel Cron otomatis memanggil endpoint dengan header:
+Vercel Cron mengirim header:
 `Authorization: Bearer <CRON_SECRET>`
 
 ## Uji manual
@@ -16,7 +31,7 @@ curl -H "Authorization: Bearer ISI_CRON_SECRET" \
   "https://domain-anda.vercel.app/api/cron/sync-payments"
 ```
 
-Lokal (tanpa secret): cukup buka `/api/cron/sync-payments` saat `NODE_ENV=development`.
+Lokal (tanpa secret): buka `/api/cron/sync-payments` saat `NODE_ENV=development`.
 
 ## Env terkait pembayaran
 - `MAYAR_API_KEY` (fallback; utamakan key per outlet di tabel `outlets`)

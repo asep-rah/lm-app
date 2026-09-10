@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/cron/sync-payments",
-      "schedule": "*/15 * * * *"
+      "schedule": "10 1 * * *"
     },
     {
       "path": "/api/cron/crm-retention",
