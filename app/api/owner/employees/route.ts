@@ -7,7 +7,10 @@ import { sanitizePublicError } from '@/lib/supabaseEnv';
 export const dynamic = 'force-dynamic';
 
 const EMP_SAFE =
-  'id, name, role, outlet_id, username, phone, whatsapp, basic_salary, access_outlets, assigned_outlet_ids, created_at, outlets(id, name)';
+  'id, name, role, outlet_id, username, basic_salary, access_outlets, assigned_outlet_ids, created_at, outlets(id, name)';
+const EMP_SAFE_MIN =
+  'id, name, role, outlet_id, username, basic_salary, access_outlets, assigned_outlet_ids, created_at';
+const EMP_SAFE_BARE = 'id, name, role, outlet_id, username, basic_salary, created_at';
 
 async function authOwner(req: Request, body: Record<string, unknown> = {}) {
   const url = new URL(req.url);
@@ -40,10 +43,17 @@ export async function GET(req: Request) {
 
   try {
     const db = paymentServiceDb();
-    const { data, error } = await db
-      .from('employees')
-      .select(EMP_SAFE)
-      .order('created_at', { ascending: false });
+    let data: any[] | null = null;
+    let error: { message?: string } | null = null;
+    for (const cols of [EMP_SAFE, EMP_SAFE_MIN, EMP_SAFE_BARE]) {
+      const res = await db.from('employees').select(cols).order('created_at', { ascending: false });
+      if (!res.error) {
+        data = res.data;
+        error = null;
+        break;
+      }
+      error = res.error;
+    }
     if (error) return fail(error.message, 500);
     return NextResponse.json({ employees: data || [] });
   } catch (e: any) {
@@ -92,8 +102,6 @@ export async function POST(req: Request) {
         'role',
         'outlet_id',
         'username',
-        'phone',
-        'whatsapp',
         'basic_salary',
         'access_outlets',
         'assigned_outlet_ids'
@@ -139,8 +147,7 @@ export async function POST(req: Request) {
     };
     if (body.access_outlets !== undefined) row.access_outlets = body.access_outlets;
     if (body.assigned_outlet_ids !== undefined) row.assigned_outlet_ids = body.assigned_outlet_ids;
-    if (body.phone !== undefined) row.phone = body.phone;
-    if (body.whatsapp !== undefined) row.whatsapp = body.whatsapp;
+    // phone/whatsapp opsional — banyak DB production belum punya kolom ini
 
     const attempts = [
       row,
@@ -160,6 +167,13 @@ export async function POST(req: Request) {
         role,
         outlet_id: row.outlet_id,
         basic_salary: row.basic_salary
+      },
+      {
+        name,
+        username,
+        password: row.password,
+        role,
+        outlet_id: row.outlet_id
       }
     ];
 
@@ -167,12 +181,20 @@ export async function POST(req: Request) {
     let created: any = null;
     for (const attempt of attempts) {
       const clean = Object.fromEntries(Object.entries(attempt).filter(([, v]) => v !== undefined));
-      const { data, error } = await db.from('employees').insert([clean]).select(EMP_SAFE).maybeSingle();
-      if (!error) {
-        created = data;
-        break;
+      let rowErr: string | null = null;
+      for (const cols of [EMP_SAFE_MIN, EMP_SAFE_BARE, 'id, name, role, username']) {
+        const { data, error } = await db.from('employees').insert([clean]).select(cols).maybeSingle();
+        if (!error) {
+          created = data;
+          rowErr = null;
+          break;
+        }
+        rowErr = error.message;
+        lastErr = error.message;
+        if (!/does not exist/i.test(error.message)) break;
       }
-      lastErr = error.message;
+      if (created) break;
+      if (rowErr && !/does not exist/i.test(rowErr)) break;
     }
     if (!created) return fail(lastErr || 'Gagal insert', 400);
 

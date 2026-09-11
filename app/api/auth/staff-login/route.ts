@@ -5,10 +5,10 @@ import { paymentServiceDb } from '@/lib/paymentSecurity';
 export const dynamic = 'force-dynamic';
 
 const EMP_LOGIN_SELECT =
-  'id, name, role, outlet_id, username, password, phone, whatsapp, access_outlets, assigned_outlet_ids, basic_salary, outlets(id, name)';
+  'id, name, role, outlet_id, username, password, access_outlets, assigned_outlet_ids, basic_salary, outlets(id, name)';
 
 const EMP_LOGIN_SELECT_MIN =
-  'id, name, role, outlet_id, username, password, phone, whatsapp, access_outlets, assigned_outlet_ids, basic_salary';
+  'id, name, role, outlet_id, username, password, access_outlets, assigned_outlet_ids, basic_salary';
 
 /** Login staf server-side — password dicek di server; plaintext legacy di-upgrade ke hash. */
 export async function POST(req: Request) {

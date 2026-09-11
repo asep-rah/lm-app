@@ -242,7 +242,7 @@ export default function Dashboard() {
     // Fallback baca kolom aman (password sudah di-revoke di DB)
     const { data } = await supabase
       .from('employees')
-      .select('id, name, role, outlet_id, username, phone, whatsapp, basic_salary, access_outlets, assigned_outlet_ids, created_at, outlets(name)')
+      .select('id, name, role, outlet_id, username, basic_salary, access_outlets, assigned_outlet_ids, created_at, outlets(name)')
       .order('created_at', { ascending: false });
     if (data) setEmployees(data);
   };
