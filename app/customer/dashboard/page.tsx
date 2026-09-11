@@ -22,7 +22,7 @@ import { fileToCompressedDataUrl, uploadChatAttachment, uploadProofFile } from '
 import { displayItemAmount, kiloanLineTotal } from '@/lib/kiloanPrice';
 import { formatEstSelesai, formatTrxId } from '@/lib/posQueue';
 import { DEPOSIT_PACKAGES, depositBonusOf, depositPackageShort } from '@/lib/depositTopup';
-import { simulateMayarAutoPay } from '@/lib/mayar';
+import { requestMayarInvoice, simulateMayarAutoPay } from '@/lib/mayar';
 import {
   complaintStepOf,
   customerRespondComplaint,
@@ -317,7 +317,14 @@ function CustomerDashboardPage() {
   const [showEstimateInfoModal, setShowEstimateInfoModal] = useState(false);
   const [latestCreatedOrder, setLatestCreatedOrder] = useState<any>(null);
   const [showOrderSuccessModal, setShowOrderSuccessModal] = useState(false);
-  const [pendingCashierInvoice, setPendingCashierInvoice] = useState<any>(null);
+  const [pendingCashierInvoice, setPendingCashierInvoice] = useState<any[]>([]);
+  const [detailPayCharge, setDetailPayCharge] = useState<{
+    qrisUrl?: string;
+    invoiceUrl?: string;
+    paymentId?: string;
+    mock?: boolean;
+  } | null>(null);
+  const [detailPayBusy, setDetailPayBusy] = useState(false);
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -1288,6 +1295,9 @@ function CustomerDashboardPage() {
 
   setActiveOrders(mergedActive);
 
+  const unpaidBills = mergedActive.filter((o: any) => isPaymentLocked(o));
+  setPendingCashierInvoice(unpaidBills);
+
   const withProofPhotos = (row: any, pickup?: any) => ({
     ...row,
     photo_pickup_url: row.photo_pickup_url || pickup?.photo_pickup_url || pickup?.photo_url || row.photo_url,
@@ -1982,6 +1992,11 @@ function CustomerDashboardPage() {
           <div className="text-center">
             <h2 className="text-base font-extrabold text-slate-900">Masuk Aplikasi</h2>
             <p className="text-xs text-slate-600 mt-1">Ketik Nomor WhatsApp Anda untuk melihat saldo deposit & status pesanan.</p>
+            {outletQuery ? (
+              <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mt-3 text-left leading-relaxed">
+                Anda scan QR outlet. Login dengan nomor WhatsApp yang dipakai saat order di kasir untuk melihat & membayar tagihan pending — tanpa menunggu konfirmasi CS.
+              </p>
+            ) : null}
           </div>
           <input
             type="tel"
@@ -2026,6 +2041,43 @@ function CustomerDashboardPage() {
         <>
           {activeTab === 'home' && (
             <div className="space-y-4">
+              {Array.isArray(pendingCashierInvoice) && pendingCashierInvoice.length > 0 && (
+                <div className="rounded-3xl border border-amber-200 bg-amber-50 p-4 space-y-3 shadow-sm">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-wide text-amber-700">Tagihan menunggu pembayaran</p>
+                    <p className="text-xs text-amber-900 mt-0.5">
+                      Ada {pendingCashierInvoice.length} tagihan dari kasir/outlet. Bayar di sini seperti order PWA — CS tidak wajib konfirmasi.
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    {pendingCashierInvoice.slice(0, 5).map((bill: any) => (
+                      <button
+                        key={bill.id}
+                        type="button"
+                        onClick={() => setDetailOrder(bill)}
+                        className="w-full text-left bg-white border border-amber-100 rounded-2xl px-3 py-2.5 hover:border-amber-300 transition"
+                      >
+                        <div className="flex justify-between gap-2 items-start">
+                          <div>
+                            <p className="text-xs font-extrabold text-slate-900">{bill.receipt_number || bill.id}</p>
+                            <p className="text-[10px] text-slate-500">{bill.service_type || 'Laundry'} · {bill.payment_method || 'QRIS'}</p>
+                          </div>
+                          <p className="text-xs font-black text-amber-800 whitespace-nowrap">
+                            Rp {Number(bill.amount || 0).toLocaleString('id-ID')}
+                          </p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('chat')}
+                    className="w-full text-[11px] font-bold text-indigo-700 underline"
+                  >
+                    Buka Live Chat (invoice QRIS)
+                  </button>
+                </div>
+              )}
               <div className="grid grid-cols-3 gap-2">
                 <LoyaltyProfileCard
                   phone={customerPhone}
@@ -3593,7 +3645,7 @@ function CustomerDashboardPage() {
 
 {/* ================= MODAL POPUP DETAIL ITEM & STATUS ================= */}
 {detailOrder && (
-  <div className="fixed inset-0 z-[55] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => { setDetailOrder(null); setComplaintOpen(false); setReviewOpen(false); }}>
+  <div className="fixed inset-0 z-[55] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => { setDetailOrder(null); setDetailPayCharge(null); setComplaintOpen(false); setReviewOpen(false); }}>
     <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
       
       {/* Header */}
@@ -3608,6 +3660,7 @@ function CustomerDashboardPage() {
           type="button"
           onClick={() => {
             setDetailOrder(null);
+            setDetailPayCharge(null);
             setComplaintOpen(false);
             setReviewOpen(false);
           }}
@@ -3631,15 +3684,68 @@ function CustomerDashboardPage() {
                 : ''}
           </p>
           {isPaymentLocked(detailOrder) ? (
-            <CheckPaymentStatusButton
-              orderId={String(detailOrder.id)}
-              className="w-full mt-1"
-              onPaid={() => {
-                setDetailOrder((prev: any) =>
-                  prev ? { ...prev, is_paid: true, payment_status: 'paid', status: 'Diterima' } : prev
-                );
-              }}
-            />
+            <div className="mt-2 space-y-2">
+              <p className="text-[10px] text-amber-800 font-semibold">
+                Bayar via QRIS Mayar di bawah. Setelah lunas, status diperbarui otomatis (CS opsional).
+              </p>
+              {detailPayCharge?.qrisUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={detailPayCharge.qrisUrl}
+                  alt="QRIS pembayaran"
+                  className="w-40 h-40 mx-auto bg-white rounded-xl border object-contain"
+                />
+              ) : null}
+              {detailPayCharge?.invoiceUrl ? (
+                <a
+                  href={detailPayCharge.invoiceUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="block text-center text-[11px] font-bold text-sky-700"
+                >
+                  Buka tautan pembayaran
+                </a>
+              ) : null}
+              <button
+                type="button"
+                disabled={detailPayBusy}
+                onClick={async () => {
+                  setDetailPayBusy(true);
+                  try {
+                    const charge = await requestMayarInvoice({
+                      amount: Number(detailOrder.amount || detailOrder.price || 0),
+                      name: `Laundrivery ${detailOrder.receipt_number || ''}`.trim(),
+                      description: `Tagihan ${detailOrder.receipt_number || ''}`.trim(),
+                      mobile: cleanPhone(customerPhone) || undefined,
+                      receipt: detailOrder.receipt_number,
+                      transactionId: detailOrder.id,
+                      outletId: detailOrder.outlet_id || selectedOutlet || undefined
+                    });
+                    setDetailPayCharge(charge);
+                    toast(charge.mock ? 'QRIS uji coba siap discan.' : 'QRIS siap discan dari e-wallet.', 'ok');
+                  } catch (e: any) {
+                    toast(e?.message || 'Gagal membuat QRIS', 'err');
+                  } finally {
+                    setDetailPayBusy(false);
+                  }
+                }}
+                className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-[11px] font-extrabold py-2.5"
+              >
+                {detailPayBusy ? 'Menyiapkan QRIS…' : detailPayCharge ? 'Generate ulang QRIS' : 'Bayar dengan QRIS'}
+              </button>
+              <CheckPaymentStatusButton
+                orderId={String(detailOrder.id)}
+                className="w-full"
+                onPaid={() => {
+                  setDetailOrder((prev: any) =>
+                    prev ? { ...prev, is_paid: true, payment_status: 'paid', status: 'Diterima' } : prev
+                  );
+                  setDetailPayCharge(null);
+                  setPendingCashierInvoice((prev) => prev.filter((b) => String(b.id) !== String(detailOrder.id)));
+                  if (customerPhone) fetchCustomerProfile(customerPhone);
+                }}
+              />
+            </div>
           ) : null}
         </div>
 

@@ -12,16 +12,27 @@ import OutletIssueForm from '@/components/OutletIssueForm';
 import OutletGroupChatDrawer from '@/components/OutletGroupChatDrawer';
 import PosBottomNavbar, { type PosTab } from '@/components/pos/PosBottomNavbar';
 import { isOnlineOrderType, logCashflow, logInventoryChange, payBucket, writeSubmission } from '@/lib/posSync';
+import { isCancelledOrVoided, isVoidTransaction } from '@/lib/voidTx';
 import { updatePickupOrder, markPickupConvertedToPos, claimPickupForPos } from '@/lib/pickupUpdates';
 import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
 import { uploadProofFile } from '@/lib/uploadProof';
 import { cartLineAmount } from '@/lib/kiloanPrice';
+import { assertPosQtyReady } from '@/lib/posQtyGate';
+import {
+  findCustomerByPhone,
+  maskPhone,
+  searchCustomersByLast4,
+  upsertCustomerOnOrder,
+  type CustomerHit
+} from '@/lib/customerLookup';
+import { canonicalPhone } from '@/lib/csChat';
 import FileProofInput from '@/components/FileProofInput';
 import { createPaymentVerifyTask, isCsVerifiedPaid, isNonCashVerifyMethod, isPaymentLocked, PENDING_PAY_STATUS } from '@/lib/paymentVerify';
 import { sendInvoiceToLiveChat } from '@/lib/chatInvoice';
-import { simulateMayarAutoPay } from '@/lib/mayar';
+import { requestMayarInvoice, simulateMayarAutoPay } from '@/lib/mayar';
 import { paymentOpsClientHeaders } from '@/lib/requirePaymentOpsAuth';
 import { toast } from '@/lib/toast';
+import WalkInPaySuccessModal from '@/components/pos/WalkInPaySuccessModal';
 import { parseReceiptLayout, DEFAULT_RECEIPT_LAYOUT, type ReceiptLayout } from '@/lib/receiptLayout';
 import { notifyCustomerStatus } from '@/lib/notifications';
 import { loadFreshCrmProfile, maybeAwardLoyalty } from '@/lib/crm-automation';
@@ -706,6 +717,8 @@ const handleApplyLoan = async (e: React.FormEvent) => {
   const [deliveryFee, setDeliveryFee] = useState('');
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
+  const [phoneLast4Matches, setPhoneLast4Matches] = useState<CustomerHit[]>([]);
+  const [phoneLookupBusy, setPhoneLookupBusy] = useState(false);
   const [customerDeposit, setCustomerDeposit] = useState<number | null>(null);
   const [customerHistory, setCustomerHistory] = useState<any[]>([]);
   
@@ -800,6 +813,8 @@ const handleApplyLoan = async (e: React.FormEvent) => {
   // MODAL DETAIL TRANSAKSI & FORM EDIT KASIR
   const [selectedTxDetail, setSelectedTxDetail] = useState<any>(null);
   const [createdTxSuccess, setCreatedTxSuccess] = useState<any>(null);
+  const [cashReceivedOk, setCashReceivedOk] = useState(false);
+  const qrisPaidHandledRef = useRef<string | null>(null);
   const [txWorkLogs, setTxWorkLogs] = useState<any[]>([]);
   const [txWasherCycles, setTxWasherCycles] = useState<any[]>([]);
 
@@ -891,8 +906,14 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     if (!isPcs && qty <= 0) {
       return alert('⚠️ Isi berat (Kg) hasil timbangan terlebih dahulu sebelum menambahkan ke keranjang!');
     }
-
     const pcsExtra = !isPcs ? Number(inputQtyPcs) || Number(pcsCount) || 0 : 0;
+    if (!isPcs && pcsExtra <= 0) {
+      return alert('⚠️ Order kiloan wajib isi jumlah Pcs juga (hitung potongan) sebelum ditambahkan!');
+    }
+    if (isPcs && qty <= 0) {
+      return alert('⚠️ Order satuan wajib isi jumlah Pcs sebelum ditambahkan!');
+    }
+
     const newItem = {
       id: Math.random().toString(),
       name: targetService,
@@ -900,7 +921,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       basePrice: basePrice,
       price: finalUnitPrice,
       qty: qty,
-      pcs: isPcs ? qty : pcsExtra || undefined,
+      pcs: isPcs ? qty : pcsExtra,
       category: activeSvc?.category || activeSvc?.type || '',
       note: [inputItemNote, pcsNote].filter(Boolean).join(' · '),
       machineMode: inferMachineMode({
@@ -1207,19 +1228,50 @@ const handleApplyLoan = async (e: React.FormEvent) => {
 
   useEffect(() => {
     async function checkCustDeposit() {
-      const normalizedPhone = cleanPhone(customerPhone);
-      if (!normalizedPhone || normalizedPhone.length < 8) {
-        setCustomerDeposit(null); setCustomerHistory([]); setLoyaltyProfile(null); setLoyaltyRedeem(0); return;
+      const digits = String(customerPhone || '').replace(/\D/g, '');
+      const normalizedPhone = cleanPhone(customerPhone) || canonicalPhone(customerPhone);
+
+      // Mode 4 digit terakhir: tampilkan daftar konfirmasi nama
+      if (digits.length === 4) {
+        setPhoneLookupBusy(true);
+        try {
+          const matches = await searchCustomersByLast4(digits);
+          setPhoneLast4Matches(matches);
+        } finally {
+          setPhoneLookupBusy(false);
+        }
+        setCustomerDeposit(null);
+        setCustomerHistory([]);
+        return;
       }
-      const { data: custData } = await supabase.from('customers').select('name, deposit_balance').eq('phone', normalizedPhone).limit(1);
-      let foundName = ''; let currentDeposit = 0;
-      if (custData && custData.length > 0) {
-        currentDeposit = Number(custData[0].deposit_balance) || 0;
-        foundName = custData[0].name || '';
+
+      setPhoneLast4Matches([]);
+
+      if (!normalizedPhone || normalizedPhone.length < 8) {
+        setCustomerDeposit(null);
+        setCustomerHistory([]);
+        setLoyaltyProfile(null);
+        setLoyaltyRedeem(0);
+        return;
+      }
+
+      const hit = await findCustomerByPhone(normalizedPhone);
+      let foundName = '';
+      let currentDeposit = 0;
+      if (hit) {
+        currentDeposit = Number(hit.deposit_balance) || 0;
+        foundName = hit.name || '';
         setCustomerDeposit(currentDeposit);
-        if (foundName) setCustomerName(foundName);
+        if (foundName && (!customerName.trim() || customerName.trim().toLowerCase() === 'pelanggan')) {
+          setCustomerName(foundName);
+        } else if (foundName) {
+          setCustomerName(foundName);
+        }
       } else {
-        const { data: memLogs } = await supabase.from('membership_logs').select('balance_added').eq('customer_phone', normalizedPhone);
+        const { data: memLogs } = await supabase
+          .from('membership_logs')
+          .select('balance_added')
+          .eq('customer_phone', normalizedPhone);
         if (memLogs && memLogs.length > 0) {
           const totalFromLogs = memLogs.reduce((acc, curr) => acc + (Number(curr.balance_added) || 0), 0);
           setCustomerDeposit(totalFromLogs);
@@ -1230,22 +1282,50 @@ const handleApplyLoan = async (e: React.FormEvent) => {
         setSplitAmount1(currentDeposit.toString());
       }
 
-      const oneYearAgo = new Date(); oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+      const oneYearAgo = new Date();
+      oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+      const phoneKeys = [
+        normalizedPhone,
+        hit?.phone,
+        normalizedPhone.startsWith('62') ? '0' + normalizedPhone.slice(2) : null
+      ].filter(Boolean) as string[];
       const [{ data: txHist }, { data: memHist }] = await Promise.all([
-        foundName ? supabase.from('transactions').select('receipt_number, created_at, amount, service_type, status').eq('customer_name', foundName).gte('created_at', oneYearAgo.toISOString()).order('created_at', { ascending: false }).limit(10) : Promise.resolve({ data: [] }),
-        supabase.from('membership_logs').select('package_name, created_at, price, balance_added').eq('customer_phone', normalizedPhone).gte('created_at', oneYearAgo.toISOString()).order('created_at', { ascending: false }).limit(10)
+        supabase
+          .from('transactions')
+          .select('receipt_number, created_at, amount, service_type, status')
+          .in('customer_phone', phoneKeys.length ? phoneKeys : [normalizedPhone])
+          .gte('created_at', oneYearAgo.toISOString())
+          .order('created_at', { ascending: false })
+          .limit(10),
+        supabase
+          .from('membership_logs')
+          .select('package_name, created_at, price, balance_added')
+          .eq('customer_phone', normalizedPhone)
+          .gte('created_at', oneYearAgo.toISOString())
+          .order('created_at', { ascending: false })
+          .limit(10)
       ]);
       let combinedHistory: any[] = [];
-      txHist?.forEach((t: any) => combinedHistory.push({ type: 'Cucian', title: `${t.service_type} (${t.receipt_number})`, amount: t.amount, date: t.created_at, status: t.status }));
-      memHist?.forEach((m: any) => combinedHistory.push({
-        type: String(m.package_name || '').toLowerCase().includes('top up') ? 'Top Up Deposit' : 'Top-Up Member',
-        title: String(m.package_name || '').toLowerCase().includes('top up')
-          ? `${m.package_name} · QRIS Mayar (+Rp ${Number(m.balance_added).toLocaleString('id-ID')})`
-          : `Paket ${m.package_name} (+Rp ${Number(m.balance_added).toLocaleString('id-ID')})`,
-        amount: m.price,
-        date: m.created_at,
-        status: 'LUNAS'
-      }));
+      txHist?.forEach((t: any) =>
+        combinedHistory.push({
+          type: 'Cucian',
+          title: `${t.service_type} (${t.receipt_number})`,
+          amount: t.amount,
+          date: t.created_at,
+          status: t.status
+        })
+      );
+      memHist?.forEach((m: any) =>
+        combinedHistory.push({
+          type: String(m.package_name || '').toLowerCase().includes('top up') ? 'Top Up Deposit' : 'Top-Up Member',
+          title: String(m.package_name || '').toLowerCase().includes('top up')
+            ? `${m.package_name} · QRIS Mayar (+Rp ${Number(m.balance_added).toLocaleString('id-ID')})`
+            : `Paket ${m.package_name} (+Rp ${Number(m.balance_added).toLocaleString('id-ID')})`,
+          amount: m.price,
+          date: m.created_at,
+          status: 'LUNAS'
+        })
+      );
       combinedHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       setCustomerHistory(combinedHistory);
 
@@ -1259,9 +1339,20 @@ const handleApplyLoan = async (e: React.FormEvent) => {
         setLoyaltyProfile(null);
       }
     }
-    const timer = setTimeout(() => { checkCustDeposit(); }, 300);
+    const timer = setTimeout(() => {
+      void checkCustDeposit();
+    }, 350);
     return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customerPhone]);
+
+  const selectReturningCustomer = (hit: CustomerHit) => {
+    const phone = hit.phone || '';
+    setCustomerPhone(phone.startsWith('62') ? '0' + phone.slice(2) : phone);
+    setCustomerName(hit.name || '');
+    setPhoneLast4Matches([]);
+    toast(`Pelanggan dipilih: ${hit.name}`, 'ok');
+  };
 
   const handleOutletChange = (outletId: string) => {
     setSelectedOutlet(outletId); 
@@ -1328,6 +1419,8 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     const unique = merged.filter((o) => {
       if (!o?.id || seen.has(o.id)) return false;
       seen.add(o.id);
+      // Order yang sudah di-void / dibatalkan owner tidak masuk antrian kerja.
+      if (isCancelledOrVoided(o)) return false;
       return true;
     });
 
@@ -1344,6 +1437,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
 
   const stillIncoming = (incomingPkps || []).filter((p: any) => {
     const s = String(p.status || '').toLowerCase();
+    if (s.includes('batal') || s.includes('cancel') || s.includes('void')) return false;
     if (s.includes('tiba') || s.includes('diterima') || s.includes('kasir')) return false;
     if (s.includes('sortir') || s.includes('cuci') || s.includes('ering') || s.includes('setrika') || s.includes('pack') || s.includes('siap')) return false;
     if (s.includes('selesai')) return false;
@@ -1352,7 +1446,18 @@ const handleApplyLoan = async (e: React.FormEvent) => {
   setIncomingPickups(stillIncoming);
   setIncomingPickupsCount(stillIncoming.length);
 
-    const { data: txData } = await supabase.from('transactions').select('amount, order_type, created_at, payment_method').eq('outlet_id', selectedOutlet);
+    const { data: txDataRaw, error: txSelErr } = await supabase
+      .from('transactions')
+      .select('amount, order_type, created_at, payment_method, status, is_void, delete_requested')
+      .eq('outlet_id', selectedOutlet);
+    let txData: any[] | null = txDataRaw;
+    if (txSelErr) {
+      const retry = await supabase
+        .from('transactions')
+        .select('amount, order_type, created_at, payment_method, status')
+        .eq('outlet_id', selectedOutlet);
+      txData = retry.data;
+    }
     const { data: memLogsAll } = await supabase.from('membership_logs').select('price, order_type, created_at').eq('outlet_id', selectedOutlet);
 
     const isSameDay = (iso: any) => {
@@ -1369,6 +1474,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     let onlineCount = 0;
 
     txData?.forEach((tx) => {
+      if (isVoidTransaction(tx)) return;
       const d = new Date(tx.created_at);
       const amt = Number(tx.amount) || 0;
       if (d.getMonth() === currentMonth && d.getFullYear() === currentYear) { totalRev += amt; }
@@ -1638,12 +1744,42 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       const cartSummaryArr: string[] = [];
 
       cartItems.forEach(item => {
-        if (item.type === 'kg') totalKgSum += item.qty;
-        else totalPcsSum += item.qty;
+        if (item.type === 'kg') {
+          totalKgSum += item.qty;
+          totalPcsSum += Number(item.pcs) || 0;
+        } else {
+          totalPcsSum += item.qty;
+        }
         cartSummaryArr.push(`${item.name} x${item.qty} ${item.type.toUpperCase()}${item.note ? ` (${item.note})` : ''}`);
       });
 
       combinedNotes = `[Rincian Items]: ${cartSummaryArr.join(' | ')}${notes ? ` | Note: ${notes}` : ''}`;
+    }
+
+    const activeSvcForQty = services.find(
+      (s) =>
+        (s.name || '').trim().toLowerCase() ===
+        (primaryServiceLabel || selectedServiceInput || serviceType || '').trim().toLowerCase()
+    );
+    const qtyGate = assertPosQtyReady({
+      weight_kg: totalKgSum,
+      pcs_count: totalPcsSum,
+      items: cartItems.length
+        ? cartItems.map((it) => ({
+            type: it.type,
+            qty: it.qty,
+            weight: it.type === 'kg' ? it.qty : 0,
+            pcs: it.pcs,
+            name: it.name
+          }))
+        : null,
+      isSatuanService: cartItems.length
+        ? cartItems.every((it) => it.type === 'pcs')
+        : activeSvcForQty?.type === 'pcs'
+    });
+    if (!qtyGate.ok) {
+      setIsSubmitting(false);
+      return alert(`⚠️ ${qtyGate.message}`);
     }
 
     const needsPayVerify = isNonCashVerifyMethod(finalPaymentMethodLabel);
@@ -1674,8 +1810,10 @@ const handleApplyLoan = async (e: React.FormEvent) => {
           }))
         : [{
             name: primaryServiceLabel,
-            qty: totalPcsSum || 1,
+            type: activeSvcForQty?.type === 'pcs' ? ('pcs' as const) : ('kg' as const),
+            qty: activeSvcForQty?.type === 'pcs' ? (totalPcsSum || 1) : (totalKgSum || 0),
             weight: totalKgSum || 0,
+            pcs: totalPcsSum || 0,
             machineMode: inferMachineMode({ name: primaryServiceLabel, machineMode: defaultMachineMode }),
             washerId: null,
             washerName: null,
@@ -1781,6 +1919,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       }
     }
     if (!error && newTx) {
+      let mayarCharge: Awaited<ReturnType<typeof requestMayarInvoice>> | null = null;
       if (needsPayVerify) {
         await updateWithFallback(
           'transactions',
@@ -1790,6 +1929,23 @@ const handleApplyLoan = async (e: React.FormEvent) => {
           ],
           { column: 'id', value: newTx.id }
         );
+        const isQrisPay = String(finalPaymentMethodLabel).toLowerCase().includes('qris');
+        if (isQrisPay) {
+          try {
+            mayarCharge = await requestMayarInvoice({
+              amount: totalPay,
+              name: `Laundrivery ${generatedResi}`.trim(),
+              description: `Tagihan ${generatedResi} ${primaryServiceLabel}`.trim(),
+              mobile: normalizedPhone || customerPhone || undefined,
+              receipt: generatedResi,
+              transactionId: newTx.id,
+              outletId: selectedOutlet
+            });
+          } catch (e: any) {
+            console.warn('Mayar QRIS POS:', e?.message);
+            toast(e?.message || 'Gagal membuat QRIS Mayar — tagihan tetap dibuat.', 'warn');
+          }
+        }
         await createPaymentVerifyTask({
           id: newTx.id,
           receipt_number: generatedResi,
@@ -1797,7 +1953,8 @@ const handleApplyLoan = async (e: React.FormEvent) => {
           customer_phone: normalizedPhone || customerPhone || undefined,
           amount: totalPay,
           payment_method: finalPaymentMethodLabel,
-          outlet_id: selectedOutlet
+          outlet_id: selectedOutlet,
+          notifyCustomer: !isQrisPay
         });
         if (normalizedPhone || customerPhone) {
           await sendInvoiceToLiveChat(
@@ -1806,7 +1963,8 @@ const handleApplyLoan = async (e: React.FormEvent) => {
               customer_phone: normalizedPhone || customerPhone,
               outlet_id: selectedOutlet
             },
-            employeeName || 'Kasir'
+            employeeName || 'Kasir',
+            mayarCharge || undefined
           ).catch((e) => console.warn('invoice chat:', e));
         }
       }
@@ -1854,11 +2012,24 @@ const handleApplyLoan = async (e: React.FormEvent) => {
           })
         );
       }
-      
+
+      const isCashWalkIn =
+        orderType === 'Offline' && String(paymentMethod).toLowerCase() === 'cash';
+      qrisPaidHandledRef.current = null;
+      setCashReceivedOk(false);
       setCreatedTxSuccess({
         ...newTx,
         customer_phone: customerPhone || null,
         outletPhone: curOutletPhone,
+        payment_method: finalPaymentMethodLabel,
+        needs_qris: needsPayVerify && String(finalPaymentMethodLabel).toLowerCase().includes('qris'),
+        needs_cash_confirm: isCashWalkIn,
+        qris_url: mayarCharge?.qrisUrl || null,
+        invoice_url: mayarCharge?.invoiceUrl || null,
+        mayar_payment_id: mayarCharge?.paymentId || null,
+        mayar_mock: Boolean(mayarCharge?.mock),
+        items: cycleItems,
+        bag_count: Number(bagCount) || cycleItems.length || 1,
         is_paid: !needsPayVerify,
         payment_status: needsPayVerify ? 'pending' : 'paid'
       });
@@ -1899,7 +2070,15 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     }
       setCustomerOrder(null);
       clearPickupPrefill();
-      setAmount(''); setCustomerName(''); setCustomerPhone(''); setWeightKg(''); setPcsCount(''); setNotes(''); setDiscountValue(''); setLoyaltyRedeem(0); setAppliedLoyaltyRedeem(0); setLoyaltyProfile(null); setCartItems([]); setSplitPerBag(false); setDeliveryFee(orderType === 'Online' ? '0' : '');
+      if (normalizedPhone && (customerName || '').trim()) {
+        void upsertCustomerOnOrder({
+          phone: normalizedPhone,
+          name: customerName,
+          outletId: selectedOutlet,
+          registeredBy: employeeName
+        }).catch((e) => console.warn('upsert customer:', e));
+      }
+      setAmount(''); setCustomerName(''); setCustomerPhone(''); setPhoneLast4Matches([]); setWeightKg(''); setPcsCount(''); setNotes(''); setDiscountValue(''); setLoyaltyRedeem(0); setAppliedLoyaltyRedeem(0); setLoyaltyProfile(null); setCartItems([]); setSplitPerBag(false); setDeliveryFee(orderType === 'Online' ? '0' : '');
       setHomeModal(null);
       refreshData();
     } else alert('❌ Gagal: ' + error?.message);
@@ -2932,15 +3111,110 @@ const handleStatusChange = async (
   const tenureBonusAmount = Math.round(calcStats.productionPay * tenureBonusRate);
   const totalTakeHomePay = Math.max(0, baseSalaryUsed + tenureBonusAmount + calcStats.membershipBonus - empLoansDeduction - empPenaltiesDeduction);
 
+  const handleWalkInQrisPaid = async (tx: any) => {
+    if (!tx?.id) return;
+    if (qrisPaidHandledRef.current === tx.id) {
+      setCreatedTxSuccess((prev: any) => (prev?.id === tx.id ? { ...prev, is_paid: true, payment_status: 'paid', needs_qris: true } : prev));
+      return;
+    }
+    qrisPaidHandledRef.current = tx.id;
+    setCreatedTxSuccess((prev: any) =>
+      prev?.id === tx.id ? { ...prev, is_paid: true, payment_status: 'paid', needs_qris: true } : prev
+    );
+    try {
+      const { data: existingCycles } = await supabase
+        .from('washer_cycle_logs')
+        .select('id')
+        .eq('order_id', tx.id)
+        .limit(1);
+      const cycleItems = Array.isArray(tx.items) ? tx.items : Array.isArray(lastOrderInfo?.cartItems) ? lastOrderInfo.cartItems : [];
+      if (!existingCycles?.length) {
+        const createdCycles = await createWasherCycles({
+          db: supabase as any,
+          orderId: tx.id,
+          outletId: selectedOutlet || tx.outlet_id,
+          items: cycleItems,
+          splitPerBag,
+          bagCount: Number(tx.bag_count) || cycleItems.length || 1,
+          startedBy: employeeId
+        });
+        setBagStickers(
+          buildBagStickers(tx.id, Number(tx.bag_count) || cycleItems.length || 1, cycleItems, {
+            receipt: tx.receipt_number,
+            customerName: tx.customer_name || 'Pelanggan',
+            orderId: tx.id,
+            cycles: createdCycles.cycles
+          })
+        );
+      }
+      await logCashflow({
+        outlet_id: selectedOutlet || tx.outlet_id,
+        type: 'income',
+        source: 'pos',
+        amount: Number(tx.amount) || 0,
+        payment_method: tx.payment_method || 'QRIS',
+        reference_id: tx.id,
+        note: `POS ${tx.receipt_number || ''} · QRIS lunas`,
+        actor_name: employeeName
+      });
+      refreshData();
+    } catch (e: any) {
+      console.warn('post-QRIS paid:', e?.message);
+    }
+  };
+
   const handlePrintReceiptAuto = () => {
+    if (createdTxSuccess?.needs_cash_confirm && !cashReceivedOk) {
+      toast('Konfirmasi uang diterima dulu sebelum cetak struk.', 'warn');
+      return;
+    }
+    if (createdTxSuccess?.needs_qris && !createdTxSuccess?.is_paid) {
+      toast('Tunggu QRIS lunas sebelum cetak struk.', 'warn');
+      return;
+    }
+    const qtyGate = assertPosQtyReady({
+      weight_kg: createdTxSuccess?.weight_kg,
+      pcs_count: createdTxSuccess?.pcs_count,
+      items: createdTxSuccess?.items,
+      cartItems: createdTxSuccess?.cartItems || lastOrderInfo?.cartItems,
+      isSatuanService: Array.isArray(createdTxSuccess?.items)
+        ? createdTxSuccess.items.every((it: any) => String(it?.type || '').toLowerCase() === 'pcs')
+        : undefined
+    });
+    if (!qtyGate.ok) {
+      toast(qtyGate.message, 'warn');
+      return;
+    }
     setCreatedTxSuccess(null);
     setSelectedTxDetail(null);
+    setCashReceivedOk(false);
     setPrintMode('receipt');
     setTimeout(() => window.print(), 200);
   };
   const handlePrintBagStickersNow = async (tx?: any) => {
     const src = tx || lastOrderInfo || createdTxSuccess || selectedTxDetail;
     if (!src) return;
+    if (src?.needs_cash_confirm && !cashReceivedOk && src === createdTxSuccess) {
+      toast('Konfirmasi uang diterima dulu sebelum cetak stiker.', 'warn');
+      return;
+    }
+    if (src?.needs_qris && !src?.is_paid) {
+      toast('Tunggu QRIS lunas sebelum cetak stiker.', 'warn');
+      return;
+    }
+    const qtyGate = assertPosQtyReady({
+      weight_kg: src.weight_kg ?? editWeightKg,
+      pcs_count: src.pcs_count ?? editPcsCount,
+      items: src.items,
+      cartItems: src.cartItems,
+      isSatuanService: Array.isArray(src.items)
+        ? src.items.every((it: any) => String(it?.type || '').toLowerCase() === 'pcs')
+        : undefined
+    });
+    if (!qtyGate.ok) {
+      toast(qtyGate.message, 'warn');
+      return;
+    }
     const items = Array.isArray(src.items) ? src.items : Array.isArray(src.cartItems) ? src.cartItems : [];
     const n = Math.max(1, Number(src.bag_count) || Number(bagCount) || items.length || bagStickers.length || 1);
     let cycles: any[] = [];
@@ -2971,6 +3245,22 @@ const handleStatusChange = async (
 
   const handlePrintReceiptFromTx = (tx: any) => {
     const rawItems = Array.isArray(tx.items) ? tx.items : Array.isArray(tx.cartItems) ? tx.cartItems : [];
+    const qtyGate = assertPosQtyReady({
+      weight_kg: tx.weight_kg,
+      pcs_count: tx.pcs_count,
+      items: rawItems,
+      isSatuanService: rawItems.length
+        ? rawItems.every((it: any) => String(it?.type || '').toLowerCase() === 'pcs')
+        : services.find(
+            (s) =>
+              (s.name || '').trim().toLowerCase() ===
+              String(tx.service_type || editServiceType || '').trim().toLowerCase()
+          )?.type === 'pcs'
+    });
+    if (!qtyGate.ok) {
+      toast(qtyGate.message, 'warn');
+      return;
+    }
     setLastOrderInfo({
       ...tx,
       cartItems: rawItems.length ? rawItems : null,
@@ -3257,46 +3547,34 @@ const handleStatusChange = async (
       )}
 
       {/* POP-UP STRUK SETELAH TRANSAKSI MASUK */}
-      {createdTxSuccess && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in print:hidden">
-          <div className="bg-white rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl border border-slate-200">
-            <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center text-3xl mx-auto font-black">
-              ✅
-            </div>
-            <div>
-              <h3 className="text-lg font-black text-slate-900">Orderan Berhasil Dibuat!</h3>
-              <p className="text-xs text-slate-500 mt-1">No. Resi: <b className="text-indigo-600 font-mono">{createdTxSuccess.receipt_number}</b></p>
-            </div>
-            <div className="bg-slate-50 p-3 rounded-2xl border text-xs text-left space-y-1">
-              <p><b>Pelanggan:</b> {createdTxSuccess.customer_name} ({createdTxSuccess.customer_phone || customerPhone || '-'})</p>
-              <p><b>Est. Selesai:</b> {getEstDate(createdTxSuccess.created_at, createdTxSuccess.duration)}</p>
-              <p><b>Layanan:</b> {createdTxSuccess.service_type}</p>
-              <p><b>Total:</b> Rp {Number(createdTxSuccess.amount).toLocaleString('id-ID')}</p>
-            </div>
-            <div className="space-y-2 pt-2">
-              <button
-                onClick={() => { handlePrintReceiptAuto(); }}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl text-xs shadow-md transition flex items-center justify-center gap-2"
-              >
-                🖨️ CETAK STRUK / NOTA
-              </button>
-              <button
-                type="button"
-                onClick={() => handlePrintBagStickersNow(createdTxSuccess)}
-                className="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-md transition"
-              >
-                🏷️ Cetak Stiker Kantong
-              </button>
-              <button
-                onClick={() => setCreatedTxSuccess(null)}
-                className="w-full bg-slate-200 text-slate-700 font-bold py-2.5 rounded-xl text-xs hover:bg-slate-300 transition"
-              >
-                Tutup Saja
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {createdTxSuccess && (() => {
+        const qtyGate = assertPosQtyReady({
+          weight_kg: createdTxSuccess.weight_kg,
+          pcs_count: createdTxSuccess.pcs_count,
+          items: createdTxSuccess.items,
+          cartItems: createdTxSuccess.cartItems
+        });
+        return (
+        <WalkInPaySuccessModal
+          tx={createdTxSuccess}
+          estDateLabel={getEstDate(createdTxSuccess.created_at, createdTxSuccess.duration)}
+          cashReceivedOk={cashReceivedOk}
+          qtyReady={qtyGate.ok}
+          qtyBlockMessage={qtyGate.ok ? undefined : qtyGate.message}
+          onCashReceived={() => {
+            setCashReceivedOk(true);
+            toast('Uang tunai dikonfirmasi diterima. Silakan cetak struk.', 'ok');
+          }}
+          onPaid={handleWalkInQrisPaid}
+          onPrintReceipt={handlePrintReceiptAuto}
+          onPrintStickers={() => handlePrintBagStickersNow(createdTxSuccess)}
+          onClose={() => {
+            setCreatedTxSuccess(null);
+            setCashReceivedOk(false);
+          }}
+        />
+        );
+      })()}
 
       {/* MODAL EDIT & DETAIL TRANSAKSI POS */}
       {selectedTxDetail && (
@@ -3736,9 +4014,60 @@ const handleStatusChange = async (
                 <button type="button" onClick={() => setOrderType('Online')} className={`flex-1 py-2.5 text-[10px] md:text-xs font-bold rounded-lg ${orderType === 'Online' ? 'bg-indigo-600 text-white shadow' : 'text-slate-500'}`}>🌐 WhatsApp</button>
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div><label className="block text-[10px] font-bold text-slate-500 mb-1">Nomor WhatsApp Pelanggan</label><input type="tel" placeholder="Ketik 08..." value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} className="w-full border border-indigo-200 bg-indigo-50 text-indigo-800 rounded-xl px-3 py-3 text-xs md:text-sm font-bold" /></div>
-                <div><label className="block text-[10px] font-bold text-slate-500 mb-1">Nama Pelanggan (Otomatis)</label><input type="text" placeholder="Ketik Nama" value={customerName} onChange={(e) => setCustomerName(e.target.value)} className="w-full border rounded-xl px-3 py-3 text-xs md:text-sm" required /></div>
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-1">Nomor WhatsApp Pelanggan</label>
+                    <input
+                      type="tel"
+                      inputMode="numeric"
+                      placeholder="08… atau 4 digit terakhir"
+                      value={customerPhone}
+                      onChange={(e) => setCustomerPhone(e.target.value)}
+                      className="w-full border border-indigo-200 bg-indigo-50 text-indigo-800 rounded-xl px-3 py-3 text-xs md:text-sm font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 mb-1">Nama Pelanggan (Otomatis)</label>
+                    <input
+                      type="text"
+                      placeholder="Terisi otomatis jika sudah pernah order"
+                      value={customerName}
+                      onChange={(e) => setCustomerName(e.target.value)}
+                      className="w-full border rounded-xl px-3 py-3 text-xs md:text-sm"
+                      required
+                    />
+                  </div>
+                </div>
+                <p className="text-[10px] text-slate-500 leading-relaxed">
+                  Pelanggan lama: tanya 4 digit terakhir nomor WA → pilih nama yang cocok. Nomor lengkap: nama terisi otomatis.
+                </p>
+                {String(customerPhone || '').replace(/\D/g, '').length === 4 && (
+                  <div className="rounded-2xl border border-indigo-200 bg-indigo-50/80 p-3 space-y-2">
+                    <p className="text-[10px] font-black uppercase text-indigo-800">
+                      {phoneLookupBusy ? 'Mencari pelanggan…' : 'Konfirmasi pelanggan (4 digit terakhir)'}
+                    </p>
+                    {!phoneLookupBusy && phoneLast4Matches.length === 0 && (
+                      <p className="text-[11px] text-slate-600">Tidak ada yang cocok. Ketik nomor lengkap atau isi nama baru.</p>
+                    )}
+                    {phoneLast4Matches.map((hit) => (
+                      <button
+                        key={`${hit.phone}-${hit.name}`}
+                        type="button"
+                        onClick={() => selectReturningCustomer(hit)}
+                        className="w-full text-left bg-white border border-indigo-100 hover:border-indigo-400 rounded-xl px-3 py-2.5 transition"
+                      >
+                        <p className="text-xs font-extrabold text-slate-900">
+                          Atas nama {hit.name}?
+                        </p>
+                        <p className="text-[10px] text-slate-500 font-mono mt-0.5">
+                          {maskPhone(hit.phone)}
+                          {hit.source === 'transactions' ? ' · dari riwayat order' : ''}
+                        </p>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
               
               {customerOrder && (
@@ -3933,19 +4262,22 @@ const handleStatusChange = async (
                 <input
                   type="number"
                   step="0.1"
-                  placeholder="Berat (Kg)"
+                  placeholder="Berat (Kg) *"
                   value={inputQtyKg || weightKg}
                   onChange={(e) => setInputQtyKg(e.target.value)}
                   className="w-full bg-white border border-slate-200 text-slate-900 text-sm font-bold rounded-xl p-3 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
                 />
                 <input
                   type="number"
-                  placeholder="Jumlah (Pcs)"
+                  placeholder="Jumlah (Pcs) *"
                   value={inputQtyPcs || pcsCount}
                   onChange={(e) => setInputQtyPcs(e.target.value)}
                   className="w-full bg-white border border-slate-200 text-slate-900 text-sm font-bold rounded-xl p-3 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
                 />
               </div>
+              <p className="text-[10px] text-slate-500 -mt-1">
+                Kiloan: wajib Kg + Pcs. Satuan: cukup Pcs (Kg boleh kosong).
+              </p>
 
               <input
                 type="text"

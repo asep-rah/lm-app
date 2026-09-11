@@ -407,8 +407,8 @@ export default function DriverDashboard() {
           <div className="space-y-4">
             {!duty && !isLoading && (
               <div className="text-center py-10 border border-dashed border-slate-200 rounded-2xl text-slate-400 bg-white">
-                <p className="text-sm font-black text-slate-700">Clock-in dulu</p>
-                <p className="text-[10px] mt-1 px-6">Pilih cabang bertugas lalu clock-in untuk menerima antrean jemput/antar.</p>
+                <p className="text-sm font-black text-slate-700">Check-in dulu</p>
+                <p className="text-[10px] mt-1 px-6">Pilih cabang bertugas lalu check-in untuk menerima antrean jemput/antar.</p>
               </div>
             )}
             {duty && pickups.map((p, index) => (

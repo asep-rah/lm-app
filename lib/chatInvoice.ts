@@ -106,27 +106,31 @@ export async function sendInvoiceToLiveChat(
     amount?: number;
     outlets?: { name?: string };
   },
-  agentName?: string
+  agentName?: string,
+  preCharge?: { qrisUrl?: string; invoiceUrl?: string; mock?: boolean; paymentId?: string }
 ) {
   const phone = canonicalPhone(String(tx.customer_phone || '')) || String(tx.customer_phone || '').trim();
-  if (!phone) return { error: { message: 'Nomor pelanggan tidak ditemukan' } };
-  let charge: { qrisUrl?: string; invoiceUrl?: string; mock?: boolean } | undefined;
-  try {
-    charge = await requestMayarInvoice({
-      amount: Number(tx.amount) || 0,
-      name: `Laundrivery ${tx.receipt_number || ''}`.trim(),
-      description: `Tagihan ${tx.receipt_number || ''} ${tx.service_type || ''}`.trim(),
-      mobile: phone,
-      receipt: tx.receipt_number,
-      transactionId: tx.id,
-      outletId: tx.outlet_id
-    });
-  } catch (e: any) {
-    console.warn('Mayar invoice fallback QR lokal:', e?.message);
+  if (!phone) return { error: { message: 'Nomor pelanggan tidak ditemukan' }, charge: preCharge || null };
+  let charge: { qrisUrl?: string; invoiceUrl?: string; mock?: boolean; paymentId?: string } | undefined =
+    preCharge;
+  if (!charge?.invoiceUrl && !charge?.qrisUrl) {
+    try {
+      charge = await requestMayarInvoice({
+        amount: Number(tx.amount) || 0,
+        name: `Laundrivery ${tx.receipt_number || ''}`.trim(),
+        description: `Tagihan ${tx.receipt_number || ''} ${tx.service_type || ''}`.trim(),
+        mobile: phone,
+        receipt: tx.receipt_number,
+        transactionId: tx.id,
+        outletId: tx.outlet_id
+      });
+    } catch (e: any) {
+      console.warn('Mayar invoice fallback QR lokal:', e?.message);
+    }
   }
   const pickupOrderId = await resolvePickupOrderId(tx);
   const txRef = tx.id && UUID_RE.test(String(tx.id)) ? String(tx.id) : null;
-  return insertChatMessage({
+  const inserted = await insertChatMessage({
     customer_phone: phone,
     pickup_order_id: pickupOrderId,
     transaction_id: txRef,
@@ -134,4 +138,5 @@ export async function sendInvoiceToLiveChat(
     sender_name: agentName || 'CS',
     message: buildInvoiceChatBody(tx, charge)
   });
+  return { ...inserted, charge: charge || null };
 }

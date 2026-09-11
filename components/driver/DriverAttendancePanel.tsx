@@ -75,18 +75,18 @@ export default function DriverAttendancePanel({
     setBusy(true);
     const { data, error } = await clockInDriver({ driverId, driverName, outletId });
     setBusy(false);
-    if (error) return toast(error.message || 'Gagal clock-in.', 'err');
+    if (error) return toast(error.message || 'Gagal check-in.', 'err');
     applyShift(data);
-    toast('Clock-in berhasil. Siap menerima tugas cabang ini.', 'ok');
+    toast('Check-in berhasil. Siap menerima tugas cabang ini.', 'ok');
   };
 
   const handleOut = async () => {
     setBusy(true);
     const { error } = await clockOutDriver(driverId);
     setBusy(false);
-    if (error) return toast(error.message || 'Gagal clock-out.', 'err');
+    if (error) return toast(error.message || 'Gagal check-out.', 'err');
     applyShift(null);
-    toast('Clock-out. Status OFF DUTY.', 'ok');
+    toast('Check-out. Status OFF DUTY.', 'ok');
   };
 
   return (
@@ -135,7 +135,7 @@ export default function DriverAttendancePanel({
           onClick={handleOut}
           className="w-full bg-slate-800 hover:bg-slate-900 text-white font-black text-xs py-3 rounded-xl inline-flex items-center justify-center gap-1.5 disabled:opacity-50"
         >
-          <LogOut className="w-3.5 h-3.5" /> Clock-Out
+          <LogOut className="w-3.5 h-3.5" /> Check-out
         </button>
       ) : (
         <button
@@ -144,7 +144,7 @@ export default function DriverAttendancePanel({
           onClick={handleIn}
           className="w-full bg-sky-600 hover:bg-sky-700 text-white font-black text-xs py-3 rounded-xl inline-flex items-center justify-center gap-1.5 disabled:opacity-50"
         >
-          <LogIn className="w-3.5 h-3.5" /> Clock-In
+          <LogIn className="w-3.5 h-3.5" /> Check-in
         </button>
       )}
     </div>

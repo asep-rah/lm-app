@@ -158,6 +158,31 @@ export async function clockInDriver(opts: {
   const driverId = String(opts.driverId || '');
   const outletId = String(opts.outletId || '');
   if (!driverId || !outletId) return { data: null, error: { message: 'Driver dan outlet wajib.' } };
+
+  // Prefer API service-role (lolos RLS). Fallback ke insert client bila API belum siap.
+  try {
+    const res = await fetch('/api/driver/attendance', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'check_in',
+        driverId,
+        driverName: opts.driverName || null,
+        outletId
+      })
+    });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok && (json.shift || json.ok)) {
+      persistActiveOutlet(outletId);
+      return { data: mapShift(json.shift || { ...json, driver_id: driverId, active_outlet_id: outletId, status: 'ON_DUTY' }), error: null };
+    }
+    if (res.status !== 404 && res.status !== 503) {
+      return { data: null, error: { message: json.error || 'Gagal check-in.' } };
+    }
+  } catch {
+    /* fallback client */
+  }
+
   await clockOutDriver(driverId);
   const now = new Date().toISOString();
   const row = {
@@ -173,13 +198,41 @@ export async function clockInDriver(opts: {
     { driver_id: driverId, driver_name: opts.driverName || null, active_outlet_id: outletId, clock_in_at: now, status: 'ON_DUTY' },
     { driver_id: driverId, active_outlet_id: outletId, status: 'ON_DUTY' }
   ]);
-  if (result.error) return { data: null, error: result.error };
+  if (result.error) {
+    const msg = String(result.error.message || '');
+    if (msg.toLowerCase().includes('row-level security')) {
+      return {
+        data: null,
+        error: {
+          message:
+            'Check-in ditolak RLS. Jalankan docs/sql/fix_driver_attendance_rls.sql di Supabase, atau pastikan SUPABASE_SERVICE_ROLE_KEY di Vercel.'
+        }
+      };
+    }
+    return { data: null, error: result.error };
+  }
   persistActiveOutlet(outletId);
   return { data: mapShift(result.data?.[0] || row), error: null };
 }
 
 export async function clockOutDriver(driverId: string): Promise<{ error: { message: string } | null }> {
   if (!driverId) return { error: null };
+
+  try {
+    const res = await fetch('/api/driver/attendance', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'check_out', driverId })
+    });
+    const json = await res.json().catch(() => ({}));
+    if (res.ok) return { error: null };
+    if (res.status !== 404 && res.status !== 503) {
+      return { error: { message: json.error || 'Gagal check-out.' } };
+    }
+  } catch {
+    /* fallback client */
+  }
+
   const now = new Date().toISOString();
   const { error } = await supabase
     .from('driver_attendance')
@@ -191,6 +244,14 @@ export async function clockOutDriver(driverId: string): Promise<{ error: { messa
   }
   if (error && (schemaMisses(error, 'driver_attendance') || schemaMisses(error, 'status'))) {
     return { error: null };
+  }
+  if (error && String(error.message || '').toLowerCase().includes('row-level security')) {
+    return {
+      error: {
+        message:
+          'Check-out ditolak RLS. Jalankan docs/sql/fix_driver_attendance_rls.sql di Supabase, atau pastikan SUPABASE_SERVICE_ROLE_KEY di Vercel.'
+      }
+    };
   }
   return { error: error ? { message: error.message } : null };
 }

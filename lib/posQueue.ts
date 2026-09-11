@@ -1,4 +1,5 @@
 import { stageKeyOf } from '@/lib/stageTimeline';
+import { isCancelledOrVoided } from '@/lib/voidTx';
 
 export function parseOrderItems(raw: unknown): any[] {
   if (!raw) return [];
@@ -23,15 +24,24 @@ export const isReadyPickupStatus = (status: any) => stageKeyOf(status) === 'siap
 
 export const isProductionStatus = (status: any) => {
   const key = stageKeyOf(status);
+  const raw = String(status || '').toLowerCase();
+  if (raw.includes('batal') || raw.includes('cancel') || raw.includes('void')) return false;
   return key !== 'siap' && key !== 'selesai';
 };
 
-export type QueueBucket = 'proses' | 'ambil' | 'selesai';
+export type QueueBucket = 'proses' | 'ambil' | 'selesai' | 'void';
 
 /** Proses = masih produksi. Ambil = semua item sudah packing+racking. Selesai = sudah diserahkan/diantar. */
 export const classifyQueueOrder = (order: any): QueueBucket => {
+  if (isCancelledOrVoided(order)) return 'void';
   if (isHandoverDoneStatus(order?.status)) return 'selesai';
   const statuses = itemStatuses(order);
+  if (statuses.every((s) => {
+    const raw = String(s || '').toLowerCase();
+    return raw.includes('batal') || raw.includes('cancel') || raw.includes('void');
+  }) && statuses.length > 0) {
+    return 'void';
+  }
   if (statuses.some(isProductionStatus)) return 'proses';
   if (statuses.every((s) => isReadyPickupStatus(s) || isHandoverDoneStatus(s))) return 'ambil';
   return 'proses';

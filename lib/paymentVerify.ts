@@ -44,6 +44,8 @@ export async function createPaymentVerifyTask(tx: {
   amount?: number;
   payment_method?: string;
   outlet_id?: string;
+  /** false = jangan kirim chat "unggah bukti" (mis. QRIS Mayar sudah ada invoice). */
+  notifyCustomer?: boolean;
 }) {
   if (!tx?.id) return { error: new Error('Transaksi kosong') };
 
@@ -80,7 +82,7 @@ export async function createPaymentVerifyTask(tx: {
     }
   ]);
 
-  if (tx.customer_phone) {
+  if (tx.customer_phone && tx.notifyCustomer !== false) {
     await insertChatMessage({
       customer_phone: canonicalPhone(tx.customer_phone) || tx.customer_phone,
       pickup_order_id: tx.pickup_id || null,

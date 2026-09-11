@@ -627,13 +627,16 @@ export default function Dashboard() {
   };
 
   const handleApproveDelete = async (txId: string) => {
-    if (!confirm('Yakin menyetujui void transaksi ini? Data tetap tersimpan (soft-void), tidak dihapus permanen.')) return;
+    if (!confirm('Yakin menyetujui void transaksi ini? Data tetap tersimpan (soft-void). Omset & antrian proses akan dikoreksi.')) return;
     setIsSaving(true);
     const { softVoidTransaction } = await import('@/lib/voidTx');
-    const { error } = await softVoidTransaction(txId, { reason: 'Owner approve delete request', approvedBy: 'owner' });
+    const { error } = await softVoidTransaction(txId, {
+      reason: 'Owner approve delete request',
+      approvedBy: currentUserName || 'owner'
+    });
     if (!error) {
-      alert('✅ Transaksi di-void (jejak tetap ada untuk audit).');
-      setDeleteRequests(deleteRequests.filter((r) => r.id !== txId));
+      alert('✅ Transaksi di-void. Hilang dari proses pengerjaan & tidak dihitung omset.');
+      setDeleteRequests((prev) => prev.filter((r) => r.id !== txId));
     } else alert('❌ Gagal: ' + error.message);
     setIsSaving(false);
   };
@@ -1318,6 +1321,54 @@ export default function Dashboard() {
                         <input type="text" placeholder="ID rekening pencairan Mayar" value={newOutletMayarPayout} onChange={(e) => setNewOutletMayarPayout(e.target.value)} className="w-full border border-emerald-300 rounded-xl p-2.5 text-xs font-mono text-slate-800 bg-white" />
                       </div>
 
+                      {selectedOutletToEdit !== 'NEW' && (
+                        <div className="rounded-2xl border border-emerald-300 bg-white p-3 space-y-2">
+                          <p className="text-[10px] font-black uppercase text-emerald-900">QR Akrilik Outlet (PWA Customer)</p>
+                          <p className="text-[10px] text-slate-600 leading-relaxed">
+                            Cetak QR ini, pasang di akrilik outlet. Customer buru-buru diarahkan scan → masuk PWA → login WhatsApp → tagihan pending muncul otomatis (sama seperti order dari PWA).
+                          </p>
+                          {(() => {
+                            const origin =
+                              typeof window !== 'undefined'
+                                ? window.location.origin
+                                : 'https://lm-coral.vercel.app';
+                            const pwaUrl = `${origin}/customer/dashboard?outlet=${encodeURIComponent(selectedOutletToEdit)}`;
+                            const qrImg = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(pwaUrl)}`;
+                            return (
+                              <>
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={qrImg}
+                                  alt={`QR outlet ${newOutletName || selectedOutletToEdit}`}
+                                  className="w-44 h-44 mx-auto bg-white border rounded-xl object-contain"
+                                />
+                                <p className="text-[9px] font-mono text-slate-500 break-all text-center">{pwaUrl}</p>
+                                <div className="grid grid-cols-2 gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      void navigator.clipboard?.writeText(pwaUrl);
+                                      alert('Link PWA outlet disalin.');
+                                    }}
+                                    className="bg-slate-100 hover:bg-slate-200 text-slate-800 text-[10px] font-bold py-2 rounded-xl"
+                                  >
+                                    Salin link
+                                  </button>
+                                  <a
+                                    href={qrImg}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold py-2 rounded-xl text-center"
+                                  >
+                                    Buka / cetak QR
+                                  </a>
+                                </div>
+                              </>
+                            );
+                          })()}
+                        </div>
+                      )}
+
                       <div className="grid grid-cols-2 gap-2">
                         <div>
                           <label className="text-[9px] font-bold text-emerald-800 block mb-1">Latitude (GPS)</label>
@@ -1422,7 +1473,7 @@ export default function Dashboard() {
                     <div className="border border-indigo-200 bg-indigo-50 p-3 rounded-xl space-y-2">
                       <p className="text-[10px] font-bold text-indigo-900">
                         {newEmpRole === 'driver'
-                          ? '✅ Cabang yang boleh dipilih driver saat clock-in:'
+                          ? '✅ Cabang yang boleh dipilih driver saat check-in:'
                           : '✅ Beri Akses Cabang Ke Investor Ini:'}
                       </p>
                       <div className="max-h-40 overflow-y-auto space-y-1">
@@ -1565,7 +1616,7 @@ export default function Dashboard() {
               </select>
               {editEmpRole === 'driver' ? (
                 <div className="border border-indigo-200 bg-indigo-50 p-3 rounded-xl space-y-2 max-h-40 overflow-y-auto">
-                  <p className="text-[10px] font-bold text-indigo-900">Cabang clock-in driver</p>
+                  <p className="text-[10px] font-bold text-indigo-900">Cabang check-in driver</p>
                   {outlets.map((o) => (
                     <label key={o.id} className="flex items-center gap-2 text-xs text-indigo-800 font-medium bg-white p-2 rounded border border-indigo-100 cursor-pointer">
                       <input
