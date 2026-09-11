@@ -19,7 +19,10 @@ export const isPaymentLocked = (order: any) => {
   if (['paid', 'lunas', 'verified'].includes(pay)) return false;
   if (st === 'paid' || st.includes('lunas')) return false;
   if (st.includes('menunggu_pembayaran') || st.includes('menunggu pembayaran')) return true;
-  return pay === 'pending' || pay === 'menunggu';
+  if (pay === 'pending' || pay === 'menunggu') return true;
+  // QRIS/Transfer tanpa flag lunas → kunci produksi
+  if (isNonCashVerifyMethod(order?.payment_method) && order?.is_paid !== true) return true;
+  return false;
 };
 
 export const isCsVerifiedPaid = (order: any) => {

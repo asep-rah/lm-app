@@ -1646,6 +1646,13 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       combinedNotes = `[Rincian Items]: ${cartSummaryArr.join(' | ')}${notes ? ` | Note: ${notes}` : ''}`;
     }
 
+    const needsPayVerify = isNonCashVerifyMethod(finalPaymentMethodLabel);
+    const paidAtCounter =
+      !needsPayVerify &&
+      (String(finalPaymentMethodLabel).toLowerCase().includes('cash') ||
+        String(finalPaymentMethodLabel).toLowerCase().includes('tunai') ||
+        String(finalPaymentMethodLabel).toLowerCase().includes('deposit'));
+
     const orderData = {
       receipt_number: generatedResi,
       outlet_id: selectedOutlet,
@@ -1680,33 +1687,42 @@ const handleApplyLoan = async (e: React.FormEvent) => {
             splitPerBag
           }],
       payment_method: finalPaymentMethodLabel,
-      status: isNonCashVerifyMethod(finalPaymentMethodLabel) ? PENDING_PAY_STATUS : 'Diterima',
+      status: needsPayVerify ? PENDING_PAY_STATUS : 'Diterima',
+      payment_status: needsPayVerify ? 'pending' : 'paid',
+      is_paid: !needsPayVerify,
       by_sortir: employeeName
     };
-    const needsPayVerify = isNonCashVerifyMethod(finalPaymentMethodLabel);
 
     let { data: newTx, error } = await supabase.from('transactions').insert([orderData]).select('*, outlets(name, whatsapp_number)').single();
-    if (error && needsPayVerify) {
-      // Jangan fallback ke Diterima — tetap pending bayar (kolom opsional mungkin gagal)
+    if (error) {
       const slim = { ...orderData } as Record<string, unknown>;
       delete slim.paid_via;
       delete slim.mayar_payment_id;
       delete slim.mayar_invoice_url;
+      if (String(error.message || '').includes('is_paid')) delete slim.is_paid;
+      if (String(error.message || '').includes('payment_status')) delete slim.payment_status;
+      const retryPayload = needsPayVerify
+        ? { ...slim, status: PENDING_PAY_STATUS, payment_status: 'pending' }
+        : { ...slim, status: 'Diterima' };
       const retry = await supabase
         .from('transactions')
-        .insert([{ ...slim, status: PENDING_PAY_STATUS, payment_status: 'pending' }])
+        .insert([retryPayload])
         .select('*, outlets(name, whatsapp_number)')
         .single();
       newTx = retry.data;
       error = retry.error;
-    } else if (error && !needsPayVerify) {
-      const retry = await supabase
-        .from('transactions')
-        .insert([{ ...orderData, status: 'Diterima' }])
-        .select('*, outlets(name, whatsapp_number)')
-        .single();
-      newTx = retry.data;
-      error = retry.error;
+      if (error && !needsPayVerify) {
+        const bare = { ...slim };
+        delete bare.is_paid;
+        delete bare.payment_status;
+        const retry2 = await supabase
+          .from('transactions')
+          .insert([{ ...bare, status: 'Diterima' }])
+          .select('*, outlets(name, whatsapp_number)')
+          .single();
+        newTx = retry2.data;
+        error = retry2.error;
+      }
     }
     let nextDepositBal: number | null = null;
     if (!error && newTx && appliedLoyaltyRedeem > 0 && normalizedPhone) {
@@ -1793,36 +1809,50 @@ const handleApplyLoan = async (e: React.FormEvent) => {
         customer_phone: customerPhone || null,
         outletName: outletName, 
         outletPhone: curOutletPhone,
+        by_sortir: employeeName,
         remainingDeposit: nextDepositBal != null ? nextDepositBal : (depositDeductionAmount > 0 ? customerDeposit : null), 
         created_at: newTx.created_at 
       });
       const cycleItems = (orderData.items as any[]) || [];
-      const createdCycles = await createWasherCycles({
-        db: supabase as any,
-        orderId: newTx.id,
-        outletId: selectedOutlet,
-        items: cycleItems,
-        splitPerBag,
-        bagCount: Number(bagCount) || cycleItems.length || 1,
-        startedBy: employeeId
-      });
-      const stickers = buildBagStickers(
-        newTx.id,
-        Number(bagCount) || cycleItems.length || 1,
-        cycleItems,
-        {
-          receipt: newTx.receipt_number || generatedResi,
-          customerName: customerName || 'Pelanggan',
+      // Produksi / siklus mesin hanya setelah lunas (Cash/Deposit di kasir, atau QRIS setelah Mayar).
+      if (!needsPayVerify) {
+        const createdCycles = await createWasherCycles({
+          db: supabase as any,
           orderId: newTx.id,
-          cycles: createdCycles.cycles
-        }
-      );
-      setBagStickers(stickers);
+          outletId: selectedOutlet,
+          items: cycleItems,
+          splitPerBag,
+          bagCount: Number(bagCount) || cycleItems.length || 1,
+          startedBy: employeeId
+        });
+        const stickers = buildBagStickers(
+          newTx.id,
+          Number(bagCount) || cycleItems.length || 1,
+          cycleItems,
+          {
+            receipt: newTx.receipt_number || generatedResi,
+            customerName: customerName || 'Pelanggan',
+            orderId: newTx.id,
+            cycles: createdCycles.cycles
+          }
+        );
+        setBagStickers(stickers);
+      } else {
+        setBagStickers(
+          buildBagStickers(newTx.id, Number(bagCount) || cycleItems.length || 1, cycleItems, {
+            receipt: newTx.receipt_number || generatedResi,
+            customerName: customerName || 'Pelanggan',
+            orderId: newTx.id
+          })
+        );
+      }
       
       setCreatedTxSuccess({
         ...newTx,
         customer_phone: customerPhone || null,
-        outletPhone: curOutletPhone
+        outletPhone: curOutletPhone,
+        is_paid: !needsPayVerify,
+        payment_status: needsPayVerify ? 'pending' : 'paid'
       });
 
       const logPay = async (amt: number, method: string, note: string) => {
@@ -1837,13 +1867,16 @@ const handleApplyLoan = async (e: React.FormEvent) => {
           actor_name: employeeName
         });
       };
-      if (paymentMethod === 'Split Payment') {
-        const amt1 = Number(splitAmount1) || 0;
-        const amt2 = Math.max(0, totalPay - amt1);
-        await logPay(amt1, splitMethod1, `POS ${generatedResi} · ${splitMethod1}`);
-        if (amt2 > 0) await logPay(amt2, splitMethod2, `POS ${generatedResi} · ${splitMethod2}`);
-      } else {
-        await logPay(totalPay, finalPaymentMethodLabel, `POS ${generatedResi}`);
+      // Jangan catat omset untuk QRIS pending — baru setelah lunas.
+      if (!needsPayVerify) {
+        if (paymentMethod === 'Split Payment') {
+          const amt1 = Number(splitAmount1) || 0;
+          const amt2 = Math.max(0, totalPay - amt1);
+          await logPay(amt1, splitMethod1, `POS ${generatedResi} · ${splitMethod1}`);
+          if (amt2 > 0) await logPay(amt2, splitMethod2, `POS ${generatedResi} · ${splitMethod2}`);
+        } else {
+          await logPay(totalPay, finalPaymentMethodLabel, `POS ${generatedResi}`);
+        }
       }
 
       // Nota POS = cucian diterima kasir. Pickup tetap aktif di Beranda pelanggan
@@ -2891,7 +2924,12 @@ const handleStatusChange = async (
   const tenureBonusAmount = Math.round(calcStats.productionPay * tenureBonusRate);
   const totalTakeHomePay = Math.max(0, baseSalaryUsed + tenureBonusAmount + calcStats.membershipBonus - empLoansDeduction - empPenaltiesDeduction);
 
-  const handlePrintReceiptAuto = () => { setPrintMode('receipt'); setTimeout(() => window.print(), 100); };
+  const handlePrintReceiptAuto = () => {
+    setCreatedTxSuccess(null);
+    setSelectedTxDetail(null);
+    setPrintMode('receipt');
+    setTimeout(() => window.print(), 200);
+  };
   const handlePrintBagStickersNow = async (tx?: any) => {
     const src = tx || lastOrderInfo || createdTxSuccess || selectedTxDetail;
     if (!src) return;
@@ -2906,7 +2944,7 @@ const handleStatusChange = async (
         .order('batch_index', { ascending: true });
       cycles = data || [];
     }
-    const stickers = await printBagStickers(src.id || src.receipt_number, n, items, {
+    const { stickers, printedViaSerial } = await printBagStickers(src.id || src.receipt_number, n, items, {
       receipt: src.receipt_number,
       customerName: src.customer_name || editCustomerName || customerName,
       storeName: src.outletName || outletName,
@@ -2915,22 +2953,32 @@ const handleStatusChange = async (
     });
     setBagStickers(stickers);
     setPrintMode('bag-sticker');
+    if (!printedViaSerial) {
+      setCreatedTxSuccess(null);
+      setSelectedTxDetail(null);
+      setTimeout(() => window.print(), 250);
+    }
   };
   const handlePrintPayslip = () => { setPrintMode('payslip'); setTimeout(() => window.print(), 100); };
 
   const handlePrintReceiptFromTx = (tx: any) => {
+    const rawItems = Array.isArray(tx.items) ? tx.items : Array.isArray(tx.cartItems) ? tx.cartItems : [];
     setLastOrderInfo({
       ...tx,
+      cartItems: rawItems.length ? rawItems : null,
       customer_name: editCustomerName || tx.customer_name,
       customer_phone: editCustomerPhone || tx.customer_phone || customerPhone || null,
       outletName: tx.outlets?.name || outletName,
       outletPhone: tx.outlets?.whatsapp_number || outletPhone || '',
+      by_sortir: tx.by_sortir || employeeName,
       discount_amount: tx.discount_amount || 0,
       delivery_fee: Number(editDeliveryFee) || tx.delivery_fee || 0,
       remainingDeposit: null
     });
     setPrintMode('receipt');
-    setTimeout(() => window.print(), 100);
+    setSelectedTxDetail(null);
+    setCreatedTxSuccess(null);
+    setTimeout(() => window.print(), 250);
   };
 
   const visibleProses = useMemo(
@@ -2964,9 +3012,11 @@ const handleStatusChange = async (
             </div>
             <div className="border-b border-black border-dashed mb-2"></div>
 
-            <div className="mb-0.5">{receiptLayout.dateLabel}: {new Date(lastOrderInfo.created_at || new Date()).toLocaleDateString('id-ID')}</div>
+            <div className="mb-0.5">{receiptLayout.dateLabel}: {new Date(lastOrderInfo.created_at || new Date()).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' })}</div>
             <div className="mb-0.5 font-bold">{receiptLayout.doneLabel}: {getEstDate(lastOrderInfo.created_at, lastOrderInfo.duration)}</div>
-            <div className="mb-1 font-bold">{receiptLayout.receiptLabel}: {lastOrderInfo.receipt_number}</div>
+            <div className="mb-0.5 font-bold">{receiptLayout.receiptLabel}: {lastOrderInfo.receipt_number}</div>
+            <div className="mb-1">Kasir/Admin: <b>{lastOrderInfo.by_sortir || employeeName || '-'}</b></div>
+            <div className="mb-1">Outlet: <b>{lastOrderInfo.outletName || outletName || '-'}</b></div>
             <div className="border-b border-black border-dashed mb-1"></div>
 
             <div className="mb-0.5">{receiptLayout.nameLabel}: <b>{lastOrderInfo.customer_name}</b> {lastOrderInfo.order_type === 'Online' ? '(WA)' : ''}</div>
@@ -3200,7 +3250,7 @@ const handleStatusChange = async (
 
       {/* POP-UP STRUK SETELAH TRANSAKSI MASUK */}
       {createdTxSuccess && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in print:hidden">
           <div className="bg-white rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl border border-slate-200">
             <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center text-3xl mx-auto font-black">
               ✅
@@ -3217,7 +3267,7 @@ const handleStatusChange = async (
             </div>
             <div className="space-y-2 pt-2">
               <button
-                onClick={() => { handlePrintReceiptAuto(); setCreatedTxSuccess(null); }}
+                onClick={() => { handlePrintReceiptAuto(); }}
                 className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl text-xs shadow-md transition flex items-center justify-center gap-2"
               >
                 🖨️ CETAK STRUK / NOTA
@@ -3242,7 +3292,7 @@ const handleStatusChange = async (
 
       {/* MODAL EDIT & DETAIL TRANSAKSI POS */}
       {selectedTxDetail && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100] flex items-center justify-center p-3 md:p-4 overflow-y-auto">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100] flex items-center justify-center p-3 md:p-4 overflow-y-auto print:hidden">
           <div className="bg-white rounded-3xl p-5 max-w-lg w-full space-y-4 shadow-2xl border border-slate-200 my-auto max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center border-b pb-3 sticky top-0 bg-white z-10">
               <div>
@@ -3674,7 +3724,7 @@ const handleStatusChange = async (
                 </div>
             <form onSubmit={handleTransactionSubmit} className="space-y-3">
               <div className="flex bg-slate-100 rounded-xl p-1 mb-2">
-                <button type="button" onClick={() => setOrderType('Offline')} className={`flex-1 py-2.5 text-[10px] md:text-xs font-bold rounded-lg ${orderType === 'Offline' ? 'bg-emerald-600 text-white shadow' : 'text-slate-500'}`}>🏪 Langsung</button>
+                <button type="button" onClick={() => { setOrderType('Offline'); if (paymentMethod === 'Transfer' || paymentMethod === 'Split Payment') setPaymentMethod('QRIS'); }} className={`flex-1 py-2.5 text-[10px] md:text-xs font-bold rounded-lg ${orderType === 'Offline' ? 'bg-emerald-600 text-white shadow' : 'text-slate-500'}`}>🏪 Langsung</button>
                 <button type="button" onClick={() => setOrderType('Online')} className={`flex-1 py-2.5 text-[10px] md:text-xs font-bold rounded-lg ${orderType === 'Online' ? 'bg-indigo-600 text-white shadow' : 'text-slate-500'}`}>🌐 WhatsApp</button>
               </div>
 
@@ -3795,10 +3845,10 @@ const handleStatusChange = async (
               <div>
                 <label className="block text-[10px] font-bold text-slate-500 mb-1 uppercase">Durasi Pengerjaan Nota Ini</label>
                 <select value={duration} onChange={(e) => setDuration(e.target.value)} className="w-full border rounded-xl px-3 py-2.5 text-xs font-bold text-amber-700 bg-amber-50/50">
-                  <option value="Reguler (3 Hari)">Reguler (3 Hari)</option>
-                  <option value="Oneday (1 Hari / 24 Jam)">Oneday 1 Hari (+50%)</option>
-                  <option value="Express (6 Jam)">Express 6 Jam (+100%)</option>
-                  <option value="Quick (3 Jam)">Quick 3 Jam (+200%)</option>
+                  <option value="Reguler (3 Hari)">Reguler 3 Hari</option>
+                  <option value="Oneday (1 Hari / 24 Jam)">Oneday 24jam</option>
+                  <option value="Express (6 Jam)">Express 6 Jam</option>
+                  <option value="Quick (3 Jam)">Quick 3 Jam</option>
                 </select>
               </div>
 
@@ -3896,6 +3946,27 @@ const handleStatusChange = async (
                 onChange={(e) => setInputItemNote(e.target.value)}
                 className="w-full bg-white border border-slate-200 text-slate-900 text-xs font-bold rounded-xl p-3 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
               />
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  'tidak ada yang luntur',
+                  'tidak ada barang berharga',
+                  'ada yang luntur',
+                  'ada barang berharga'
+                ].map((chip) => (
+                  <button
+                    key={chip}
+                    type="button"
+                    onClick={() => {
+                      const cur = String(inputItemNote || '').trim();
+                      if (cur.toLowerCase().includes(chip.toLowerCase())) return;
+                      setInputItemNote(cur ? `${cur}; ${chip}` : chip);
+                    }}
+                    className="text-[10px] font-bold px-2.5 py-1.5 rounded-full border border-sky-200 bg-sky-50 text-sky-800 hover:bg-sky-100"
+                  >
+                    + {chip}
+                  </button>
+                ))}
+              </div>
 
               <button
                 type="button"
@@ -4039,18 +4110,39 @@ const handleStatusChange = async (
             />
           </div>
               <input type="text" placeholder="Catatan umum nota (noda, dll)" value={notes} onChange={(e) => setNotes(e.target.value)} className="w-full border border-slate-200 rounded-xl px-4 py-3 text-xs" />
+              <div className="flex flex-wrap gap-1.5 -mt-1">
+                {['tidak ada yang luntur', 'tidak ada barang berharga'].map((chip) => (
+                  <button
+                    key={`note-${chip}`}
+                    type="button"
+                    onClick={() => {
+                      const cur = String(notes || '').trim();
+                      if (cur.toLowerCase().includes(chip.toLowerCase())) return;
+                      setNotes(cur ? `${cur}; ${chip}` : chip);
+                    }}
+                    className="text-[10px] font-bold px-2.5 py-1.5 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
+                  >
+                    + {chip}
+                  </button>
+                ))}
+              </div>
               
               <div><label className="block text-[10px] font-bold text-slate-400 mb-1 uppercase">Total Bayar</label><input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3.5 text-2xl font-black text-emerald-600 text-center" required /></div>
 
               <div>
                 <label className="block text-[10px] font-bold text-slate-500 mb-1 uppercase">Metode Pembayaran</label>
                 <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)} className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold bg-white">
-                  <option value="QRIS">QRIS</option>
-                  <option value="Cash">Cash (Tunai)</option>
+                  <option value="QRIS">QRIS (Mayar)</option>
+                  <option value="Cash">Cash / Tunai</option>
                   <option value="Deposit Saldo">Deposit Member</option>
-                  <option value="Transfer">Transfer Bank</option>
-                  <option value="Split Payment">Split Payment (Kombinasi 2 Metode)</option>
+                  {orderType === 'Online' && <option value="Transfer">Transfer Bank</option>}
+                  {orderType === 'Online' && <option value="Split Payment">Split Payment (Kombinasi 2 Metode)</option>}
                 </select>
+                {orderType === 'Offline' && (
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Langsung: wajib bayar dulu. QRIS menunggu Mayar; Cash/Deposit = lunas di kasir. Produksi terkunci sampai lunas.
+                  </p>
+                )}
               </div>
 
               {paymentMethod === 'Split Payment' && (
