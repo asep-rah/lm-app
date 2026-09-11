@@ -1793,7 +1793,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
         await createPaymentVerifyTask({
           id: newTx.id,
           receipt_number: generatedResi,
-          customer_name: orderData.customer_name,
+          customer_name: String(orderData.customer_name || 'Pelanggan'),
           customer_phone: normalizedPhone || customerPhone || undefined,
           amount: totalPay,
           payment_method: finalPaymentMethodLabel,
