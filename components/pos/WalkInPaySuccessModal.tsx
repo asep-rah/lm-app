@@ -24,6 +24,7 @@ export type WalkInPaySuccessTx = {
   invoice_url?: string | null;
   mayar_payment_id?: string | null;
   mayar_mock?: boolean;
+  qris_scan_ready?: boolean;
   items?: any[];
   bag_count?: number;
 };
@@ -162,18 +163,25 @@ export default function WalkInPaySuccessModal({
               <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-left">
                 <p className="text-[11px] font-black text-amber-900">Mode uji / QRIS belum live Mayar</p>
                 <p className="text-[10px] text-amber-800 mt-0.5 leading-relaxed">
-                  Jangan scan dengan e-wallet bank — bisa muncul “QR China / CNY”. Pakai <b>Buka tautan pembayaran</b> atau tombol <b>Simulasi Bayar</b>. Pastikan Mayar API Key outlet sudah aktif.
+                  Jangan scan dengan e-wallet bank. Pakai <b>Buka tautan pembayaran</b> atau <b>Simulasi Bayar</b>. Pastikan Mayar API Key outlet aktif.
+                </p>
+              </div>
+            ) : tx.qris_scan_ready === false || (!tx.qris_url && tx.invoice_url) ? (
+              <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-left">
+                <p className="text-[11px] font-black text-amber-900">QRIS gambar belum tersedia dari Mayar</p>
+                <p className="text-[10px] text-amber-800 mt-0.5 leading-relaxed">
+                  Buka tautan pembayaran — di halaman Mayar ada QRIS yang bisa di-scan e-wallet.
                 </p>
               </div>
             ) : (
-              <p className="text-[11px] font-bold text-indigo-900">Scan QRIS dinamis Mayar di bawah. Cetak struk baru setelah lunas.</p>
+              <p className="text-[11px] font-bold text-indigo-900">Scan QRIS Mayar di bawah dengan e-wallet. Cetak struk setelah lunas.</p>
             )}
             {tx.qris_url ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={tx.qris_url}
                 alt="QRIS Mayar"
-                className="w-48 h-48 mx-auto bg-white rounded-xl border object-contain"
+                className="w-52 h-52 mx-auto bg-white rounded-xl border object-contain"
               />
             ) : (
               <p className="text-[11px] text-amber-700 font-bold py-4">
@@ -185,9 +193,9 @@ export default function WalkInPaySuccessModal({
                 href={tx.invoice_url}
                 target="_blank"
                 rel="noreferrer"
-                className="block text-[11px] font-bold text-sky-700"
+                className="block w-full text-center rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-[11px] font-extrabold py-2.5"
               >
-                Buka tautan pembayaran
+                Buka tautan pembayaran Mayar
               </a>
             )}
             <div className="flex flex-col gap-2">

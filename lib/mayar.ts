@@ -19,11 +19,16 @@ export type MayarChargeResult = {
   paymentId: string;
   invoiceUrl: string;
   qrisUrl: string;
+  /** true = QR berisi payload QRIS GPN yang bisa di-scan e-wallet */
+  scanReady?: boolean;
+  qrString?: string;
   raw?: unknown;
 };
 
 const MAYAR_CREATE_URL = 'https://api.mayar.id/hl/v1/payment/create';
 const MAYAR_CREATE_URL_V2 = 'https://api.mayar.id/hl/v2/payments/create';
+const MAYAR_QR_CREATE_V2 = 'https://api.mayar.id/hl/v2/qr-codes/create';
+const MAYAR_QR_CREATE_V1 = 'https://api.mayar.id/hl/v1/qrcode/create';
 
 export const isMayarKeyValid = (key?: string | null) => {
   const k = String(key || '').trim();
@@ -43,7 +48,7 @@ export const isMockPaymentsEnabled = () =>
   );
 
 export const mockQrisImageUrl = (payload?: string) =>
-  `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(
+  `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(
     payload || 'https://mayar.id'
   )}`;
 
@@ -57,8 +62,8 @@ export const buildMockMayarCharge = (input: MayarChargeInput): MayarChargeResult
     mock: true,
     paymentId,
     invoiceUrl,
-    // Encode tautan bayar mock (bukan string acak) — string acak sering dibaca e-wallet sebagai QR luar negeri/China.
-    qrisUrl: mockQrisImageUrl(invoiceUrl)
+    qrisUrl: mockQrisImageUrl(invoiceUrl),
+    scanReady: false
   };
 };
 
@@ -75,18 +80,36 @@ const asInvoiceUrl = (value: unknown) => {
   return `https://mayar.id/pl/${s}`;
 };
 
-const pickQrisUrl = (data: any, invoiceUrl: string) => {
+const isEmvQrisString = (raw: string) => {
+  const s = String(raw || '').trim();
+  return s.startsWith('000201') && s.length > 40;
+};
+
+const isMayarQrImageUrl = (raw: string) => {
+  const s = String(raw || '').trim();
+  return /^https?:\/\//i.test(s) && (/media\.mayar\./i.test(s) || /\.(png|jpg|jpeg|webp)(\?|$)/i.test(s));
+};
+
+const pickQrisFromPayload = (
+  data: any
+): { qrisUrl: string; scanReady: boolean; qrString?: string } => {
   const direct =
     data?.qrisUrl ||
     data?.qrUrl ||
     data?.qr_url ||
     data?.qrImage ||
     data?.qr_image ||
-    data?.qris_url;
-  if (direct) return String(direct);
-  const raw = data?.qrString || data?.qr_string || data?.qrisString;
-  if (raw) return mockQrisImageUrl(String(raw));
-  return mockQrisImageUrl(invoiceUrl);
+    data?.qris_url ||
+    data?.url;
+  if (direct && isMayarQrImageUrl(String(direct))) {
+    return { qrisUrl: String(direct), scanReady: true };
+  }
+  const raw = String(data?.qrString || data?.qr_string || data?.qrisString || '').trim();
+  if (isEmvQrisString(raw)) {
+    return { qrisUrl: mockQrisImageUrl(raw), scanReady: true, qrString: raw };
+  }
+  // Jangan encode tautan https jadi QR — e-wallet tidak membacanya sebagai QRIS.
+  return { qrisUrl: '', scanReady: false };
 };
 
 const parseMayarCreate = (json: any): MayarChargeResult | null => {
@@ -95,11 +118,14 @@ const parseMayarCreate = (json: any): MayarChargeResult | null => {
   const paymentId = String(data.id || data.transactionId || data.paymentId || '').trim();
   const invoiceUrl = asInvoiceUrl(data.link || data.url || data.paymentLink || data.invoiceUrl);
   if (!paymentId && !invoiceUrl) return null;
+  const picked = pickQrisFromPayload(data);
   return {
     mock: false,
     paymentId: paymentId || `mayar_${Date.now()}`,
     invoiceUrl,
-    qrisUrl: pickQrisUrl(data, invoiceUrl),
+    qrisUrl: picked.qrisUrl,
+    scanReady: picked.scanReady,
+    qrString: picked.qrString,
     raw: json
   };
 };
@@ -117,6 +143,37 @@ const postMayarCreate = async (url: string, apiKey: string, body: Record<string,
   const json = await res.json().catch(() => ({}));
   return { ok: res.ok, status: res.status, json };
 };
+
+/** QRIS dinamis Mayar — gambar/string yang bisa di-scan e-wallet (bukan tautan halaman). */
+export async function createMayarDynamicQris(
+  apiKey: string,
+  amount: number
+): Promise<{ url: string; qrString?: string } | null> {
+  const amt = Math.round(Number(amount) || 0);
+  if (!apiKey || amt < 1000) return null;
+  const endpoints = [MAYAR_QR_CREATE_V2, MAYAR_QR_CREATE_V1];
+  for (const endpoint of endpoints) {
+    try {
+      const posted = await postMayarCreate(endpoint, apiKey, { amount: amt });
+      if (!posted.ok) {
+        console.warn('Mayar dynamic QR failed:', endpoint, posted.status, posted.json);
+        continue;
+      }
+      const data = posted.json?.data || posted.json?.result || posted.json;
+      const imageUrl = String(data?.url || data?.qrUrl || data?.qrisUrl || data?.qr_image || '').trim();
+      const qrString = String(data?.qrString || data?.qr_string || data?.qrisString || '').trim();
+      if (imageUrl && /^https?:\/\//i.test(imageUrl)) {
+        return { url: imageUrl, qrString: isEmvQrisString(qrString) ? qrString : undefined };
+      }
+      if (isEmvQrisString(qrString)) {
+        return { url: mockQrisImageUrl(qrString), qrString };
+      }
+    } catch (e) {
+      console.warn('Mayar dynamic QR error:', endpoint, e);
+    }
+  }
+  return null;
+}
 
 /** Live Mayar create, or mock QRIS when KYC/key is not ready. */
 export async function createMayarPayment(input: MayarChargeInput): Promise<MayarChargeResult> {
@@ -156,7 +213,18 @@ export async function createMayarPayment(input: MayarChargeInput): Promise<Mayar
     }
     const parsed = parseMayarCreate(posted.json);
     if (!parsed?.invoiceUrl && !parsed?.paymentId) return buildMockMayarCharge(input);
-    return parsed!;
+
+    // Payment link ≠ QRIS yang bisa di-scan bank. Ambil gambar/string QRIS dinamis Mayar.
+    if (!parsed.scanReady) {
+      const dyn = await createMayarDynamicQris(apiKey, amount);
+      if (dyn?.url) {
+        parsed.qrisUrl = dyn.url;
+        parsed.qrString = dyn.qrString;
+        parsed.scanReady = true;
+      }
+    }
+
+    return parsed;
   } catch (err) {
     console.warn('Mayar create error, using mock:', err);
     return buildMockMayarCharge(input);

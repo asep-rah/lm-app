@@ -2104,6 +2104,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
         invoice_url: mayarCharge?.invoiceUrl || null,
         mayar_payment_id: mayarCharge?.paymentId || null,
         mayar_mock: Boolean(mayarCharge?.mock),
+        qris_scan_ready: Boolean(mayarCharge?.scanReady),
         items: cycleItems,
         bag_count: Number(bagCount) || cycleItems.length || 1,
         is_paid: !needsPayVerify,
