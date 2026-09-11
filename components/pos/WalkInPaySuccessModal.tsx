@@ -99,7 +99,23 @@ export default function WalkInPaySuccessModal({
       } catch {
         /* ignore transient poll errors */
       }
-    }, 6000);
+    }, 5000);
+
+    // Cek sekali segera setelah QR siap (settlement Mayar kadang 5–20 dtk)
+    void (async () => {
+      await new Promise((r) => setTimeout(r, 2500));
+      if (cancelled) return;
+      try {
+        const res = await fetch(`/api/pay/check-status?order_id=${encodeURIComponent(tx.id)}`);
+        const json = await res.json().catch(() => ({}));
+        if (json.status === 'PAID' || json.is_paid) {
+          toast(json.message || 'QRIS lunas — siap cetak struk.', 'ok');
+          await markPaid();
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
 
     return () => {
       cancelled = true;
@@ -274,10 +290,10 @@ export default function WalkInPaySuccessModal({
                     type="button"
                     disabled={busyConfirm}
                     onClick={confirmCashierPaid}
-                    className="w-full inline-flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-[11px] font-extrabold py-2.5 rounded-xl"
+                    className="w-full inline-flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 text-[11px] font-bold py-2.5 rounded-xl border border-slate-200"
                   >
                     {busyConfirm ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
-                    Sudah bayar — konfirmasi kasir
+                    Darurat: konfirmasi kasir (jika gateway lambat)
                   </button>
                   <button
                     type="button"

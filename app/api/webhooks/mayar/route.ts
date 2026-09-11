@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
 import { isMayarPaidEvent, mayarWebhookRefs } from '@/lib/mayar';
 import { creditDepositTopup, depositPackageOf, findDepositTopup } from '@/lib/depositTopup';
 import { findCashDeposit, settleCashDeposit } from '@/lib/cashDepositQris';
@@ -8,6 +7,7 @@ import {
   amountsMatch,
   insertErrorLog,
   insertWebhookLog,
+  paymentServiceDb,
   pickWebhookHeaders,
   verifyPaymentSignature,
   verifySharedSecret
@@ -15,18 +15,11 @@ import {
 
 export const dynamic = 'force-dynamic';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-if (!supabaseUrl || !supabaseKey) {
-  console.warn('mayar webhook: SUPABASE_SERVICE_ROLE_KEY / URL missing');
-}
-const supabase = createClient(
-  supabaseUrl || 'https://placeholder.supabase.co',
-  supabaseKey || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'missing',
-  { auth: { persistSession: false, autoRefreshToken: false } }
-);
-
-const findTransaction = async (refs: ReturnType<typeof mayarWebhookRefs>, explicitId?: string) => {
+const findTransaction = async (
+  supabase: ReturnType<typeof paymentServiceDb>,
+  refs: ReturnType<typeof mayarWebhookRefs>,
+  explicitId?: string
+) => {
   if (explicitId) {
     const { data } = await supabase.from('transactions').select('*').eq('id', explicitId).maybeSingle();
     if (data) return data;
@@ -48,7 +41,30 @@ const findTransaction = async (refs: ReturnType<typeof mayarWebhookRefs>, explic
       .limit(1);
     if (data?.[0]) return data[0];
   }
-  // Jangan cocokkan hanya by nominal — pembayaran lama bisa menandai tagihan baru sebagai lunas.
+
+  // QRIS dinamis: webhook sering tanpa resi/payment-id POS.
+  // Ambil pending nominal sama; pilih QR aktif (paling baru).
+  const amt = Math.round(Number(refs.amount || 0));
+  if (amt >= 1000) {
+    const since = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const { data } = await supabase
+      .from('transactions')
+      .select('*')
+      .eq('amount', amt)
+      .gte('created_at', since)
+      .order('created_at', { ascending: true })
+      .limit(20);
+    const pending = (data || []).filter((t: any) => {
+      if (t?.is_paid === true) return false;
+      const pay = String(t?.payment_status || '').toLowerCase();
+      const st = String(t?.status || '').toLowerCase();
+      const method = String(t?.payment_method || '').toLowerCase();
+      if (['paid', 'lunas', 'verified'].includes(pay)) return false;
+      return method.includes('qris') || st.includes('menunggu') || pay === 'pending';
+    });
+    if (pending.length === 1) return pending[0];
+    if (pending.length > 1) return pending[pending.length - 1];
+  }
   return null;
 };
 
@@ -98,6 +114,7 @@ export async function POST(req: Request) {
   });
 
   try {
+    const supabase = paymentServiceDb();
     if (isProd && !isCashDepositSim) {
       if (!expected || !sigOk) {
         await insertErrorLog({
@@ -125,11 +142,10 @@ export async function POST(req: Request) {
     }
 
     const refs = mayarWebhookRefs(body);
-    const tx = await findTransaction(refs, body.transactionId || body?.data?.transactionId);
+    const tx = await findTransaction(supabase, refs, body.transactionId || body?.data?.transactionId);
     if (tx) {
       const expectedAmt = Number(tx.amount || tx.total_amount || 0);
       const receivedAmt = Number(refs.amount || 0);
-      // Toleransi fee MDR QRIS (~Rp 100) — webhook kadang kirim net credit.
       if (receivedAmt > 0 && expectedAmt > 0 && !amountsMatch(expectedAmt, receivedAmt, 150)) {
         await insertErrorLog({
           source: 'mayar_webhook',
@@ -149,6 +165,10 @@ export async function POST(req: Request) {
           raw_payload: body
         });
         return NextResponse.json({ error: 'Amount mismatch' }, { status: 409 });
+      }
+
+      if (refs.paymentId) {
+        await supabase.from('transactions').update({ mayar_payment_id: refs.paymentId }).eq('id', tx.id);
       }
 
       const { error } = await markGatewayPaid({

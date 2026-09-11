@@ -3,110 +3,52 @@ import { isPaymentLocked, markGatewayPaid } from '@/lib/paymentVerify';
 import { insertAuditLog, insertErrorLog, clientIp, paymentServiceDb } from '@/lib/paymentSecurity';
 import { isMayarPaidEvent } from '@/lib/mayar';
 import { resolveMayarApiKey } from '@/lib/mayarOutletKey';
+import {
+  fetchMayarSettledRows,
+  fetchMayarTransactionDetail,
+  pickMayarSettlementForInvoice,
+  settlementRefIds
+} from '@/lib/mayarSettlement';
 
 export const dynamic = 'force-dynamic';
 
-async function fetchMayarStatus(paymentId: string, apiKey: string) {
-  const urls = [
-    `https://api.mayar.id/hl/v1/payment/${encodeURIComponent(paymentId)}`,
-    `https://api.mayar.id/hl/v2/payments/${encodeURIComponent(paymentId)}`
-  ];
-  for (const url of urls) {
-    try {
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' }
-      });
-      if (!res.ok) continue;
-      return await res.json();
-    } catch {
-      /* try next */
-    }
+async function loadUsedMayarIds(
+  supabase: ReturnType<typeof paymentServiceDb>,
+  candidateIds: string[]
+): Promise<Set<string>> {
+  const used = new Set<string>();
+  const ids = candidateIds.filter(Boolean).slice(0, 80);
+  if (!ids.length) return used;
+  const { data } = await supabase.from('transactions').select('mayar_payment_id').in('mayar_payment_id', ids);
+  for (const row of data || []) {
+    const id = String(row?.mayar_payment_id || '').trim();
+    if (id) used.add(id);
   }
-  return null;
+  return used;
 }
 
-function rowCreatedMs(row: any): number {
-  const created = Number(row?.createdAt || row?.created_at || 0);
-  if (created > 1e12) return created;
-  if (created > 1e9) return created * 1000;
-  return Date.parse(String(row?.createdAt || row?.created_at || '')) || 0;
-}
-
-function rowIsSettled(row: any): boolean {
-  const st = String(row?.status || row?.transactionStatus || '').toLowerCase();
-  return !st || ['settled', 'paid', 'success', 'lunas', 'completed'].includes(st);
-}
-
-/**
- * Hanya cocokkan transaksi Mayar yang jelas milik tagihan ini.
- * Jangan cocokkan hanya by nominal — pembayaran lama Rp 1.000 bisa
- * menandai tagihan baru sebagai lunas tanpa scan.
- */
-async function findMayarPaidForThisInvoice(
-  apiKey: string,
-  opts: { paymentId?: string; receipt?: string; amount: number; txCreatedAt?: string }
-): Promise<{ id?: string; matched: boolean; via?: string } | null> {
-  const paymentId = String(opts.paymentId || '').trim();
-  const receipt = String(opts.receipt || '').trim().toUpperCase();
-  const target = Math.round(Number(opts.amount) || 0);
-  if (!apiKey || target < 1000) return null;
-  if (!paymentId && !receipt) return null;
-
-  const txTs = opts.txCreatedAt ? new Date(opts.txCreatedAt).getTime() : Date.now();
-  const urls = [
-    'https://api.mayar.id/hl/v2/transactions?limit=40&status=settled',
-    'https://api.mayar.id/hl/v1/transactions?page=1&pageSize=40'
-  ];
-
-  for (const url of urls) {
-    try {
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' }
-      });
-      if (!res.ok) continue;
-      const json = await res.json().catch(() => ({}));
-      const rows = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : [];
-      for (const row of rows) {
-        if (!rowIsSettled(row)) continue;
-        const id = String(row?.id || row?.transactionId || row?.paymentId || '').trim();
-        if (paymentId && id && id === paymentId) {
-          return { id, matched: true, via: 'payment_id' };
-        }
-
-        if (!receipt) continue;
-        const blob = [
-          row?.note,
-          row?.description,
-          row?.productName,
-          row?.name,
-          row?.customerName,
-          row?.merchantRef,
-          row?.reference
-        ]
-          .map((v) => String(v || ''))
-          .join(' ')
-          .toUpperCase();
-        if (!blob.includes(receipt)) continue;
-
-        const credit = Math.round(Number(row?.credit ?? 0) || 0);
-        const rowAmt = Math.round(Number(row?.amount ?? row?.grossAmount ?? row?.totalAmount ?? 0) || 0);
-        const amtOk =
-          (credit > 0 && Math.abs(credit - target) <= 150) ||
-          (rowAmt > 0 && Math.abs(rowAmt - target) <= 150);
-        if (!amtOk) continue;
-
-        const createdMs = rowCreatedMs(row);
-        // Harus setelah (atau hampir bersamaan) tagihan dibuat — tolak pembayaran lama.
-        if (createdMs && createdMs < txTs - 60_000) continue;
-        if (createdMs && createdMs > txTs + 2 * 60 * 60 * 1000) continue;
-
-        return { id, matched: true, via: 'receipt' };
-      }
-    } catch {
-      /* try next */
-    }
-  }
-  return null;
+async function loadPendingSiblings(
+  supabase: ReturnType<typeof paymentServiceDb>,
+  opts: { outletId?: string; amount: number; sinceIso: string }
+) {
+  const amount = Math.round(Number(opts.amount) || 0);
+  let q = supabase
+    .from('transactions')
+    .select('id, created_at, amount, payment_status, is_paid, payment_method, status')
+    .eq('amount', amount)
+    .gte('created_at', opts.sinceIso)
+    .order('created_at', { ascending: true })
+    .limit(30);
+  if (opts.outletId) q = q.eq('outlet_id', opts.outletId);
+  const { data } = await q;
+  return (data || []).filter((row: any) => {
+    if (row?.is_paid === true) return false;
+    const pay = String(row?.payment_status || '').toLowerCase();
+    if (['paid', 'lunas', 'verified'].includes(pay)) return false;
+    const method = String(row?.payment_method || '').toLowerCase();
+    const st = String(row?.status || '').toLowerCase();
+    return method.includes('qris') || st.includes('menunggu') || pay === 'pending';
+  }) as Array<{ id: string; created_at: string }>;
 }
 
 export async function GET(req: Request) {
@@ -135,7 +77,7 @@ export async function GET(req: Request) {
   return handleTx(tx, req, supabase);
 }
 
-/** Kasir konfirmasi lunas setelah lihat bukti e-wallet (QRIS dinamis). */
+/** Kasir konfirmasi lunas — hanya fallback darurat, utamakan deteksi gateway. */
 export async function POST(req: Request) {
   let body: Record<string, unknown> = {};
   try {
@@ -198,7 +140,10 @@ async function handleTx(tx: any, req: Request, supabase: ReturnType<typeof payme
   const amount = Number(tx.amount || 0);
   const receipt = String(tx.receipt_number || '').trim();
 
-  const markPaid = async (via: string, message: string) => {
+  const markPaid = async (via: string, message: string, settledId?: string) => {
+    if (settledId && settledId !== paymentId) {
+      await supabase.from('transactions').update({ mayar_payment_id: settledId }).eq('id', tx.id);
+    }
     const { error } = await markGatewayPaid({
       transactionId: tx.id,
       receipt: tx.receipt_number,
@@ -222,7 +167,7 @@ async function handleTx(tx: any, req: Request, supabase: ReturnType<typeof payme
       entity_id: tx.id,
       amount,
       ip_address: clientIp(req),
-      meta: { via }
+      meta: { via, settledId: settledId || null }
     });
     return NextResponse.json({
       status: 'PAID',
@@ -234,9 +179,9 @@ async function handleTx(tx: any, req: Request, supabase: ReturnType<typeof payme
 
   if (paymentId && apiKey && !paymentId.startsWith('mock_')) {
     try {
-      const gw = await fetchMayarStatus(paymentId, apiKey);
+      const gw = await fetchMayarTransactionDetail(apiKey, paymentId);
       if (gw && isMayarPaidEvent(gw)) {
-        return markPaid('Cek Status (Mayar)', 'Pembayaran terkonfirmasi dari Payment Gateway');
+        return markPaid('Cek Status (Mayar detail)', 'Pembayaran terkonfirmasi dari Payment Gateway', paymentId);
       }
     } catch (err: any) {
       await insertErrorLog({
@@ -248,26 +193,54 @@ async function handleTx(tx: any, req: Request, supabase: ReturnType<typeof payme
     }
   }
 
-  // Fallback ketat: ID pembayaran sama, atau resi tercantum di catatan Mayar (bukan nominal saja).
-  if (apiKey && amount >= 1000 && (paymentId || receipt)) {
+  // Klaim settlement Mayar (QRIS dinamis / Xendit) yang belum terpakai.
+  if (apiKey && amount >= 1000) {
     try {
-      const hit = await findMayarPaidForThisInvoice(apiKey, {
+      const txTs = tx.created_at ? new Date(tx.created_at).getTime() : Date.now() - 60 * 60 * 1000;
+      const rows = await fetchMayarSettledRows(apiKey, {
+        limit: 50,
+        dateFromMs: Math.max(0, txTs - 2 * 60 * 1000)
+      });
+      const candidateIds = rows.flatMap((r) => settlementRefIds(r));
+      const usedIds = await loadUsedMayarIds(supabase, candidateIds);
+      if (paymentId) usedIds.delete(paymentId); // id sendiri boleh
+      const sinceIso = new Date(Math.max(0, txTs - 2 * 60 * 60 * 1000)).toISOString();
+      const siblings = await loadPendingSiblings(supabase, {
+        outletId: tx.outlet_id,
+        amount,
+        sinceIso
+      });
+      const hit = pickMayarSettlementForInvoice(rows, {
+        txId: tx.id,
+        amount,
+        txCreatedAt: tx.created_at,
         paymentId: paymentId.startsWith('mock_') ? '' : paymentId,
         receipt,
-        amount,
-        txCreatedAt: tx.created_at
+        usedIds,
+        siblings
       });
-      if (hit?.matched) {
-        return markPaid(
-          `Cek Status (Mayar ${hit.via || 'match'})`,
-          'Pembayaran QRIS terdeteksi di Mayar untuk tagihan ini'
-        );
+      if (hit?.transactionId || hit?.settlementId) {
+        const claimId = hit.transactionId || hit.settlementId;
+        // Double-check belum diklaim transaksi lain
+        const { data: taken } = await supabase
+          .from('transactions')
+          .select('id')
+          .eq('mayar_payment_id', claimId)
+          .neq('id', tx.id)
+          .limit(1);
+        if (!taken?.length) {
+          return markPaid(
+            `Cek Status (Mayar ${hit.via})`,
+            'Pembayaran QRIS terdeteksi otomatis di Mayar',
+            claimId
+          );
+        }
       }
     } catch (err: any) {
       await insertErrorLog({
         source: 'pay_check_status',
-        code: 'MAYAR_TX_LIST',
-        message: err?.message || 'Gagal list transaksi Mayar',
+        code: 'MAYAR_SETTLEMENT',
+        message: err?.message || 'Gagal cocokkan settlement Mayar',
         transaction_id: tx.id
       });
     }
@@ -279,7 +252,7 @@ async function handleTx(tx: any, req: Request, supabase: ReturnType<typeof payme
     payment_status: (fresh || tx).payment_status,
     is_paid: !isPaymentLocked(fresh || tx),
     message: isPaymentLocked(fresh || tx)
-      ? 'Belum terdeteksi lunas di gateway. Tunggu sebentar lalu Cek Status lagi, atau konfirmasi manual di kasir jika bukti bayar sudah ada.'
+      ? 'Belum terdeteksi lunas di gateway. Tunggu 5–15 detik lalu Cek Status lagi (settlement Mayar kadang agak lambat).'
       : 'Sudah lunas'
   });
 }

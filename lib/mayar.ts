@@ -147,27 +147,44 @@ const postMayarCreate = async (url: string, apiKey: string, body: Record<string,
 /** QRIS dinamis Mayar — gambar/string yang bisa di-scan e-wallet (bukan tautan halaman). */
 export async function createMayarDynamicQris(
   apiKey: string,
-  amount: number
+  amount: number,
+  meta?: { receipt?: string; description?: string }
 ): Promise<{ url: string; qrString?: string; id?: string } | null> {
   const amt = Math.round(Number(amount) || 0);
   if (!apiKey || amt < 1000) return null;
   const endpoints = [MAYAR_QR_CREATE_V2, MAYAR_QR_CREATE_V1];
+  const receipt = String(meta?.receipt || '').trim();
+  const body: Record<string, unknown> = {
+    amount: amt,
+    ...(receipt
+      ? {
+          description: meta?.description || `Laundrivery ${receipt}`,
+          note: receipt,
+          merchantRef: receipt
+        }
+      : {})
+  };
   for (const endpoint of endpoints) {
     try {
-      const posted = await postMayarCreate(endpoint, apiKey, { amount: amt });
+      const posted = await postMayarCreate(endpoint, apiKey, body);
       if (!posted.ok) {
         console.warn('Mayar dynamic QR failed:', endpoint, posted.status, posted.json);
         continue;
       }
       const data = posted.json?.data || posted.json?.result || posted.json;
-      const id = String(data?.id || data?.transactionId || data?.paymentId || '').trim();
       const imageUrl = String(data?.url || data?.qrUrl || data?.qrisUrl || data?.qr_image || '').trim();
       const qrString = String(data?.qrString || data?.qr_string || data?.qrisString || '').trim();
+      const idFromField = String(data?.id || data?.transactionId || data?.paymentId || '').trim();
+      const idFromUrl =
+        (imageUrl.match(
+          /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(?:png|jpe?g|webp)/i
+        ) || [])[1] || '';
+      const id = idFromField || idFromUrl || undefined;
       if (imageUrl && /^https?:\/\//i.test(imageUrl)) {
-        return { url: imageUrl, qrString: isEmvQrisString(qrString) ? qrString : undefined, id: id || undefined };
+        return { url: imageUrl, qrString: isEmvQrisString(qrString) ? qrString : undefined, id };
       }
       if (isEmvQrisString(qrString)) {
-        return { url: mockQrisImageUrl(qrString), qrString, id: id || undefined };
+        return { url: mockQrisImageUrl(qrString), qrString, id };
       }
     } catch (e) {
       console.warn('Mayar dynamic QR error:', endpoint, e);
@@ -216,9 +233,12 @@ export async function createMayarPayment(input: MayarChargeInput): Promise<Mayar
     if (!parsed?.invoiceUrl && !parsed?.paymentId) return buildMockMayarCharge(input);
 
     // Payment link ≠ QRIS yang bisa di-scan bank. Ambil gambar/string QRIS dinamis Mayar.
-    // Simpan ID QR dinamis agar webhook/check-status cocok (bukan ID payment-link).
+    // Simpan ID dari UUID gambar/field agar webhook/check-status bisa cocok.
     if (!parsed.scanReady) {
-      const dyn = await createMayarDynamicQris(apiKey, amount);
+      const dyn = await createMayarDynamicQris(apiKey, amount, {
+        receipt,
+        description: String(input.description || `Tagihan laundry ${receipt}`).trim()
+      });
       if (dyn?.url) {
         parsed.qrisUrl = dyn.url;
         parsed.qrString = dyn.qrString;
@@ -240,8 +260,9 @@ export const isMayarPaidEvent = (body: any) => {
     return true;
   }
   const data = body?.data || body;
+  if (data?.status === true || body?.status === true) return true;
   const st = String(data?.status || data?.transactionStatus || body?.status || '').toLowerCase();
-  return st === 'success' || st === 'paid' || st === 'settled' || st === 'lunas';
+  return st === 'success' || st === 'paid' || st === 'settled' || st === 'lunas' || st === 'completed';
 };
 
 export const mayarWebhookRefs = (body: any) => {
