@@ -149,7 +149,8 @@ export async function POST(req: Request) {
     if (tx) {
       const expectedAmt = Number(tx.amount || tx.total_amount || 0);
       const receivedAmt = Number(refs.amount || 0);
-      if (receivedAmt > 0 && expectedAmt > 0 && !amountsMatch(expectedAmt, receivedAmt)) {
+      // Toleransi fee MDR QRIS (~Rp 100) — webhook kadang kirim net credit.
+      if (receivedAmt > 0 && expectedAmt > 0 && !amountsMatch(expectedAmt, receivedAmt, 150)) {
         await insertErrorLog({
           source: 'mayar_webhook',
           code: 'AMOUNT_MISMATCH',

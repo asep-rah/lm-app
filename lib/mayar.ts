@@ -148,7 +148,7 @@ const postMayarCreate = async (url: string, apiKey: string, body: Record<string,
 export async function createMayarDynamicQris(
   apiKey: string,
   amount: number
-): Promise<{ url: string; qrString?: string } | null> {
+): Promise<{ url: string; qrString?: string; id?: string } | null> {
   const amt = Math.round(Number(amount) || 0);
   if (!apiKey || amt < 1000) return null;
   const endpoints = [MAYAR_QR_CREATE_V2, MAYAR_QR_CREATE_V1];
@@ -160,13 +160,14 @@ export async function createMayarDynamicQris(
         continue;
       }
       const data = posted.json?.data || posted.json?.result || posted.json;
+      const id = String(data?.id || data?.transactionId || data?.paymentId || '').trim();
       const imageUrl = String(data?.url || data?.qrUrl || data?.qrisUrl || data?.qr_image || '').trim();
       const qrString = String(data?.qrString || data?.qr_string || data?.qrisString || '').trim();
       if (imageUrl && /^https?:\/\//i.test(imageUrl)) {
-        return { url: imageUrl, qrString: isEmvQrisString(qrString) ? qrString : undefined };
+        return { url: imageUrl, qrString: isEmvQrisString(qrString) ? qrString : undefined, id: id || undefined };
       }
       if (isEmvQrisString(qrString)) {
-        return { url: mockQrisImageUrl(qrString), qrString };
+        return { url: mockQrisImageUrl(qrString), qrString, id: id || undefined };
       }
     } catch (e) {
       console.warn('Mayar dynamic QR error:', endpoint, e);
@@ -215,12 +216,14 @@ export async function createMayarPayment(input: MayarChargeInput): Promise<Mayar
     if (!parsed?.invoiceUrl && !parsed?.paymentId) return buildMockMayarCharge(input);
 
     // Payment link ≠ QRIS yang bisa di-scan bank. Ambil gambar/string QRIS dinamis Mayar.
+    // Simpan ID QR dinamis agar webhook/check-status cocok (bukan ID payment-link).
     if (!parsed.scanReady) {
       const dyn = await createMayarDynamicQris(apiKey, amount);
       if (dyn?.url) {
         parsed.qrisUrl = dyn.url;
         parsed.qrString = dyn.qrString;
         parsed.scanReady = true;
+        if (dyn.id) parsed.paymentId = dyn.id;
       }
     }
 

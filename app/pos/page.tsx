@@ -1996,6 +1996,23 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     }
     if (!error && newTx) {
       let mayarCharge: Awaited<ReturnType<typeof requestMayarInvoice>> | null = null;
+      const isQrisPay = needsPayVerify && String(finalPaymentMethodLabel).toLowerCase().includes('qris');
+      const isCashWalkIn =
+        orderType === 'Offline' && String(paymentMethod).toLowerCase() === 'cash';
+      const curOutletPhone = newTx.outlets?.whatsapp_number || outletPhone || '';
+      const cycleItems = (orderData.items as any[]) || [];
+
+      setLastOrderInfo({
+        ...orderData,
+        cartItems: cartItems.length > 0 ? cartItems : null,
+        customer_phone: customerPhone || null,
+        outletName: outletName,
+        outletPhone: curOutletPhone,
+        by_sortir: employeeName,
+        remainingDeposit: nextDepositBal != null ? nextDepositBal : (depositDeductionAmount > 0 ? customerDeposit : null),
+        created_at: newTx.created_at
+      });
+
       if (needsPayVerify) {
         await updateWithFallback(
           'transactions',
@@ -2005,8 +2022,54 @@ const handleApplyLoan = async (e: React.FormEvent) => {
           ],
           { column: 'id', value: newTx.id }
         );
-        const isQrisPay = String(finalPaymentMethodLabel).toLowerCase().includes('qris');
+        setBagStickers(
+          buildBagStickers(newTx.id, Number(bagCount) || cycleItems.length || 1, cycleItems, {
+            receipt: newTx.receipt_number || generatedResi,
+            customerName: customerName || 'Pelanggan',
+            orderId: newTx.id
+          })
+        );
+
+        // QRIS: tampilkan modal segera (loading) supaya kasir tahu klik sudah diterima,
+        // baru kemudian ambil QR Mayar di background.
         if (isQrisPay) {
+          qrisPaidHandledRef.current = null;
+          setCashReceivedOk(false);
+          setCreatedTxSuccess({
+            ...newTx,
+            customer_phone: customerPhone || null,
+            outletPhone: curOutletPhone,
+            payment_method: finalPaymentMethodLabel,
+            needs_qris: true,
+            needs_cash_confirm: false,
+            qris_loading: true,
+            qris_url: null,
+            invoice_url: null,
+            mayar_payment_id: null,
+            mayar_mock: false,
+            qris_scan_ready: false,
+            items: cycleItems,
+            bag_count: Number(bagCount) || cycleItems.length || 1,
+            is_paid: false,
+            payment_status: 'pending'
+          });
+          setAmount('');
+          setCustomerName('');
+          setCustomerPhone('');
+          setPhoneLast4Matches([]);
+          setWeightKg('');
+          setPcsCount('');
+          setNotes('');
+          setDiscountValue('');
+          setLoyaltyRedeem(0);
+          setAppliedLoyaltyRedeem(0);
+          setLoyaltyProfile(null);
+          setCartItems([]);
+          setSplitPerBag(false);
+          setDeliveryFee(orderType === 'Online' ? '0' : '');
+          setHomeModal(null);
+          setIsSubmitting(false);
+
           try {
             mayarCharge = await requestMayarInvoice({
               amount: totalPay,
@@ -2017,11 +2080,70 @@ const handleApplyLoan = async (e: React.FormEvent) => {
               transactionId: newTx.id,
               outletId: selectedOutlet
             });
+            setCreatedTxSuccess((prev: any) =>
+              prev?.id === newTx.id
+                ? {
+                    ...prev,
+                    qris_loading: false,
+                    qris_url: mayarCharge?.qrisUrl || null,
+                    invoice_url: mayarCharge?.invoiceUrl || null,
+                    mayar_payment_id: mayarCharge?.paymentId || null,
+                    mayar_mock: Boolean(mayarCharge?.mock),
+                    qris_scan_ready: Boolean(mayarCharge?.scanReady)
+                  }
+                : prev
+            );
           } catch (e: any) {
             console.warn('Mayar QRIS POS:', e?.message);
             toast(e?.message || 'Gagal membuat QRIS Mayar — tagihan tetap dibuat.', 'warn');
+            setCreatedTxSuccess((prev: any) =>
+              prev?.id === newTx.id ? { ...prev, qris_loading: false } : prev
+            );
           }
+
+          void createPaymentVerifyTask({
+            id: newTx.id,
+            receipt_number: generatedResi,
+            customer_name: String(orderData.customer_name || 'Pelanggan'),
+            customer_phone: normalizedPhone || customerPhone || undefined,
+            amount: totalPay,
+            payment_method: finalPaymentMethodLabel,
+            outlet_id: selectedOutlet,
+            notifyCustomer: false
+          });
+          if (normalizedPhone || customerPhone) {
+            void sendInvoiceToLiveChat(
+              {
+                ...newTx,
+                customer_phone: normalizedPhone || customerPhone,
+                outlet_id: selectedOutlet
+              },
+              employeeName || 'Kasir',
+              mayarCharge || undefined
+            ).catch((e) => console.warn('invoice chat:', e));
+          }
+
+          const paramsQris = new URLSearchParams(window.location.search);
+          const pickupIdQris = paramsQris.get('pickup_id') || customerOrder?.id || '';
+          if (pickupIdQris) {
+            await markPickupConvertedToPos(pickupIdQris, newTx.id);
+            const linked = await supabase.from('transactions').update({ pickup_id: pickupIdQris }).eq('id', newTx.id);
+            if (linked.error) console.warn('pickup_id pada transactions dilewati:', linked.error.message);
+          }
+          setCustomerOrder(null);
+          clearPickupPrefill();
+          if (normalizedPhone && (customerName || '').trim()) {
+            void upsertCustomerOnOrder({
+              phone: normalizedPhone,
+              name: customerName,
+              outletId: selectedOutlet,
+              registeredBy: employeeName
+            }).catch((e) => console.warn('upsert customer:', e));
+          }
+          refreshData();
+          return;
         }
+
         await createPaymentVerifyTask({
           id: newTx.id,
           receipt_number: generatedResi,
@@ -2030,7 +2152,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
           amount: totalPay,
           payment_method: finalPaymentMethodLabel,
           outlet_id: selectedOutlet,
-          notifyCustomer: !isQrisPay
+          notifyCustomer: true
         });
         if (normalizedPhone || customerPhone) {
           await sendInvoiceToLiveChat(
@@ -2044,18 +2166,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
           ).catch((e) => console.warn('invoice chat:', e));
         }
       }
-      const curOutletPhone = newTx.outlets?.whatsapp_number || outletPhone || '';
-      setLastOrderInfo({ 
-        ...orderData, 
-        cartItems: cartItems.length > 0 ? cartItems : null,
-        customer_phone: customerPhone || null,
-        outletName: outletName, 
-        outletPhone: curOutletPhone,
-        by_sortir: employeeName,
-        remainingDeposit: nextDepositBal != null ? nextDepositBal : (depositDeductionAmount > 0 ? customerDeposit : null), 
-        created_at: newTx.created_at 
-      });
-      const cycleItems = (orderData.items as any[]) || [];
+
       // Produksi / siklus mesin hanya setelah lunas (Cash/Deposit di kasir, atau QRIS setelah Mayar).
       if (!needsPayVerify) {
         const createdCycles = await createWasherCycles({
@@ -2079,18 +2190,8 @@ const handleApplyLoan = async (e: React.FormEvent) => {
           }
         );
         setBagStickers(stickers);
-      } else {
-        setBagStickers(
-          buildBagStickers(newTx.id, Number(bagCount) || cycleItems.length || 1, cycleItems, {
-            receipt: newTx.receipt_number || generatedResi,
-            customerName: customerName || 'Pelanggan',
-            orderId: newTx.id
-          })
-        );
       }
 
-      const isCashWalkIn =
-        orderType === 'Offline' && String(paymentMethod).toLowerCase() === 'cash';
       qrisPaidHandledRef.current = null;
       setCashReceivedOk(false);
       setCreatedTxSuccess({
@@ -2098,13 +2199,13 @@ const handleApplyLoan = async (e: React.FormEvent) => {
         customer_phone: customerPhone || null,
         outletPhone: curOutletPhone,
         payment_method: finalPaymentMethodLabel,
-        needs_qris: needsPayVerify && String(finalPaymentMethodLabel).toLowerCase().includes('qris'),
+        needs_qris: false,
         needs_cash_confirm: isCashWalkIn,
-        qris_url: mayarCharge?.qrisUrl || null,
-        invoice_url: mayarCharge?.invoiceUrl || null,
-        mayar_payment_id: mayarCharge?.paymentId || null,
-        mayar_mock: Boolean(mayarCharge?.mock),
-        qris_scan_ready: Boolean(mayarCharge?.scanReady),
+        qris_url: null,
+        invoice_url: null,
+        mayar_payment_id: null,
+        mayar_mock: false,
+        qris_scan_ready: false,
         items: cycleItems,
         bag_count: Number(bagCount) || cycleItems.length || 1,
         is_paid: !needsPayVerify,
@@ -2137,14 +2238,14 @@ const handleApplyLoan = async (e: React.FormEvent) => {
 
       // Nota POS = cucian diterima kasir. Pickup tetap aktif di Beranda pelanggan
       // (bukan Selesai) sampai diserahkan / diantar.
-    const params = new URLSearchParams(window.location.search);
-    const pickupId = params.get('pickup_id') || customerOrder?.id || '';
+      const params = new URLSearchParams(window.location.search);
+      const pickupId = params.get('pickup_id') || customerOrder?.id || '';
 
-    if (pickupId) {
-      await markPickupConvertedToPos(pickupId, newTx.id);
-      const linked = await supabase.from('transactions').update({ pickup_id: pickupId }).eq('id', newTx.id);
-      if (linked.error) console.warn('pickup_id pada transactions dilewati:', linked.error.message);
-    }
+      if (pickupId) {
+        await markPickupConvertedToPos(pickupId, newTx.id);
+        const linked = await supabase.from('transactions').update({ pickup_id: pickupId }).eq('id', newTx.id);
+        if (linked.error) console.warn('pickup_id pada transactions dilewati:', linked.error.message);
+      }
       setCustomerOrder(null);
       clearPickupPrefill();
       if (normalizedPhone && (customerName || '').trim()) {
@@ -2155,7 +2256,20 @@ const handleApplyLoan = async (e: React.FormEvent) => {
           registeredBy: employeeName
         }).catch((e) => console.warn('upsert customer:', e));
       }
-      setAmount(''); setCustomerName(''); setCustomerPhone(''); setPhoneLast4Matches([]); setWeightKg(''); setPcsCount(''); setNotes(''); setDiscountValue(''); setLoyaltyRedeem(0); setAppliedLoyaltyRedeem(0); setLoyaltyProfile(null); setCartItems([]); setSplitPerBag(false); setDeliveryFee(orderType === 'Online' ? '0' : '');
+      setAmount('');
+      setCustomerName('');
+      setCustomerPhone('');
+      setPhoneLast4Matches([]);
+      setWeightKg('');
+      setPcsCount('');
+      setNotes('');
+      setDiscountValue('');
+      setLoyaltyRedeem(0);
+      setAppliedLoyaltyRedeem(0);
+      setLoyaltyProfile(null);
+      setCartItems([]);
+      setSplitPerBag(false);
+      setDeliveryFee(orderType === 'Online' ? '0' : '');
       setHomeModal(null);
       refreshData();
     } else alert('❌ Gagal: ' + error?.message);
@@ -4692,7 +4806,16 @@ const handleStatusChange = async (
                 </div>
               )}
 
-              <button type="submit" disabled={isSubmitting} className="w-full mt-1 bg-emerald-500 hover:bg-emerald-600 text-white font-black py-4 rounded-xl text-sm shadow-sm">Bayar & Simpan Transaksi</button>
+              <button type="submit" disabled={isSubmitting} className="w-full mt-1 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-70 text-white font-black py-4 rounded-xl text-sm shadow-sm inline-flex items-center justify-center gap-2">
+                {isSubmitting ? (
+                  <>
+                    <span className="inline-block w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                    Menyiapkan pembayaran…
+                  </>
+                ) : (
+                  'Bayar & Simpan Transaksi'
+                )}
+              </button>
                 </div>
               </div>
               </div>
