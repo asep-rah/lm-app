@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import StageTimeline from '@/components/StageTimeline';
 import WasherBatchTimeline from '@/components/pos/WasherBatchTimeline';
@@ -23,6 +23,13 @@ import OutletBooksEditor from '@/components/owner/OutletBooksEditor';
 import OwnerApprovalsTab from '@/components/owner/OwnerApprovalsTab';
 import { emptyBook, findOutletIdByName, loadOutletBooks, saveOutletBook, type OutletBook } from '@/lib/outletBooks';
 import { paymentOpsClientHeaders } from '@/lib/requirePaymentOpsAuth';
+import {
+  downloadServicesCsv,
+  mergeServicesFromCsv,
+  serializeServicesCsv,
+  servicesCsvTemplate,
+  type DynamicService
+} from '@/lib/servicesCsv';
 
 const AICopilotCard = dynamic(() => import('@/components/analytics/AICopilotCard'), { ssr: false });
 
@@ -66,9 +73,11 @@ export default function Dashboard() {
   // States Settings & Dynamic Services
   const [basicSalary, setBasicSalary] = useState('1500000');
   const [coaList, setCoaList] = useState('');
-  const [services, setServices] = useState<any[]>([]);
+  const [services, setServices] = useState<DynamicService[]>([]);
   const [serviceSearch, setServiceSearch] = useState('');
   const [showAllServices, setShowAllServices] = useState(false);
+  const [csvReplaceAll, setCsvReplaceAll] = useState(false);
+  const servicesCsvInputRef = useRef<HTMLInputElement>(null);
   const [receiptTerms, setReceiptTerms] = useState('');
   const [receiptLayout, setReceiptLayout] = useState<ReceiptLayout>(DEFAULT_RECEIPT_LAYOUT);
   const [settingsPanel, setSettingsPanel] = useState<SettingsPanel>('services');
@@ -771,6 +780,34 @@ export default function Dashboard() {
   const handleAddService = () => { setServices([...services, { id: `svc_${Date.now()}`, name: 'Layanan Baru', type: 'kg', price: 0, commissions: { sortir: 0, cuci: 0, kering: 0, setrika: 0, packing: 0 } }]); };
   const handleRemoveService = (idToRemove: string) => { if (confirm('Yakin hapus?')) setServices(services.filter((s) => s.id !== idToRemove)); };
 
+  const handleExportServicesCsv = () => {
+    downloadServicesCsv(`layanan_global_${new Date().toISOString().slice(0, 10)}.csv`, serializeServicesCsv(services));
+  };
+
+  const handleDownloadServicesTemplate = () => {
+    downloadServicesCsv('template_layanan.csv', servicesCsvTemplate());
+  };
+
+  const handleImportServicesCsv = async (file: File | null) => {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const mode = csvReplaceAll ? 'replace' : 'merge';
+      if (mode === 'replace' && !confirm('Ganti semua layanan dari CSV? Layanan yang tidak ada di file akan dihapus dari daftar (belum tersimpan ke DB sampai SIMPAN).')) {
+        if (servicesCsvInputRef.current) servicesCsvInputRef.current.value = '';
+        return;
+      }
+      const result = mergeServicesFromCsv(services, text, mode);
+      setServices(result.services);
+      const skipNote = result.skipped ? `\n${result.skipped} baris di-skip.` : '';
+      alert(`✅ CSV diimpor ke state.\n+${result.added} baru, ${result.updated} diubah.${skipNote}\n\nJangan lupa SIMPAN SEMUA PENGATURAN.`);
+    } catch (e: any) {
+      alert('❌ Gagal baca CSV: ' + (e?.message || 'error'));
+    } finally {
+      if (servicesCsvInputRef.current) servicesCsvInputRef.current.value = '';
+    }
+  };
+
   const updateService = (id: string, field: string, value: any) => {
     if (settingViewOutlet === 'ALL') { setServices(services.map((s) => (s.id === id ? { ...s, [field]: value } : s))); }
     else { setOutletOverrides((prev: any) => { const currentOutlet = prev[settingViewOutlet] || {}; return { ...prev, [settingViewOutlet]: { ...currentOutlet, [id]: { ...(currentOutlet[id] || {}), [field]: value } } }; }); }
@@ -1148,13 +1185,39 @@ export default function Dashboard() {
                         <h3 className="font-bold text-slate-800">⚙️ Dynamic Services</h3>
                         <p className="text-[10px] text-slate-400">Total {services.length} layanan terdaftar.</p>
                       </div>
-                      <div className="flex w-full md:w-auto items-center gap-2">
+                      <div className="flex w-full md:w-auto items-center gap-2 flex-wrap justify-end">
                         <select value={settingViewOutlet} onChange={(e) => setSettingViewOutlet(e.target.value)} className="w-full md:w-auto border border-indigo-200 rounded-xl px-3 py-2 text-[10px] md:text-xs font-bold text-indigo-700 bg-indigo-50">
                           <option value="ALL">🌐 GLOBAL</option>{outlets.map((o) => (<option key={o.id} value={o.id}>📍 {o.name}</option>))}
                         </select>
-                        {settingViewOutlet === 'ALL' && (<button onClick={handleAddService} className="bg-emerald-100 text-emerald-700 font-bold px-3 py-2 rounded-lg text-[10px] whitespace-nowrap">+ Tambah</button>)}
+                        {settingViewOutlet === 'ALL' && (
+                          <>
+                            <button type="button" onClick={handleExportServicesCsv} className="bg-slate-100 text-slate-700 font-bold px-3 py-2 rounded-lg text-[10px] whitespace-nowrap border border-slate-200">Export CSV</button>
+                            <button type="button" onClick={handleDownloadServicesTemplate} className="bg-slate-100 text-slate-700 font-bold px-3 py-2 rounded-lg text-[10px] whitespace-nowrap border border-slate-200">Template CSV</button>
+                            <button type="button" onClick={() => servicesCsvInputRef.current?.click()} className="bg-indigo-100 text-indigo-700 font-bold px-3 py-2 rounded-lg text-[10px] whitespace-nowrap border border-indigo-200">Import CSV</button>
+                            <button type="button" onClick={handleAddService} className="bg-emerald-100 text-emerald-700 font-bold px-3 py-2 rounded-lg text-[10px] whitespace-nowrap">+ Tambah</button>
+                            <input
+                              ref={servicesCsvInputRef}
+                              type="file"
+                              accept=".csv,text/csv"
+                              className="hidden"
+                              onChange={(e) => handleImportServicesCsv(e.target.files?.[0] || null)}
+                            />
+                          </>
+                        )}
                       </div>
                     </div>
+
+                    {settingViewOutlet === 'ALL' && (
+                      <label className="mb-3 flex items-center gap-2 text-[10px] text-slate-500 font-medium cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={csvReplaceAll}
+                          onChange={(e) => setCsvReplaceAll(e.target.checked)}
+                          className="rounded border-slate-300"
+                        />
+                        Ganti semua dari CSV (hapus layanan yang tidak ada di file)
+                      </label>
+                    )}
 
                     <div className="mb-4">
                       <input

@@ -33,6 +33,10 @@ Cek cepat:
 - Table Editor → RLS on: `error_logs`, `webhook_logs`, `audit_logs`, `deposit_payment_credits`.
 - Coba dari browser console dengan anon key: `delete` transaksi harus gagal; `rpc('credit_customer_deposit')` harus gagal.
 
+### Reset data (opsional, sekali jalan)
+
+Setelah **backup/snapshot**: jalankan [`docs/sql/reset_keep_sorcha_dago.sql`](sql/reset_keep_sorcha_dago.sql) sebagai postgres/service role (bukan anon). Checklist verifikasi: [`docs/sql/VERIFY_AFTER_RESET.md`](sql/VERIFY_AFTER_RESET.md).
+
 ## 3. Praktik aman harian
 
 - Jangan bagikan service role / ops secret ke kasir umum (cukup lewat env Vercel + build).
