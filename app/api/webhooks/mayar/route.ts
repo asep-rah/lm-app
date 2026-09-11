@@ -48,27 +48,7 @@ const findTransaction = async (refs: ReturnType<typeof mayarWebhookRefs>, explic
       .limit(1);
     if (data?.[0]) return data[0];
   }
-  // Fallback QRIS dinamis: cocokkan tagihan pending ber-nominal sama (2 jam terakhir).
-  const amt = Number(refs.amount || 0);
-  if (amt >= 1000) {
-    const since = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-    const { data } = await supabase
-      .from('transactions')
-      .select('*')
-      .eq('amount', amt)
-      .gte('created_at', since)
-      .order('created_at', { ascending: false })
-      .limit(8);
-    const pending = (data || []).find((t: any) => {
-      if (t?.is_paid === true) return false;
-      const pay = String(t?.payment_status || '').toLowerCase();
-      const st = String(t?.status || '').toLowerCase();
-      const method = String(t?.payment_method || '').toLowerCase();
-      if (['paid', 'lunas', 'verified'].includes(pay)) return false;
-      return method.includes('qris') || st.includes('menunggu') || pay === 'pending';
-    });
-    if (pending) return pending;
-  }
+  // Jangan cocokkan hanya by nominal — pembayaran lama bisa menandai tagihan baru sebagai lunas.
   return null;
 };
 

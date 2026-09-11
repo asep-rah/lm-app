@@ -288,12 +288,24 @@ export async function simulateMayarAutoPay(opts: {
   amount?: number;
   customerPhone?: string;
 }) {
-  const res = await fetch('/api/mayar/simulate', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(opts)
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json?.error || 'Gagal simulasi pembayaran');
-  return json;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20_000);
+  try {
+    const res = await fetch('/api/mayar/simulate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(opts),
+      signal: ctrl.signal
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json?.error || 'Gagal simulasi pembayaran');
+    return json;
+  } catch (e: any) {
+    if (e?.name === 'AbortError') {
+      throw new Error('Simulasi timeout — coba lagi atau pakai Konfirmasi kasir');
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }

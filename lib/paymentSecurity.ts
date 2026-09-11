@@ -1,23 +1,26 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import { diagnosisHintOf } from '@/lib/errorDiagnosis';
-import { resolveSupabaseUrl } from '@/lib/supabaseEnv';
+import { DEFAULT_SUPABASE_URL, resolveSupabaseUrl } from '@/lib/supabaseEnv';
 
 export type GatewayName = 'mayar' | 'xendit' | 'manual' | 'cron' | 'check-status';
 
+const DEV_ANON_FALLBACK = 'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs';
+
 const serviceClient = () => {
-  const url = resolveSupabaseUrl({ allowFallback: true });
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-  if (!url || !key) {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error('SUPABASE_SERVICE_ROLE_KEY wajib di production untuk operasi pembayaran');
-    }
-    // Dev saja: anon sebagai fallback terbatas
-    return createClient(url || 'http://127.0.0.1', process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'dev', {
-      auth: { persistSession: false, autoRefreshToken: false }
-    });
+  const url = resolveSupabaseUrl({ allowFallback: true }) || DEFAULT_SUPABASE_URL;
+  const key = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  if (key) {
+    return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
   }
-  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('SUPABASE_SERVICE_ROLE_KEY wajib di production untuk operasi pembayaran');
+  }
+  // Dev: samakan fallback dengan supabaseClient / mayar create agar simulasi & cek status tidak 404.
+  const anon = String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '').trim() || DEV_ANON_FALLBACK;
+  return createClient(url, anon, {
+    auth: { persistSession: false, autoRefreshToken: false }
+  });
 };
 
 export const paymentServiceDb = (): SupabaseClient => serviceClient();

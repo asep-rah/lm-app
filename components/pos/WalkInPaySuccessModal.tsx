@@ -67,7 +67,9 @@ export default function WalkInPaySuccessModal({
   useEffect(() => {
     if (!waitingQris || !tx.id || qrisLoading) return;
 
+    let cancelled = false;
     const markPaid = async () => {
+      if (cancelled) return;
       await onPaid({ ...tx, is_paid: true, payment_status: 'paid' } as WalkInPaySuccessTx);
     };
 
@@ -85,6 +87,7 @@ export default function WalkInPaySuccessModal({
       )
       .subscribe();
 
+    // Mulai poll setelah QR siap + jeda singkat, agar tidak salah deteksi pembayaran lama.
     const poll = window.setInterval(async () => {
       try {
         const res = await fetch(`/api/pay/check-status?order_id=${encodeURIComponent(tx.id)}`);
@@ -96,9 +99,10 @@ export default function WalkInPaySuccessModal({
       } catch {
         /* ignore transient poll errors */
       }
-    }, 4000);
+    }, 6000);
 
     return () => {
+      cancelled = true;
       supabase.removeChannel(channel);
       window.clearInterval(poll);
     };
@@ -118,7 +122,24 @@ export default function WalkInPaySuccessModal({
       toast('Simulasi QRIS berhasil — pembayaran lunas.', 'ok');
       await onPaid({ ...tx, is_paid: true });
     } catch (e: any) {
-      toast(e?.message || 'Simulasi gagal', 'err');
+      // Cadangan: konfirmasi kasir langsung jika simulasi API gagal
+      try {
+        const res = await fetch('/api/pay/check-status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            order_id: tx.id,
+            cashier_confirm: true,
+            agentName: 'Simulasi POS'
+          })
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.error || e?.message || 'Simulasi gagal');
+        toast('Simulasi OK (via konfirmasi kasir).', 'ok');
+        await onPaid({ ...tx, is_paid: true });
+      } catch (e2: any) {
+        toast(e2?.message || e?.message || 'Simulasi gagal', 'err');
+      }
     } finally {
       setBusySim(false);
     }

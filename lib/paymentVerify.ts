@@ -276,7 +276,7 @@ export async function markGatewayPaid(opts: {
 }) {
   const { data: existing } = await supabase
     .from('transactions')
-    .select('id, is_paid, payment_status, status, amount, customer_phone, receipt_number, pickup_id')
+    .select('id, is_paid, payment_status, status, amount, customer_phone, receipt_number')
     .eq('id', opts.transactionId)
     .maybeSingle();
 
@@ -298,7 +298,7 @@ export async function markGatewayPaid(opts: {
     const nominal = Number(opts.amount || existing?.amount || 0).toLocaleString('id-ID');
     await insertChatMessage({
       customer_phone: phone,
-      pickup_order_id: opts.pickupId || existing?.pickup_id || null,
+      pickup_order_id: opts.pickupId || null,
       transaction_id: opts.transactionId,
       sender_type: 'cs',
       sender_name: agent,
