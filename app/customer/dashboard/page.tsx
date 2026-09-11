@@ -2284,9 +2284,9 @@ function CustomerDashboardPage() {
                             className="w-full bg-amber-50 border border-amber-300 rounded-xl p-2 text-xs font-extrabold text-amber-800"
                           >
                             <option value="Reguler (3 Hari)">Reguler 3 Hari</option>
-                            <option value="Oneday">Oneday (+50%)</option>
-                            <option value="Express">Express 6 Jam (+100%)</option>
-                            <option value="Quick">Quick 3 Jam (+200%)</option>
+                            <option value="Oneday">Oneday 24jam</option>
+                            <option value="Express">Express 6 Jam</option>
+                            <option value="Quick">Quick 3 Jam</option>
                           </select>
                         </div>
                         <div>
@@ -2453,9 +2453,9 @@ function CustomerDashboardPage() {
                             className="w-full bg-amber-50 border border-amber-300 rounded-xl p-2 text-xs font-extrabold text-amber-800"
                           >
                             <option value="Reguler (3 Hari)">Reguler 3 Hari</option>
-                            <option value="Oneday (1 Hari / 24 Jam)">Oneday (+50%)</option>
-                            <option value="Express (6 Jam)">Express 6 Jam (+100%)</option>
-                            <option value="Quick (3 Jam)">Quick 3 Jam (+200%)</option>
+                            <option value="Oneday (1 Hari / 24 Jam)">Oneday 24jam</option>
+                            <option value="Express (6 Jam)">Express 6 Jam</option>
+                            <option value="Quick (3 Jam)">Quick 3 Jam</option>
                           </select>
                         </div>
                         <div>
