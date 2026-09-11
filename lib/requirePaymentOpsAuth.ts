@@ -83,13 +83,19 @@ export async function requirePaymentOpsAuth(
     }
 
     if (!emp) {
-      // Dev tanpa baris employees: izinkan role claimed jika secret OK / non-prod
-      if (!isProd && claimedRole && allowed.has(claimedRole)) {
+      // Dev: izinkan claimed role.
+      // Prod + secret sudah OK: izinkan role elevated (resync) agar Owner tidak
+      // terkunci setelah reset DB / mismatch localStorage vs baris employees.
+      const canBootstrap =
+        claimedRole &&
+        allowed.has(claimedRole) &&
+        (!isProd || (kind === 'resync' && RESYNC_ROLES.has(claimedRole)));
+      if (canBootstrap) {
         return {
           ok: true,
-          agentName: agentName || 'Staf',
+          agentName: agentName || 'Owner',
           role: claimedRole,
-          staffId: staffId || 'dev'
+          staffId: staffId || 'bootstrap'
         };
       }
       return { ok: false, status: 403, error: 'Staf tidak ditemukan / tidak berwenang' };
