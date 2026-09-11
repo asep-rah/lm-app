@@ -44,7 +44,7 @@ export const isMockPaymentsEnabled = () =>
 
 export const mockQrisImageUrl = (payload?: string) =>
   `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(
-    payload || 'MOCK_DEPOSIT_PAYMENT'
+    payload || 'https://mayar.id'
   )}`;
 
 export const buildMockMayarCharge = (input: MayarChargeInput): MayarChargeResult => {
@@ -57,7 +57,8 @@ export const buildMockMayarCharge = (input: MayarChargeInput): MayarChargeResult
     mock: true,
     paymentId,
     invoiceUrl,
-    qrisUrl: mockQrisImageUrl(`MOCK_DEPOSIT_PAYMENT:${receipt}`)
+    // Encode tautan bayar mock (bukan string acak) — string acak sering dibaca e-wallet sebagai QR luar negeri/China.
+    qrisUrl: mockQrisImageUrl(invoiceUrl)
   };
 };
 

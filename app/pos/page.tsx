@@ -279,6 +279,22 @@ export function POSContent() {
     qris: 0,
     deposit: 0
   });
+  const [todayLedger, setTodayLedger] = useState<
+    Array<{
+      id: string;
+      kind: 'tx' | 'member';
+      receipt: string;
+      customer_name: string;
+      customer_phone?: string;
+      service: string;
+      amount: number;
+      order_type: string;
+      payment_method: string;
+      created_at: string;
+      status?: string;
+    }>
+  >([]);
+  const [dayDrillFilter, setDayDrillFilter] = useState<'offline' | 'online' | 'cash' | 'qris' | 'deposit' | null>(null);
   const [customerOrder, setCustomerOrder] = useState<CustomerOrder | null>(null);
   const [address, setAddress] = useState('');
   const [bagCount, setBagCount] = useState('1');
@@ -1448,17 +1464,30 @@ const handleApplyLoan = async (e: React.FormEvent) => {
 
     const { data: txDataRaw, error: txSelErr } = await supabase
       .from('transactions')
-      .select('amount, order_type, created_at, payment_method, status, is_void, delete_requested')
+      .select(
+        'id, receipt_number, amount, order_type, created_at, payment_method, status, is_void, delete_requested, customer_name, customer_phone, service_type'
+      )
       .eq('outlet_id', selectedOutlet);
     let txData: any[] | null = txDataRaw;
     if (txSelErr) {
       const retry = await supabase
         .from('transactions')
-        .select('amount, order_type, created_at, payment_method, status')
+        .select('id, receipt_number, amount, order_type, created_at, payment_method, status, customer_name, customer_phone, service_type')
         .eq('outlet_id', selectedOutlet);
       txData = retry.data;
     }
-    const { data: memLogsAll } = await supabase.from('membership_logs').select('price, order_type, created_at').eq('outlet_id', selectedOutlet);
+    const { data: memLogsAllRaw, error: memSelErr } = await supabase
+      .from('membership_logs')
+      .select('id, price, order_type, created_at, package_name, customer_phone, payment_method')
+      .eq('outlet_id', selectedOutlet);
+    let memLogsAll: any[] | null = memLogsAllRaw;
+    if (memSelErr) {
+      const retry = await supabase
+        .from('membership_logs')
+        .select('id, price, order_type, created_at, package_name, customer_phone')
+        .eq('outlet_id', selectedOutlet);
+      memLogsAll = retry.data;
+    }
 
     const isSameDay = (iso: any) => {
       const d = new Date(iso);
@@ -1472,6 +1501,19 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     let dayDeposit = 0;
     let offlineCount = 0;
     let onlineCount = 0;
+    const ledger: Array<{
+      id: string;
+      kind: 'tx' | 'member';
+      receipt: string;
+      customer_name: string;
+      customer_phone?: string;
+      service: string;
+      amount: number;
+      order_type: string;
+      payment_method: string;
+      created_at: string;
+      status?: string;
+    }> = [];
 
     txData?.forEach((tx) => {
       if (isVoidTransaction(tx)) return;
@@ -1486,6 +1528,19 @@ const handleApplyLoan = async (e: React.FormEvent) => {
         else dayCash += amt;
         if (isOnlineOrderType(tx.order_type)) onlineCount += 1;
         else offlineCount += 1;
+        ledger.push({
+          id: String(tx.id),
+          kind: 'tx',
+          receipt: String(tx.receipt_number || tx.id).slice(0, 16),
+          customer_name: String(tx.customer_name || 'Pelanggan'),
+          customer_phone: tx.customer_phone ? String(tx.customer_phone) : undefined,
+          service: String(tx.service_type || 'Laundry'),
+          amount: amt,
+          order_type: String(tx.order_type || 'Offline'),
+          payment_method: String(tx.payment_method || 'Cash'),
+          created_at: String(tx.created_at),
+          status: tx.status ? String(tx.status) : undefined
+        });
       }
     });
 
@@ -1495,11 +1550,28 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       if (d.getMonth() === currentMonth && d.getFullYear() === currentYear) { totalRev += amt; }
       if (isSameDay(ml.created_at)) {
         dayRev += amt;
-        dayCash += amt;
+        const bucket = payBucket(ml.payment_method || 'Cash');
+        if (bucket === 'deposit') dayDeposit += amt;
+        else if (bucket === 'qris') dayQris += amt;
+        else dayCash += amt;
         if (isOnlineOrderType(ml.order_type)) onlineCount += 1;
         else offlineCount += 1;
+        ledger.push({
+          id: `mem-${ml.id}`,
+          kind: 'member',
+          receipt: String(ml.package_name || 'Member'),
+          customer_name: 'Membership / Top-up',
+          customer_phone: ml.customer_phone ? String(ml.customer_phone) : undefined,
+          service: String(ml.package_name || 'Membership'),
+          amount: amt,
+          order_type: String(ml.order_type || 'Offline'),
+          payment_method: String(ml.payment_method || 'Cash'),
+          created_at: String(ml.created_at)
+        });
       }
     });
+    ledger.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    setTodayLedger(ledger);
     setMonthlyRevenue(totalRev);
     setDailyMetrics({
       offlineCount,
@@ -1681,6 +1753,10 @@ const handleApplyLoan = async (e: React.FormEvent) => {
 
     let finalPaymentMethodLabel = paymentMethod;
     let depositDeductionAmount = 0;
+
+    if (String(paymentMethod).toLowerCase().includes('qris') && totalPay > 0 && totalPay < 1000) {
+      return alert('⚠️ QRIS Mayar minimal Rp 1.000. Naikkan total atau pilih Cash/Deposit.');
+    }
 
     if (paymentMethod === 'Deposit Saldo') {
       if (!normalizedPhone) return alert('⚠️ Nomor WA Pelanggan wajib diisi!');
@@ -3890,16 +3966,24 @@ const handleStatusChange = async (
               </div>
 
               <div className="grid grid-cols-2 gap-3">
-                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3">
+                <button
+                  type="button"
+                  onClick={() => setDayDrillFilter('offline')}
+                  className="text-left bg-slate-50 border border-slate-200 rounded-2xl p-3 hover:border-slate-400 hover:bg-white transition"
+                >
                   <p className="text-[10px] font-bold uppercase text-slate-400">Offline hari ini</p>
                   <p className="text-2xl font-black text-slate-900">{dailyMetrics.offlineCount}</p>
-                  <p className="text-[10px] text-slate-500">transaksi datang langsung</p>
-                </div>
-                <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-3">
+                  <p className="text-[10px] text-slate-500">ketuk untuk lihat daftar</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDayDrillFilter('online')}
+                  className="text-left bg-indigo-50 border border-indigo-200 rounded-2xl p-3 hover:border-indigo-400 hover:bg-white transition"
+                >
                   <p className="text-[10px] font-bold uppercase text-indigo-400">Online / App</p>
                   <p className="text-2xl font-black text-indigo-900">{dailyMetrics.onlineCount}</p>
-                  <p className="text-[10px] text-indigo-700">transaksi aplikasi / WA</p>
-                </div>
+                  <p className="text-[10px] text-indigo-700">ketuk untuk lihat daftar</p>
+                </button>
               </div>
 
               <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 space-y-3">
@@ -3911,22 +3995,95 @@ const handleStatusChange = async (
                   <p className="text-[10px] font-bold text-emerald-700">{dailyMetrics.offlineCount + dailyMetrics.onlineCount} trx</p>
                 </div>
                 <div className="grid grid-cols-3 gap-2">
-                  <div className="bg-white/80 rounded-xl p-2 text-center">
+                  <button
+                    type="button"
+                    onClick={() => setDayDrillFilter('cash')}
+                    className="bg-white/80 hover:bg-white rounded-xl p-2 text-center border border-transparent hover:border-emerald-300 transition"
+                  >
                     <p className="text-[9px] font-bold uppercase text-slate-400">Cash</p>
                     <p className="text-[11px] font-black text-slate-800">Rp {dailyMetrics.cash.toLocaleString('id-ID')}</p>
-                  </div>
-                  <div className="bg-white/80 rounded-xl p-2 text-center">
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDayDrillFilter('qris')}
+                    className="bg-white/80 hover:bg-white rounded-xl p-2 text-center border border-transparent hover:border-emerald-300 transition"
+                  >
                     <p className="text-[9px] font-bold uppercase text-slate-400">QRIS</p>
                     <p className="text-[11px] font-black text-slate-800">Rp {dailyMetrics.qris.toLocaleString('id-ID')}</p>
-                  </div>
-                  <div className="bg-white/80 rounded-xl p-2 text-center">
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDayDrillFilter('deposit')}
+                    className="bg-white/80 hover:bg-white rounded-xl p-2 text-center border border-transparent hover:border-emerald-300 transition"
+                  >
                     <p className="text-[9px] font-bold uppercase text-slate-400">Deposit</p>
                     <p className="text-[11px] font-black text-slate-800">Rp {dailyMetrics.deposit.toLocaleString('id-ID')}</p>
-                  </div>
+                  </button>
                 </div>
               </div>
             </div>
           )}
+
+          {dayDrillFilter && (() => {
+            const titleMap = {
+              offline: 'Offline hari ini',
+              online: 'Online / App hari ini',
+              cash: 'Pembayaran Cash hari ini',
+              qris: 'Pembayaran QRIS hari ini',
+              deposit: 'Pembayaran Deposit hari ini'
+            } as const;
+            const rows = todayLedger.filter((row) => {
+              if (dayDrillFilter === 'offline') return !isOnlineOrderType(row.order_type);
+              if (dayDrillFilter === 'online') return isOnlineOrderType(row.order_type);
+              return payBucket(row.payment_method) === dayDrillFilter;
+            });
+            const sum = rows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+            return (
+              <div className="fixed inset-0 z-[70] bg-black/50 flex items-end md:items-center justify-center p-0 md:p-4 print:hidden">
+                <div className="bg-white w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-t-3xl md:rounded-2xl p-4 md:p-5 shadow-2xl space-y-3">
+                  <div className="flex items-start justify-between gap-2 sticky top-0 bg-white pb-2 border-b">
+                    <div>
+                      <p className="text-[10px] font-black uppercase text-emerald-600">Rincian</p>
+                      <h3 className="text-sm font-black text-slate-900">{titleMap[dayDrillFilter]}</h3>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        {rows.length} trx · Rp {sum.toLocaleString('id-ID')}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setDayDrillFilter(null)}
+                      className="text-xs font-bold text-slate-500 px-3 py-1.5 rounded-lg bg-slate-100"
+                    >
+                      Tutup
+                    </button>
+                  </div>
+                  {rows.length === 0 ? (
+                    <p className="text-xs text-slate-500 text-center py-8">Belum ada transaksi di kategori ini.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {rows.map((row) => (
+                        <div key={row.id} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5">
+                          <div className="flex justify-between gap-2 items-start">
+                            <div className="min-w-0">
+                              <p className="text-xs font-extrabold text-slate-900 truncate">{row.customer_name}</p>
+                              <p className="text-[10px] text-slate-500 font-mono">{row.receipt}</p>
+                              <p className="text-[10px] text-slate-600 mt-0.5">
+                                {row.service} · {row.payment_method}
+                                {row.kind === 'member' ? ' · Membership' : ''}
+                              </p>
+                            </div>
+                            <p className="text-xs font-black text-emerald-800 whitespace-nowrap">
+                              Rp {Number(row.amount).toLocaleString('id-ID')}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {homeModal === 'member' && (
             <div className="fixed inset-0 z-[60] bg-black/50 flex items-end md:items-center justify-center p-0 md:p-4">

@@ -158,7 +158,16 @@ export default function WalkInPaySuccessModal({
 
         {waitingQris && (
           <div className="rounded-2xl border border-indigo-200 bg-indigo-50/60 p-3 space-y-2">
-            <p className="text-[11px] font-bold text-indigo-900">Scan QRIS dinamis Mayar di bawah. Cetak struk baru setelah lunas.</p>
+            {tx.mayar_mock ? (
+              <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-left">
+                <p className="text-[11px] font-black text-amber-900">Mode uji / QRIS belum live Mayar</p>
+                <p className="text-[10px] text-amber-800 mt-0.5 leading-relaxed">
+                  Jangan scan dengan e-wallet bank — bisa muncul “QR China / CNY”. Pakai <b>Buka tautan pembayaran</b> atau tombol <b>Simulasi Bayar</b>. Pastikan Mayar API Key outlet sudah aktif.
+                </p>
+              </div>
+            ) : (
+              <p className="text-[11px] font-bold text-indigo-900">Scan QRIS dinamis Mayar di bawah. Cetak struk baru setelah lunas.</p>
+            )}
             {tx.qris_url ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
@@ -167,7 +176,9 @@ export default function WalkInPaySuccessModal({
                 className="w-48 h-48 mx-auto bg-white rounded-xl border object-contain"
               />
             ) : (
-              <p className="text-[11px] text-amber-700 font-bold py-4">QR belum tersedia — cek status atau kirim ulang tagihan.</p>
+              <p className="text-[11px] text-amber-700 font-bold py-4">
+                QR belum tersedia{Number(tx.amount) > 0 && Number(tx.amount) < 1000 ? ' — nominal minimal QRIS Rp 1.000' : ''}.
+              </p>
             )}
             {tx.invoice_url && (
               <a
