@@ -1716,8 +1716,6 @@ function CustomerDashboardPage() {
     const notesCombined = `Alamat: ${pickupFull} | Detail: ${detailLines.join(' | ')}${notes ? ` | Catatan: ${notes}` : ''}`;
     const autoOrderNo = `ORD-${Date.now().toString().slice(-8)}`;
 
-    const nowIso = new Date().toISOString();
-    const todayDateStr = nowIso.split('T')[0];
     const schedule = pickupLater ? parsePickupSchedule(pickupDate, pickupTime) : null;
     if (pickupLater && !schedule) {
       setIsSubmitting(false);
@@ -1786,10 +1784,10 @@ function CustomerDashboardPage() {
       items: itemsPayload,
       delivery_fee: Number(finalOngkir) || 0,
       notes: finalNotes,
-      pickup_date: isFuturePickup && schedule ? schedule.date : todayDateStr,
-      pickup_time: isFuturePickup && schedule ? schedule.time : undefined,
-      scheduled_at: isFuturePickup && schedule ? schedule.iso : undefined,
-      pickup_at: isFuturePickup && schedule ? schedule.iso : undefined,
+      pickup_date: isFuturePickup && schedule ? schedule.date : null,
+      pickup_time: isFuturePickup && schedule ? schedule.time : null,
+      scheduled_at: isFuturePickup && schedule ? schedule.iso : null,
+      pickup_at: isFuturePickup && schedule ? schedule.iso : null,
       status: isFuturePickup ? 'Terjadwal' : 'Menunggu Kurir',
       courier_type: isFuturePickup ? null : courierType || 'INTERNAL'
     };

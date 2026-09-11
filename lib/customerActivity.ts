@@ -99,13 +99,25 @@ const normalizeScheduleTime = (raw?: string | null) => {
 };
 
 export const scheduleAtOf = (order: any): Date | null => {
-  const parsedCols = parsePickupSchedule(order?.pickup_date, order?.pickup_time || (order?.pickup_date ? '23:59' : ''));
-  if (parsedCols) return parsedCols.at;
   const raw = order?.pickup_at || order?.scheduled_at || order?.scheduled_for || '';
   if (raw) {
     const d = new Date(raw);
     if (!Number.isNaN(d.getTime())) return d;
   }
+
+  // Hanya pakai tanggal+jam eksplisit. Jangan default 23:59 untuk order instan
+  // yang kebetulan punya pickup_date = hari ini (itu memicu "Jemputan Terjadwal" palsu).
+  if (order?.pickup_date && order?.pickup_time) {
+    const parsedCols = parsePickupSchedule(order.pickup_date, order.pickup_time);
+    if (parsedCols) return parsedCols.at;
+  }
+
+  // Booking terjadwal kadang hanya isi tanggal — boleh anggap akhir hari jika status terjadwal.
+  if (order?.pickup_date && isScheduledStatus(order)) {
+    const parsedCols = parsePickupSchedule(order.pickup_date, '23:59');
+    if (parsedCols) return parsedCols.at;
+  }
+
   const notes = String(order?.notes || '');
   const m = notes.match(/Jadwal jemput:\s*([^\s]+)(?:\s+(\d{1,2}[:.]\d{2}(?::\d{2})?))?/i);
   if (m) {
@@ -124,6 +136,19 @@ export const isScheduledStatus = (order: any) => {
 export const isScheduledOrder = (order: any) => {
   if (isOrderFinished(order)) return false;
   if (isScheduledStatus(order)) return true;
+
+  const st = String(order?.status || '').toLowerCase();
+  const looksInstant =
+    st.includes('menunggu kurir') ||
+    st.includes('menunggu') ||
+    st.includes('request') ||
+    st === 'baru';
+  const hasExplicitSchedule =
+    Boolean(order?.pickup_time || order?.scheduled_at || order?.pickup_at) ||
+    /Jadwal jemput:/i.test(String(order?.notes || ''));
+  // Order jemput sekarang: jangan klasifikasi terjadwal hanya karena ada pickup_date hari ini.
+  if (looksInstant && !hasExplicitSchedule) return false;
+
   const when = scheduleAtOf(order);
   if (!when) return false;
   return when.getTime() > Date.now() + 30 * 60 * 1000;
