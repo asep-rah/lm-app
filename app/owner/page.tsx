@@ -221,17 +221,17 @@ export default function Dashboard() {
       const u = raw ? JSON.parse(raw) : {};
       return {
         staffId: String(u.id || u.username || ''),
-        role: String(u.role || currentUserRole || 'owner').toLowerCase(),
+        staffRole: String(u.role || currentUserRole || 'owner').toLowerCase(),
         agentName: String(u.name || currentUserName || 'Owner')
       };
     } catch {
-      return { staffId: '', role: 'owner', agentName: currentUserName || 'Owner' };
+      return { staffId: '', staffRole: 'owner', agentName: currentUserName || 'Owner' };
     }
   };
 
   const refreshEmployees = async () => {
     const id = staffOpsIdentity();
-    const q = new URLSearchParams({ staffId: id.staffId, role: id.role, agentName: id.agentName });
+    const q = new URLSearchParams({ staffId: id.staffId, staffRole: id.staffRole, role: id.staffRole, agentName: id.agentName });
     const res = await fetch(`/api/owner/employees?${q}`, { headers: paymentOpsClientHeaders() });
     const json = await res.json().catch(() => ({}));
     if (res.ok && Array.isArray(json.employees)) {

@@ -106,8 +106,16 @@ export async function requirePaymentOpsAuth(
       role,
       staffId: String(emp.id || staffId)
     };
-  } catch {
-    return { ok: false, status: 500, error: 'Gagal verifikasi staf' };
+  } catch (e: any) {
+    const msg = String(e?.message || '');
+    if (/SUPABASE_SERVICE_ROLE_KEY/i.test(msg)) {
+      return {
+        ok: false,
+        status: 503,
+        error: 'SUPABASE_SERVICE_ROLE_KEY belum dikonfigurasi di server (Vercel)'
+      };
+    }
+    return { ok: false, status: 500, error: msg ? `Gagal verifikasi staf: ${msg}` : 'Gagal verifikasi staf' };
   }
 }
 

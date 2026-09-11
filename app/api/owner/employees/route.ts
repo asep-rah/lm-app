@@ -10,12 +10,19 @@ const EMP_SAFE =
 
 async function authOwner(req: Request, body: Record<string, unknown> = {}) {
   const url = new URL(req.url);
+  // Prefer staffRole/actorRole so create/update `role` (karyawan baru) tidak menimpa auth owner.
   return requirePaymentOpsAuth(
     req,
     {
       staffId: String(body.staffId || url.searchParams.get('staffId') || ''),
       agentName: String(body.agentName || url.searchParams.get('agentName') || 'Owner'),
-      role: String(body.role || url.searchParams.get('role') || 'owner')
+      role: String(
+        body.staffRole ||
+          body.actorRole ||
+          url.searchParams.get('staffRole') ||
+          url.searchParams.get('role') ||
+          'owner'
+      )
     },
     'resync'
   );
