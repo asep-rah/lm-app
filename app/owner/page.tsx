@@ -30,6 +30,7 @@ import {
   servicesCsvTemplate,
   type DynamicService
 } from '@/lib/servicesCsv';
+import { sanitizePublicError } from '@/lib/supabaseEnv';
 
 const AICopilotCard = dynamic(() => import('@/components/analytics/AICopilotCard'), { ssr: false });
 
@@ -691,7 +692,7 @@ export default function Dashboard() {
       setNewEmpAccessOutlets([]);
       await refreshEmployees();
     } else {
-      alert('❌ Gagal: ' + (json.error || 'error'));
+      alert('❌ Gagal: ' + sanitizePublicError(json.error || 'error'));
     }
     setIsSaving(false);
   };
@@ -728,7 +729,7 @@ export default function Dashboard() {
       setEditEmpPassword('');
       await refreshEmployees();
     } else {
-      alert('❌ Gagal memperbarui karyawan: ' + (json.error || 'error'));
+      alert('❌ Gagal memperbarui karyawan: ' + sanitizePublicError(json.error || 'error'));
     }
     setIsSaving(false);
   };
@@ -745,7 +746,7 @@ export default function Dashboard() {
     if (res.ok) {
       setEmployees(employees.filter((emp) => emp.id !== id));
       alert('✅ Karyawan dihapus!');
-    } else alert('❌ Gagal: ' + (json.error || 'error'));
+    } else alert('❌ Gagal: ' + sanitizePublicError(json.error || 'error'));
     setIsSaving(false);
   };
 

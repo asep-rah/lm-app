@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { paymentServiceDb } from '@/lib/paymentSecurity';
 import { requirePaymentOpsAuth } from '@/lib/requirePaymentOpsAuth';
 import { isPaymentLocked } from '@/lib/paymentVerify';
+import { envAuditFlags } from '@/lib/supabaseEnv';
 
 export const dynamic = 'force-dynamic';
 
@@ -67,9 +68,10 @@ export async function GET(req: Request) {
     return NextResponse.json({
       errors: errs || [],
       webhooks: hooks || [],
-      pending: (txs || []).filter((t: any) => isPaymentLocked(t)).slice(0, 12)
+      pending: (txs || []).filter((t: any) => isPaymentLocked(t)).slice(0, 12),
+      env: envAuditFlags()
     });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message || 'Gagal muat diagnosis' }, { status: 500 });
+    return NextResponse.json({ error: e?.message || 'Gagal muat diagnosis', env: envAuditFlags() }, { status: 500 });
   }
 }

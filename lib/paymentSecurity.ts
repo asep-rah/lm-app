@@ -1,11 +1,12 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import { diagnosisHintOf } from '@/lib/errorDiagnosis';
+import { resolveSupabaseUrl } from '@/lib/supabaseEnv';
 
 export type GatewayName = 'mayar' | 'xendit' | 'manual' | 'cron' | 'check-status';
 
 const serviceClient = () => {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
+  const url = resolveSupabaseUrl({ allowFallback: true });
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
   if (!url || !key) {
     if (process.env.NODE_ENV === 'production') {

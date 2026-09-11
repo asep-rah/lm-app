@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { hashStaffPassword } from '@/lib/staffPassword';
 import { insertAuditLog, paymentServiceDb } from '@/lib/paymentSecurity';
 import { requirePaymentOpsAuth } from '@/lib/requirePaymentOpsAuth';
+import { sanitizePublicError } from '@/lib/supabaseEnv';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,6 +29,10 @@ async function authOwner(req: Request, body: Record<string, unknown> = {}) {
   );
 }
 
+function fail(error: unknown, status = 500) {
+  return NextResponse.json({ error: sanitizePublicError(error) }, { status });
+}
+
 /** List karyawan tanpa kolom password. */
 export async function GET(req: Request) {
   const auth = await authOwner(req);
@@ -39,10 +44,10 @@ export async function GET(req: Request) {
       .from('employees')
       .select(EMP_SAFE)
       .order('created_at', { ascending: false });
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) return fail(error.message, 500);
     return NextResponse.json({ employees: data || [] });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message || 'Gagal muat karyawan' }, { status: 500 });
+    return fail(e?.message || 'Gagal muat karyawan', 500);
   }
 }
 
@@ -66,7 +71,7 @@ export async function POST(req: Request) {
       const id = String(body.id || '').trim();
       if (!id) return NextResponse.json({ error: 'id wajib' }, { status: 400 });
       const { error } = await db.from('employees').delete().eq('id', id);
-      if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+      if (error) return fail(error.message, 400);
       await insertAuditLog({
         action: 'EMPLOYEE_DELETE',
         user_id: auth.staffId,
@@ -99,7 +104,7 @@ export async function POST(req: Request) {
       if (plainPw) patch.password = hashStaffPassword(plainPw);
 
       const { error } = await db.from('employees').update(patch).eq('id', id);
-      if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+      if (error) return fail(error.message, 400);
       await insertAuditLog({
         action: 'EMPLOYEE_UPDATE',
         user_id: auth.staffId,
@@ -169,7 +174,7 @@ export async function POST(req: Request) {
       }
       lastErr = error.message;
     }
-    if (!created) return NextResponse.json({ error: lastErr || 'Gagal insert' }, { status: 400 });
+    if (!created) return fail(lastErr || 'Gagal insert', 400);
 
     await insertAuditLog({
       action: 'EMPLOYEE_CREATE',
@@ -181,6 +186,6 @@ export async function POST(req: Request) {
     });
     return NextResponse.json({ ok: true, employee: created });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message || 'Gagal simpan karyawan' }, { status: 500 });
+    return fail(e?.message || 'Gagal simpan karyawan', 500);
   }
 }

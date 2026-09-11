@@ -1,4 +1,5 @@
 import { verifySharedSecret, paymentServiceDb } from '@/lib/paymentSecurity';
+import { sanitizePublicError } from '@/lib/supabaseEnv';
 
 const MANUAL_ROLES = new Set([
   'cs',
@@ -121,7 +122,11 @@ export async function requirePaymentOpsAuth(
         error: 'SUPABASE_SERVICE_ROLE_KEY belum dikonfigurasi di server (Vercel)'
       };
     }
-    return { ok: false, status: 500, error: msg ? `Gagal verifikasi staf: ${msg}` : 'Gagal verifikasi staf' };
+    return {
+      ok: false,
+      status: 500,
+      error: sanitizePublicError(msg ? `Gagal verifikasi staf: ${msg}` : 'Gagal verifikasi staf')
+    };
   }
 }
 
