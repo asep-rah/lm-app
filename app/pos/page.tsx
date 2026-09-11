@@ -1647,13 +1647,8 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     }
 
     const needsPayVerify = isNonCashVerifyMethod(finalPaymentMethodLabel);
-    const paidAtCounter =
-      !needsPayVerify &&
-      (String(finalPaymentMethodLabel).toLowerCase().includes('cash') ||
-        String(finalPaymentMethodLabel).toLowerCase().includes('tunai') ||
-        String(finalPaymentMethodLabel).toLowerCase().includes('deposit'));
 
-    const orderData = {
+    const orderData: Record<string, unknown> = {
       receipt_number: generatedResi,
       outlet_id: selectedOutlet,
       customer_name: customerName || 'Pelanggan',
@@ -1693,36 +1688,49 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       by_sortir: employeeName
     };
 
-    let { data: newTx, error } = await supabase.from('transactions').insert([orderData]).select('*, outlets(name, whatsapp_number)').single();
-    if (error) {
-      const slim = { ...orderData } as Record<string, unknown>;
-      delete slim.paid_via;
-      delete slim.mayar_payment_id;
-      delete slim.mayar_invoice_url;
-      if (String(error.message || '').includes('is_paid')) delete slim.is_paid;
-      if (String(error.message || '').includes('payment_status')) delete slim.payment_status;
-      const retryPayload = needsPayVerify
-        ? { ...slim, status: PENDING_PAY_STATUS, payment_status: 'pending' }
-        : { ...slim, status: 'Diterima' };
-      const retry = await supabase
+    // Kolom bayar opsional — DB lama mungkin belum punya payment_status / is_paid.
+    const insertAttempts: Record<string, unknown>[] = [
+      orderData,
+      (() => {
+        const r = { ...orderData };
+        delete r.payment_status;
+        return r;
+      })(),
+      (() => {
+        const r = { ...orderData };
+        delete r.payment_status;
+        delete r.is_paid;
+        return r;
+      })(),
+      (() => {
+        const r = { ...orderData };
+        delete r.payment_status;
+        delete r.is_paid;
+        delete r.paid_via;
+        delete r.mayar_payment_id;
+        delete r.mayar_invoice_url;
+        delete r.items;
+        return r;
+      })()
+    ];
+
+    let newTx: any = null;
+    let error: { message?: string } | null = null;
+    for (const attempt of insertAttempts) {
+      const res = await supabase
         .from('transactions')
-        .insert([retryPayload])
+        .insert([attempt])
         .select('*, outlets(name, whatsapp_number)')
         .single();
-      newTx = retry.data;
-      error = retry.error;
-      if (error && !needsPayVerify) {
-        const bare = { ...slim };
-        delete bare.is_paid;
-        delete bare.payment_status;
-        const retry2 = await supabase
-          .from('transactions')
-          .insert([{ ...bare, status: 'Diterima' }])
-          .select('*, outlets(name, whatsapp_number)')
-          .single();
-        newTx = retry2.data;
-        error = retry2.error;
+      if (!res.error) {
+        newTx = res.data;
+        error = null;
+        break;
       }
+      error = res.error;
+      const msg = String(res.error.message || '');
+      // Lanjut attempt berikutnya hanya untuk kolom hilang / schema cache
+      if (!/schema cache|does not exist|could not find/i.test(msg)) break;
     }
     let nextDepositBal: number | null = null;
     if (!error && newTx && appliedLoyaltyRedeem > 0 && normalizedPhone) {
