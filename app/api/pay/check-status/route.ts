@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { isPaymentLocked, markGatewayPaid } from '@/lib/paymentVerify';
 import { insertAuditLog, insertErrorLog, clientIp, paymentServiceDb } from '@/lib/paymentSecurity';
-import { isMayarPaidEvent } from '@/lib/mayar';
+import { isMayarPaidEvent, closeMayarPaymentRequest } from '@/lib/mayar';
 import { resolveMayarApiKey } from '@/lib/mayarOutletKey';
 import {
   fetchMayarSettledRows,
@@ -160,6 +160,19 @@ async function handleTx(tx: any, req: Request, supabase: ReturnType<typeof payme
         transaction_id: tx.id
       });
       return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    // Tutup payment-link sisa (jika ada) supaya tidak bisa dibayar ulang.
+    if (apiKey) {
+      const linkId = String(tx.mayar_link_payment_id || '').trim();
+      const closeId = linkId || (String(tx.mayar_invoice_url || '').includes('mayar') ? paymentId : '');
+      if (closeId && !closeId.startsWith('qris_') && !closeId.startsWith('mock_')) {
+        void closeMayarPaymentRequest(apiKey, closeId);
+      }
+      // Bersihkan URL invoice di DB
+      void supabase
+        .from('transactions')
+        .update({ mayar_invoice_url: null })
+        .eq('id', tx.id);
     }
     void insertAuditLog({
       action: 'PAYMENT_CHECK_STATUS_PAID',

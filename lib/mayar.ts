@@ -12,11 +12,18 @@ export type MayarChargeInput = {
   apiKey?: string;
   payoutAccountId?: string;
   baseUrl?: string;
+  /**
+   * pos_qris = hanya QRIS dinamis (tanpa payment-link).
+   * Mencegah double bayar: scan QR kasir vs tautan invoice Mayar.
+   */
+  mode?: 'full' | 'pos_qris';
 };
 
 export type MayarChargeResult = {
   mock: boolean;
   paymentId: string;
+  /** ID payment-link / single payment request (jika ada) — untuk di-close setelah lunas. */
+  linkPaymentId?: string;
   invoiceUrl: string;
   qrisUrl: string;
   /** true = QR berisi payload QRIS GPN yang bisa di-scan e-wallet */
@@ -193,6 +200,29 @@ export async function createMayarDynamicQris(
   return null;
 }
 
+/** Tutup single payment request Mayar agar tidak bisa dibayar lagi. */
+export async function closeMayarPaymentRequest(apiKey: string, paymentId: string): Promise<boolean> {
+  const id = String(paymentId || '').trim();
+  if (!apiKey || !id || id.startsWith('mock_') || id.startsWith('qris_')) return false;
+  const urls = [
+    `https://api.mayar.id/hl/v2/payments/${encodeURIComponent(id)}/close`,
+    `https://api.mayar.id/hl/v2/payments/${encodeURIComponent(id)}/closed`,
+    `https://api.mayar.id/hl/v1/payment/close/${encodeURIComponent(id)}`
+  ];
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, {
+        method: url.includes('/v1/') ? 'GET' : 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' }
+      });
+      if (res.ok) return true;
+    } catch {
+      /* try next */
+    }
+  }
+  return false;
+}
+
 /** Live Mayar create, or mock QRIS when KYC/key is not ready. */
 export async function createMayarPayment(input: MayarChargeInput): Promise<MayarChargeResult> {
   const amount = Math.round(Number(input.amount) || 0);
@@ -206,6 +236,35 @@ export async function createMayarPayment(input: MayarChargeInput): Promise<Mayar
   if (!apiKey) return buildMockMayarCharge(input);
 
   const receipt = String(input.receipt || '').trim();
+  const posQrisOnly = input.mode === 'pos_qris';
+
+  // POS kasir: SATU instrumen saja (QRIS dinamis). Jangan buat payment-link
+  // supaya tidak bisa bayar double lewat "Buka tautan invoice".
+  if (posQrisOnly) {
+    try {
+      const dyn = await createMayarDynamicQris(apiKey, amount, {
+        receipt,
+        description: String(input.description || `Tagihan laundry ${receipt}`).trim()
+      });
+      if (dyn?.url) {
+        return {
+          mock: false,
+          paymentId: dyn.id || `qris_${receipt.replace(/[^a-zA-Z0-9_-]/g, '').slice(-16)}_${Date.now().toString(36)}`,
+          invoiceUrl: '',
+          qrisUrl: dyn.url,
+          scanReady: true,
+          qrString: dyn.qrString,
+          raw: dyn
+        };
+      }
+      console.warn('Mayar POS dynamic QR empty, falling back to mock');
+      return buildMockMayarCharge(input);
+    } catch (err) {
+      console.warn('Mayar POS dynamic QR error, using mock:', err);
+      return buildMockMayarCharge(input);
+    }
+  }
+
   const body: Record<string, unknown> = {
     name: input.name || `Laundrivery ${receipt || 'Tagihan'}`.trim(),
     amount,
@@ -231,9 +290,9 @@ export async function createMayarPayment(input: MayarChargeInput): Promise<Mayar
     }
     const parsed = parseMayarCreate(posted.json);
     if (!parsed?.invoiceUrl && !parsed?.paymentId) return buildMockMayarCharge(input);
+    parsed.linkPaymentId = parsed.paymentId;
 
     // Payment link ≠ QRIS yang bisa di-scan bank. Ambil gambar/string QRIS dinamis Mayar.
-    // Simpan ID dari UUID gambar/field agar webhook/check-status bisa cocok.
     if (!parsed.scanReady) {
       const dyn = await createMayarDynamicQris(apiKey, amount, {
         receipt,
@@ -243,7 +302,8 @@ export async function createMayarPayment(input: MayarChargeInput): Promise<Mayar
         parsed.qrisUrl = dyn.url;
         parsed.qrString = dyn.qrString;
         parsed.scanReady = true;
-        if (dyn.id) parsed.paymentId = dyn.id;
+        // Tetap pakai ID payment-link untuk close/check; QR dinamis terpisah.
+        // Jangan overwrite paymentId dengan UUID gambar (sering tidak bisa di-query).
       }
     }
 

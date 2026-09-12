@@ -41,8 +41,19 @@ export function mayarGrossPaid(row: MayarSettlementRow): number {
   return credit + fees;
 }
 
-function amountsClose(a: number, b: number): boolean {
-  return Math.abs(a - b) <= 2;
+function amountsClose(a: number, b: number, tol = 2): boolean {
+  return Math.abs(a - b) <= tol;
+}
+
+function rowMatchesAmount(row: MayarSettlementRow, target: number): boolean {
+  const credit = Math.round(Number(row.credit ?? row.amount ?? 0) || 0);
+  const fees = feeSum(row);
+  const gross = credit + fees;
+  if (credit <= 0 && gross <= 0) return false;
+  if (amountsClose(gross, target) || amountsClose(credit, target)) return true;
+  // Fee array kosong tapi MDR sudah dipotong dari credit
+  if (fees === 0 && credit > 0 && credit < target && target - credit <= 200) return true;
+  return false;
 }
 
 function isQrisLike(row: MayarSettlementRow): boolean {
@@ -70,15 +81,16 @@ export async function fetchMayarSettledRows(
 ): Promise<MayarSettlementRow[]> {
   if (!apiKey) return [];
   const limit = Math.min(50, Math.max(10, opts?.limit || 40));
+  const attempts: string[] = [];
   const qs = new URLSearchParams({ limit: String(limit), status: 'settled' });
   if (opts?.dateFromMs && opts.dateFromMs > 0) {
     qs.set('dateFrom', String(opts.dateFromMs));
+    attempts.push(`https://api.mayar.id/hl/v2/transactions?${qs.toString()}`);
   }
-  const urls = [
-    `https://api.mayar.id/hl/v2/transactions?${qs.toString()}`,
-    `https://api.mayar.id/hl/v1/transactions?page=1&pageSize=${limit}`
-  ];
-  for (const url of urls) {
+  attempts.push(`https://api.mayar.id/hl/v2/transactions?limit=${limit}&status=settled`);
+  attempts.push(`https://api.mayar.id/hl/v1/transactions?page=1&pageSize=${limit}`);
+
+  for (const url of attempts) {
     try {
       const res = await fetch(url, {
         headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' }
@@ -170,7 +182,7 @@ export function pickMayarSettlementForInvoice(
     const byResi = candidates.find((c) => {
       const blob = `${c.row.paymentLink?.name || ''} ${c.row.customer?.name || ''}`.toUpperCase();
       if (!blob.includes(receipt)) return false;
-      return amountsClose(c.gross, target) || amountsClose(c.credit, target);
+      return rowMatchesAmount(c.row, target);
     });
     if (byResi) {
       return {
@@ -187,7 +199,7 @@ export function pickMayarSettlementForInvoice(
     .sort((a, b) => a.ts - b.ts);
 
   const amountHits = candidates
-    .filter((c) => amountsClose(c.gross, target) || amountsClose(c.credit, target))
+    .filter((c) => rowMatchesAmount(c.row, target))
     .sort((a, b) => (a.createdMs || 0) - (b.createdMs || 0));
 
   for (const hit of amountHits) {

@@ -274,7 +274,8 @@ export default function WalkInPaySuccessModal({
                     {Number(tx.amount) > 0 && Number(tx.amount) < 1000 ? ' — nominal minimal QRIS Rp 1.000' : ''}.
                   </p>
                 )}
-                {tx.invoice_url && (
+                {/* Jangan tampilkan tautan invoice jika QR kasir sudah siap — mencegah double bayar. */}
+                {tx.invoice_url && !tx.qris_scan_ready && !tx.qris_url && (
                   <a
                     href={tx.invoice_url}
                     target="_blank"
@@ -284,6 +285,11 @@ export default function WalkInPaySuccessModal({
                     Buka tautan pembayaran Mayar
                   </a>
                 )}
+                {tx.qris_scan_ready && tx.qris_url ? (
+                  <p className="text-[9px] text-slate-500 leading-relaxed">
+                    Bayar hanya dengan scan QR di atas. Tautan invoice tidak ditampilkan agar tidak double bayar.
+                  </p>
+                ) : null}
                 <div className="flex flex-col gap-2">
                   <CheckPaymentStatusButton orderId={tx.id} onPaid={() => void onPaid({ ...tx, is_paid: true })} />
                   <button

@@ -55,18 +55,20 @@ export async function POST(req: Request) {
       outletId: body.outletId,
       apiKey,
       payoutAccountId,
-      baseUrl: new URL(req.url).origin
+      baseUrl: new URL(req.url).origin,
+      mode: body.mode === 'pos_qris' ? 'pos_qris' : 'full'
     });
 
     if (body.transactionId && String(body.type || '') !== 'deposit') {
       const attempts = [
         {
           mayar_payment_id: charge.paymentId,
-          mayar_invoice_url: charge.invoiceUrl,
+          mayar_invoice_url: charge.invoiceUrl || null,
           payment_method: charge.mock ? 'QRIS (Mock)' : 'QRIS Mayar'
         },
-        { mayar_payment_id: charge.paymentId, mayar_invoice_url: charge.invoiceUrl },
-        { mayar_invoice_url: charge.invoiceUrl }
+        { mayar_payment_id: charge.paymentId, mayar_invoice_url: charge.invoiceUrl || null },
+        { mayar_payment_id: charge.paymentId },
+        { mayar_invoice_url: charge.invoiceUrl || null }
       ];
       for (const row of attempts) {
         const { error } = await supabase.from('transactions').update(row).eq('id', body.transactionId);

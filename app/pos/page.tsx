@@ -2078,7 +2078,8 @@ const handleApplyLoan = async (e: React.FormEvent) => {
               mobile: normalizedPhone || customerPhone || undefined,
               receipt: generatedResi,
               transactionId: newTx.id,
-              outletId: selectedOutlet
+              outletId: selectedOutlet,
+              mode: 'pos_qris'
             });
             setCreatedTxSuccess((prev: any) =>
               prev?.id === newTx.id
@@ -2086,7 +2087,8 @@ const handleApplyLoan = async (e: React.FormEvent) => {
                     ...prev,
                     qris_loading: false,
                     qris_url: mayarCharge?.qrisUrl || null,
-                    invoice_url: mayarCharge?.invoiceUrl || null,
+                    // POS: jangan expose invoice link — cegah double bayar
+                    invoice_url: mayarCharge?.scanReady ? null : mayarCharge?.invoiceUrl || null,
                     mayar_payment_id: mayarCharge?.paymentId || null,
                     mayar_mock: Boolean(mayarCharge?.mock),
                     qris_scan_ready: Boolean(mayarCharge?.scanReady)
