@@ -247,14 +247,19 @@ export async function createMayarPayment(input: MayarChargeInput): Promise<Mayar
         description: String(input.description || `Tagihan laundry ${receipt}`).trim()
       });
       if (dyn?.url) {
+        // Jangan simpan UUID gambar sebagai mayar_payment_id — tidak bisa di-query Mayar.
+        // Pakai pos_<txId> sebagai penanda; deteksi lunas lewat settlement/webhook history.
+        const trackId = input.transactionId
+          ? `pos_${String(input.transactionId).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40)}`
+          : `pos_${Date.now().toString(36)}`;
         return {
           mock: false,
-          paymentId: dyn.id || `qris_${receipt.replace(/[^a-zA-Z0-9_-]/g, '').slice(-16)}_${Date.now().toString(36)}`,
+          paymentId: trackId,
           invoiceUrl: '',
           qrisUrl: dyn.url,
           scanReady: true,
           qrString: dyn.qrString,
-          raw: dyn
+          raw: { ...dyn, trackId }
         };
       }
       console.warn('Mayar POS dynamic QR empty, falling back to mock');

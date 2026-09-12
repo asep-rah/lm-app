@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { supabase } from '@/lib/supabaseClient';
-import { simulateMayarAutoPay } from '@/lib/mayar';
 import CheckPaymentStatusButton from '@/components/payment/CheckPaymentStatusButton';
 import { toast } from '@/lib/toast';
 
@@ -56,7 +55,6 @@ export default function WalkInPaySuccessModal({
   onPrintStickers,
   onClose
 }: Props) {
-  const [busySim, setBusySim] = useState(false);
   const [busyConfirm, setBusyConfirm] = useState(false);
   const paid = Boolean(tx.is_paid);
   const waitingQris = Boolean(tx.needs_qris) && !paid;
@@ -87,24 +85,7 @@ export default function WalkInPaySuccessModal({
       )
       .subscribe();
 
-    // Mulai poll setelah QR siap + jeda singkat, agar tidak salah deteksi pembayaran lama.
-    const poll = window.setInterval(async () => {
-      try {
-        const res = await fetch(`/api/pay/check-status?order_id=${encodeURIComponent(tx.id)}`);
-        const json = await res.json().catch(() => ({}));
-        if (json.status === 'PAID' || json.is_paid) {
-          toast(json.message || 'QRIS lunas — siap cetak struk.', 'ok');
-          await markPaid();
-        }
-      } catch {
-        /* ignore transient poll errors */
-      }
-    }, 5000);
-
-    // Cek sekali segera setelah QR siap (settlement Mayar kadang 5–20 dtk)
-    void (async () => {
-      await new Promise((r) => setTimeout(r, 2500));
-      if (cancelled) return;
+    const pollOnce = async () => {
       try {
         const res = await fetch(`/api/pay/check-status?order_id=${encodeURIComponent(tx.id)}`);
         const json = await res.json().catch(() => ({}));
@@ -115,6 +96,20 @@ export default function WalkInPaySuccessModal({
       } catch {
         /* ignore */
       }
+    };
+
+    const poll = window.setInterval(() => {
+      void pollOnce();
+    }, 4000);
+
+    // Cek berkali-kali di awal — settlement Mayar/Xendit sering 5–30 dtk
+    void (async () => {
+      const gaps = [2000, 3000, 5000, 8000];
+      for (const gap of gaps) {
+        await new Promise((r) => setTimeout(r, gap));
+        if (cancelled) return;
+        await pollOnce();
+      }
     })();
 
     return () => {
@@ -123,43 +118,6 @@ export default function WalkInPaySuccessModal({
       window.clearInterval(poll);
     };
   }, [waitingQris, tx.id, qrisLoading]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const simulate = async () => {
-    if (!tx.id || busySim) return;
-    setBusySim(true);
-    try {
-      await simulateMayarAutoPay({
-        transactionId: tx.id,
-        paymentId: tx.mayar_payment_id || undefined,
-        receipt: tx.receipt_number,
-        amount: Number(tx.amount) || 0,
-        customerPhone: tx.customer_phone || undefined
-      });
-      toast('Simulasi QRIS berhasil — pembayaran lunas.', 'ok');
-      await onPaid({ ...tx, is_paid: true });
-    } catch (e: any) {
-      // Cadangan: konfirmasi kasir langsung jika simulasi API gagal
-      try {
-        const res = await fetch('/api/pay/check-status', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            order_id: tx.id,
-            cashier_confirm: true,
-            agentName: 'Simulasi POS'
-          })
-        });
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(json.error || e?.message || 'Simulasi gagal');
-        toast('Simulasi OK (via konfirmasi kasir).', 'ok');
-        await onPaid({ ...tx, is_paid: true });
-      } catch (e2: any) {
-        toast(e2?.message || e?.message || 'Simulasi gagal', 'err');
-      }
-    } finally {
-      setBusySim(false);
-    }
-  };
 
   const confirmCashierPaid = async () => {
     if (!tx.id || busyConfirm) return;
@@ -246,19 +204,12 @@ export default function WalkInPaySuccessModal({
                   <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-left">
                     <p className="text-[11px] font-black text-amber-900">Mode uji / QRIS belum live Mayar</p>
                     <p className="text-[10px] text-amber-800 mt-0.5 leading-relaxed">
-                      Jangan scan dengan e-wallet bank. Pakai <b>Buka tautan pembayaran</b> atau <b>Simulasi Bayar</b>. Pastikan Mayar API Key outlet aktif.
-                    </p>
-                  </div>
-                ) : tx.qris_scan_ready === false || (!tx.qris_url && tx.invoice_url) ? (
-                  <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-left">
-                    <p className="text-[11px] font-black text-amber-900">QRIS gambar belum tersedia dari Mayar</p>
-                    <p className="text-[10px] text-amber-800 mt-0.5 leading-relaxed">
-                      Buka tautan pembayaran — di halaman Mayar ada QRIS yang bisa di-scan e-wallet.
+                      Pastikan Mayar API Key outlet aktif di Owner → Pengaturan Outlet.
                     </p>
                   </div>
                 ) : (
                   <p className="text-[11px] font-bold text-indigo-900">
-                    Scan QRIS Mayar di bawah dengan e-wallet. Cetak struk setelah lunas.
+                    Scan QRIS di bawah dengan e-wallet. Status akan berubah otomatis setelah lunas (bisa 5–30 detik).
                   </p>
                 )}
                 {tx.qris_url ? (
@@ -274,20 +225,9 @@ export default function WalkInPaySuccessModal({
                     {Number(tx.amount) > 0 && Number(tx.amount) < 1000 ? ' — nominal minimal QRIS Rp 1.000' : ''}.
                   </p>
                 )}
-                {/* Jangan tampilkan tautan invoice jika QR kasir sudah siap — mencegah double bayar. */}
-                {tx.invoice_url && !tx.qris_scan_ready && !tx.qris_url && (
-                  <a
-                    href={tx.invoice_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="block w-full text-center rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-[11px] font-extrabold py-2.5"
-                  >
-                    Buka tautan pembayaran Mayar
-                  </a>
-                )}
                 {tx.qris_scan_ready && tx.qris_url ? (
                   <p className="text-[9px] text-slate-500 leading-relaxed">
-                    Bayar hanya dengan scan QR di atas. Tautan invoice tidak ditampilkan agar tidak double bayar.
+                    Bayar hanya dengan scan QR di atas. Tidak ada tautan invoice agar tidak double bayar.
                   </p>
                 ) : null}
                 <div className="flex flex-col gap-2">
@@ -299,21 +239,9 @@ export default function WalkInPaySuccessModal({
                     className="w-full inline-flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 text-[11px] font-bold py-2.5 rounded-xl border border-slate-200"
                   >
                     {busyConfirm ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
-                    Darurat: konfirmasi kasir (jika gateway lambat)
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busySim}
-                    onClick={simulate}
-                    className="w-full inline-flex items-center justify-center gap-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-white text-[11px] font-extrabold py-2.5 rounded-xl"
-                  >
-                    {busySim ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
-                    Simulasi Bayar QRIS (Test)
+                    Darurat: konfirmasi kasir
                   </button>
                 </div>
-                <p className="text-[9px] text-slate-500">
-                  Customer buru-buru? Arahkan ke QR akrilik outlet → login WA di PWA untuk bayar tagihan sendiri.
-                </p>
               </>
             )}
           </div>

@@ -6,6 +6,7 @@ import { resolveMayarApiKey } from '@/lib/mayarOutletKey';
 import {
   fetchMayarSettledRows,
   fetchMayarTransactionDetail,
+  fetchMayarWebhookPaidEvents,
   pickMayarSettlementForInvoice,
   settlementRefIds
 } from '@/lib/mayarSettlement';
@@ -19,17 +20,24 @@ async function loadUsedMayarIds(
   const used = new Set<string>();
   const ids = candidateIds.filter(Boolean).slice(0, 80);
   if (!ids.length) return used;
-  const { data } = await supabase.from('transactions').select('mayar_payment_id').in('mayar_payment_id', ids);
+  // Hanya ID yang sudah dipakai transaksi LUNAS — pending jangan memblokir klaim.
+  const { data } = await supabase
+    .from('transactions')
+    .select('mayar_payment_id, is_paid, payment_status')
+    .in('mayar_payment_id', ids);
   for (const row of data || []) {
     const id = String(row?.mayar_payment_id || '').trim();
-    if (id) used.add(id);
+    if (!id) continue;
+    if (row?.is_paid === true) used.add(id);
+    const pay = String(row?.payment_status || '').toLowerCase();
+    if (['paid', 'lunas', 'verified'].includes(pay)) used.add(id);
   }
   return used;
 }
 
 async function loadPendingSiblings(
   supabase: ReturnType<typeof paymentServiceDb>,
-  opts: { outletId?: string; amount: number; sinceIso: string }
+  opts: { outletId?: string; amount: number; sinceIso: string; current?: { id: string; created_at: string } }
 ) {
   const amount = Math.round(Number(opts.amount) || 0);
   let q = supabase
@@ -38,17 +46,23 @@ async function loadPendingSiblings(
     .eq('amount', amount)
     .gte('created_at', opts.sinceIso)
     .order('created_at', { ascending: true })
-    .limit(30);
+    .limit(40);
   if (opts.outletId) q = q.eq('outlet_id', opts.outletId);
   const { data } = await q;
-  return (data || []).filter((row: any) => {
+  const list = (data || []).filter((row: any) => {
     if (row?.is_paid === true) return false;
     const pay = String(row?.payment_status || '').toLowerCase();
     if (['paid', 'lunas', 'verified'].includes(pay)) return false;
     const method = String(row?.payment_method || '').toLowerCase();
     const st = String(row?.status || '').toLowerCase();
-    return method.includes('qris') || st.includes('menunggu') || pay === 'pending';
+    return method.includes('qris') || st.includes('menunggu') || pay === 'pending' || !method;
   }) as Array<{ id: string; created_at: string }>;
+
+  if (opts.current && !list.some((r) => r.id === opts.current!.id)) {
+    list.push(opts.current);
+    list.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+  }
+  return list;
 }
 
 export async function GET(req: Request) {
@@ -77,7 +91,7 @@ export async function GET(req: Request) {
   return handleTx(tx, req, supabase);
 }
 
-/** Kasir konfirmasi lunas — hanya fallback darurat, utamakan deteksi gateway. */
+/** Kasir konfirmasi lunas — fallback darurat. */
 export async function POST(req: Request) {
   let body: Record<string, unknown> = {};
   try {
@@ -140,6 +154,14 @@ async function handleTx(tx: any, req: Request, supabase: ReturnType<typeof payme
   const amount = Number(tx.amount || 0);
   const receipt = String(tx.receipt_number || '').trim();
 
+  if (!apiKey) {
+    return NextResponse.json({
+      status: 'PENDING',
+      is_paid: false,
+      message: 'Mayar API Key outlet belum diisi — tidak bisa cek status otomatis.'
+    });
+  }
+
   const markPaid = async (via: string, message: string, settledId?: string) => {
     if (settledId && settledId !== paymentId) {
       await supabase.from('transactions').update({ mayar_payment_id: settledId }).eq('id', tx.id);
@@ -161,18 +183,13 @@ async function handleTx(tx: any, req: Request, supabase: ReturnType<typeof payme
       });
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
-    // Tutup payment-link sisa (jika ada) supaya tidak bisa dibayar ulang.
     if (apiKey) {
       const linkId = String(tx.mayar_link_payment_id || '').trim();
       const closeId = linkId || (String(tx.mayar_invoice_url || '').includes('mayar') ? paymentId : '');
-      if (closeId && !closeId.startsWith('qris_') && !closeId.startsWith('mock_')) {
+      if (closeId && !/^(qris_|mock_|pos_)/i.test(closeId)) {
         void closeMayarPaymentRequest(apiKey, closeId);
       }
-      // Bersihkan URL invoice di DB
-      void supabase
-        .from('transactions')
-        .update({ mayar_invoice_url: null })
-        .eq('id', tx.id);
+      void supabase.from('transactions').update({ mayar_invoice_url: null }).eq('id', tx.id);
     }
     void insertAuditLog({
       action: 'PAYMENT_CHECK_STATUS_PAID',
@@ -190,7 +207,8 @@ async function handleTx(tx: any, req: Request, supabase: ReturnType<typeof payme
     });
   };
 
-  if (paymentId && apiKey && !paymentId.startsWith('mock_')) {
+  // Detail Mayar hanya berguna untuk ID payment-request / transaction (bukan UUID gambar QR).
+  if (paymentId && !/^(mock_|qris_|pos_)/i.test(paymentId)) {
     try {
       const gw = await fetchMayarTransactionDetail(apiKey, paymentId);
       if (gw && isMayarPaidEvent(gw)) {
@@ -206,35 +224,33 @@ async function handleTx(tx: any, req: Request, supabase: ReturnType<typeof payme
     }
   }
 
-  // Klaim settlement Mayar (QRIS dinamis / Xendit) yang belum terpakai.
-  if (apiKey && amount >= 1000) {
+  if (amount >= 1000) {
     try {
       const txTs = tx.created_at ? new Date(tx.created_at).getTime() : Date.now() - 60 * 60 * 1000;
       const rows = await fetchMayarSettledRows(apiKey, {
         limit: 50,
-        dateFromMs: Math.max(0, txTs - 2 * 60 * 1000)
+        dateFromMs: Math.max(0, txTs - 5 * 60 * 1000)
       });
       const candidateIds = rows.flatMap((r) => settlementRefIds(r));
       const usedIds = await loadUsedMayarIds(supabase, candidateIds);
-      if (paymentId) usedIds.delete(paymentId); // id sendiri boleh
-      const sinceIso = new Date(Math.max(0, txTs - 2 * 60 * 60 * 1000)).toISOString();
+      const sinceIso = new Date(Math.max(0, txTs - 3 * 60 * 60 * 1000)).toISOString();
       const siblings = await loadPendingSiblings(supabase, {
         outletId: tx.outlet_id,
         amount,
-        sinceIso
+        sinceIso,
+        current: { id: tx.id, created_at: tx.created_at }
       });
       const hit = pickMayarSettlementForInvoice(rows, {
         txId: tx.id,
         amount,
         txCreatedAt: tx.created_at,
-        paymentId: paymentId.startsWith('mock_') ? '' : paymentId,
+        paymentId: /^(mock_|qris_|pos_)/i.test(paymentId) ? '' : paymentId,
         receipt,
         usedIds,
         siblings
       });
       if (hit?.transactionId || hit?.settlementId) {
         const claimId = hit.transactionId || hit.settlementId;
-        // Double-check belum diklaim transaksi lain
         const { data: taken } = await supabase
           .from('transactions')
           .select('id')
@@ -248,6 +264,31 @@ async function handleTx(tx: any, req: Request, supabase: ReturnType<typeof payme
             claimId
           );
         }
+      }
+
+      // Fallback: webhook history payment.received (sering lebih cepat dari list settlement)
+      const wh = await fetchMayarWebhookPaidEvents(apiKey, {
+        amount,
+        txCreatedAt: tx.created_at,
+        limit: 30
+      });
+      for (const ev of wh) {
+        if (usedIds.has(ev.id)) continue;
+        if (ev.receipt && receipt && ev.receipt.toUpperCase() !== receipt.toUpperCase()) continue;
+        const { data: taken } = await supabase
+          .from('transactions')
+          .select('id')
+          .eq('mayar_payment_id', ev.id)
+          .neq('id', tx.id)
+          .limit(1);
+        if (taken?.length) continue;
+        // Jika ada resi di webhook, harus cocok; kalau tidak, hanya klaim bila 1 pending
+        if (!ev.receipt && siblings.length > 1) {
+          const openBefore = siblings.filter((s) => new Date(s.created_at).getTime() <= ev.createdMs + 30_000);
+          const owner = openBefore[openBefore.length - 1];
+          if (!owner || owner.id !== tx.id) continue;
+        }
+        return markPaid('Cek Status (Mayar webhook history)', 'Pembayaran QRIS terdeteksi dari riwayat Mayar', ev.id);
       }
     } catch (err: any) {
       await insertErrorLog({
@@ -265,7 +306,7 @@ async function handleTx(tx: any, req: Request, supabase: ReturnType<typeof payme
     payment_status: (fresh || tx).payment_status,
     is_paid: !isPaymentLocked(fresh || tx),
     message: isPaymentLocked(fresh || tx)
-      ? 'Belum terdeteksi lunas di gateway. Tunggu 5–15 detik lalu Cek Status lagi (settlement Mayar kadang agak lambat).'
+      ? 'Belum terdeteksi lunas di gateway. Tunggu 5–20 detik lalu Cek Status lagi.'
       : 'Sudah lunas'
   });
 }
