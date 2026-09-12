@@ -18,7 +18,7 @@ export async function loadOwnerFinanceBundle(): Promise<FinanceBundle> {
     supabase
       .from('transactions')
       .select(
-        'id, outlet_id, amount, delivery_fee, order_type, service_type, customer_name, receipt_number, created_at, status, is_void, delete_requested'
+        'id, outlet_id, amount, delivery_fee, order_type, service_type, customer_name, receipt_number, created_at, status, is_void, delete_requested, is_paid, payment_status, payment_method, paid_via, mayar_payment_id, paid_at'
       )
       .gte('created_at', sinceIso)
       .order('created_at', { ascending: false })

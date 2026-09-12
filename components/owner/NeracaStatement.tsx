@@ -33,6 +33,7 @@ export default function NeracaStatement({ title, asOf, sheet }: Props) {
           <Sub>ASET LANCAR</Sub>
           <Line label="Rekening Bank Outlet / Omset" value={sheet.cash} indent={2} />
           <Line label="Piutang Usaha" value={sheet.receivables} indent={2} />
+          <Line label="QRIS / Gateway Clearing" value={sheet.gatewayClearing || 0} indent={2} />
           <Line label="Aset Lancar Lainnya" value={sheet.otherCurrent} indent={2} />
           <Line label="Jumlah Aset Lancar" value={sheet.currentAssets} total />
           <Sub>ASET TIDAK LANCAR</Sub>
@@ -74,9 +75,22 @@ export default function NeracaStatement({ title, asOf, sheet }: Props) {
           <Line label="JUMLAH LIABILITAS DAN EKUITAS" value={sheet.totalPasiva} grand />
           <p className={`text-[11px] font-bold pt-2 ${balanced ? 'text-emerald-700' : 'text-rose-600'}`}>
             {balanced
-              ? 'Neraca seimbang (aset = liabilitas + ekuitas). Penyusutan sudah mengurangi aset dan laba tahun ini.'
+              ? 'Aritmetika neraca seimbang (aset = liabilitas + ekuitas). Ini belum membuktikan kas bank sudah diverifikasi atau pembukuan awal lengkap.'
               : `Belum seimbang · selisih ${money(sheet.totalAssets - sheet.totalPasiva)}`}
           </p>
+          {sheet.tradeReceivablesFromSales > 0 && (
+            <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 mt-2 leading-relaxed">
+              Piutang penjualan belum dikoleksi bertanggal: Rp {money(sheet.tradeReceivablesFromSales)}.
+              QRIS lunas yang belum masuk rekening outlet dicatat di Clearing (Rp {money(sheet.gatewayClearing || 0)}),
+              bukan Bank.
+            </p>
+          )}
+          {sheet.completeness && !sheet.completeness.complete && (
+            <p className="text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 mt-2 leading-relaxed">
+              Status pembukuan awal: belum lengkap / belum diverifikasi.
+              {sheet.completeness.issues.length ? ` ${sheet.completeness.issues[0]}` : ''}
+            </p>
+          )}
         </section>
       </div>
     </div>

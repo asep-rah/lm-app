@@ -200,7 +200,20 @@ export default function LabaRugiPage() {
         {loading ? (
           <div className="bg-white border rounded-2xl p-8 text-center text-xs text-slate-400">Memuat laporan…</div>
         ) : (
-          <PnlStatement outletName={outletName} adminName={adminName} left={left} right={right} />
+          <>
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-[11px] text-slate-600 leading-relaxed space-y-1">
+              <p className="font-bold text-slate-800">Kebijakan angka (di luar tabel)</p>
+              <p>
+                Pendapatan dihitung dari transaksi non-void pada periode (termasuk yang belum lunas).
+                Posisi bank di jurnal/neraca hanya memasukkan omset yang kasnya sudah diterima; sisanya di piutang.
+              </p>
+              <p>
+                Beban Rp0 belum berarti efisiensi — pastikan input biaya lengkap sebelum menilai laba.
+                Format tabel laba rugi di bawah tidak diubah.
+              </p>
+            </div>
+            <PnlStatement outletName={outletName} adminName={adminName} left={left} right={right} />
+          </>
         )}
       </div>
     </div>
