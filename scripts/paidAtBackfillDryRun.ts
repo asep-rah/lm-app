@@ -36,7 +36,7 @@ async function main() {
   const db = createClient(url, key);
   const { data, error } = await db
     .from('transactions')
-    .select('id, receipt_number, outlet_id, amount, is_paid, payment_status, payment_method, paid_at, paid_via, created_at, updated_at')
+    .select('id, receipt_number, outlet_id, amount, is_paid, payment_status, payment_method, paid_at, paid_via, created_at')
     .eq('is_paid', true)
     .is('paid_at', null)
     .limit(200);
