@@ -47,7 +47,7 @@ export async function GET(req: Request) {
       });
     }
 
-    const [{ data: errs }, { data: hooks }, { data: txs }] = await Promise.all([
+    const [{ data: errs }, { data: hooks }, txRes] = await Promise.all([
       db.from('error_logs').select('*').order('created_at', { ascending: false }).limit(40),
       db
         .from('webhook_logs')
@@ -59,16 +59,50 @@ export async function GET(req: Request) {
       db
         .from('transactions')
         .select(
-          'id, receipt_number, amount, customer_phone, customer_name, payment_status, is_paid, status, created_at'
+          'id, receipt_number, amount, customer_phone, customer_name, payment_status, is_paid, status, created_at, outlet_id, payment_method, mayar_payment_id, paid_via, outlets(name)'
         )
         .order('created_at', { ascending: false })
         .limit(40)
     ]);
 
+    let txs: any[] | null = txRes.data as any[] | null;
+    if (txRes.error) {
+      const fallback = await db
+        .from('transactions')
+        .select(
+          'id, receipt_number, amount, customer_phone, customer_name, payment_status, is_paid, status, created_at, outlet_id, payment_method, mayar_payment_id'
+        )
+        .order('created_at', { ascending: false })
+        .limit(40);
+      txs = (fallback.data as any[] | null) || null;
+    }
+
+    const pendingRows = (txs || []).filter((t: any) => isPaymentLocked(t)).slice(0, 12);
+    let outletNames: Record<string, string> = {};
+    if (pendingRows.some((t: any) => !t.outlets?.name && t.outlet_id)) {
+      const ids = [...new Set(pendingRows.map((t: any) => t.outlet_id).filter(Boolean))];
+      if (ids.length) {
+        const { data: outs } = await db.from('outlets').select('id, name').in('id', ids);
+        outletNames = Object.fromEntries((outs || []).map((o: any) => [o.id, o.name]));
+      }
+    }
+
+    const pending = pendingRows.map((t: any) => {
+      const created = t.created_at ? new Date(t.created_at).getTime() : NaN;
+      const pendingHours = Number.isFinite(created)
+        ? Math.max(0, Math.round((Date.now() - created) / 36e5))
+        : null;
+      return {
+        ...t,
+        outlet_name: t.outlets?.name || outletNames[String(t.outlet_id || '')] || null,
+        pending_hours: pendingHours
+      };
+    });
+
     return NextResponse.json({
       errors: errs || [],
       webhooks: hooks || [],
-      pending: (txs || []).filter((t: any) => isPaymentLocked(t)).slice(0, 12),
+      pending,
       env: envAuditFlags()
     });
   } catch (e: any) {

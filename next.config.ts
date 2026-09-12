@@ -26,6 +26,14 @@ const nextConfig: NextConfig = {
       source: "/manifest.json",
       headers: [{ key: "Cache-Control", value: "public, max-age=86400" }],
     },
+    {
+      source: "/owner",
+      headers: [{ key: "X-Robots-Tag", value: "noindex, nofollow, noarchive" }],
+    },
+    {
+      source: "/owner/:path*",
+      headers: [{ key: "X-Robots-Tag", value: "noindex, nofollow, noarchive" }],
+    },
   ],
 };
 

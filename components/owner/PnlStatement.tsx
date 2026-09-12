@@ -44,6 +44,10 @@ export default function PnlStatement({ outletName, adminName, left, right }: Pro
   const extraAmt = (month: PnlMonth, label: string) =>
     month.extraOpex.find((x) => x.label === label)?.amount || 0;
 
+  const costsLookEmpty =
+    (left.totalRevenue > 0 && left.totalCogs + left.totalOpex <= 0) ||
+    (right.totalRevenue > 0 && right.totalCogs + right.totalOpex <= 0);
+
   return (
     <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
       <div className="px-4 py-3 border-b border-slate-100 flex flex-col md:flex-row md:items-end md:justify-between gap-1">
@@ -52,8 +56,14 @@ export default function PnlStatement({ outletName, adminName, left, right }: Pro
           <h3 className="text-sm md:text-base font-black text-slate-900">{outletName}</h3>
           <p className="text-[11px] text-slate-500">
             {adminName ? `${adminName} · ` : ''}
-            {left.label} vs {right.label}
+            {left.label} (lebih lama) → {right.label} (lebih baru)
           </p>
+          {costsLookEmpty && (
+            <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-2.5 py-2 mt-2 leading-relaxed">
+              Beban tercatat Rp0 pada salah satu bulan sementara pendapatan ada. Pastikan seluruh biaya sudah diinput
+              sebelum menilai laba — angka Rp0 belum berarti efisiensi terkendali.
+            </p>
+          )}
         </div>
       </div>
       <div className="overflow-x-auto">

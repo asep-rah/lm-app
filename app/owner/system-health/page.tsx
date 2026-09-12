@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { AlertTriangle, ArrowLeft, CheckCircle2, Loader2, RefreshCw, Shield } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Loader2, RefreshCw, Shield } from 'lucide-react';
 import { diagnosisCardOf } from '@/lib/errorDiagnosis';
 import { toast } from '@/lib/toast';
 import { paymentOpsClientHeaders } from '@/lib/requirePaymentOpsAuth';
@@ -111,15 +111,15 @@ export default function SystemHealthPage() {
   const openCount = errors.filter((e) => !e.resolved).length;
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 p-4 md:p-6 max-w-5xl mx-auto pb-16">
+    <div className="min-h-screen bg-slate-50 text-slate-900 p-4 md:p-6 max-w-5xl mx-auto pb-28">
       <div className="flex items-center justify-between gap-3 mb-5">
         <div className="flex items-center gap-3">
-          <Link href="/owner" className="p-2 rounded-xl bg-white border border-slate-200 shadow-sm">
+          <Link href="/owner" className="p-2.5 min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-xl bg-white border border-slate-200 shadow-sm" aria-label="Kembali ke dashboard owner">
             <ArrowLeft className="w-4 h-4" />
           </Link>
           <div>
             <h1 className="text-lg font-black text-slate-900 inline-flex items-center gap-2">
-              <Shield className="w-5 h-5 text-indigo-600" /> Diagnosis Sistem
+              <Shield className="w-5 h-5 text-indigo-600" aria-hidden /> Diagnosis Sistem
             </h1>
             <p className="text-[11px] text-slate-600">Log error, webhook, dan petunjuk perbaikan pembayaran</p>
           </div>
@@ -127,9 +127,9 @@ export default function SystemHealthPage() {
         <button
           type="button"
           onClick={() => void load()}
-          className="text-[11px] font-extrabold text-indigo-700 bg-indigo-50 border border-indigo-100 px-3 py-2 rounded-xl inline-flex items-center gap-1.5"
+          className="text-[11px] font-extrabold text-indigo-700 bg-indigo-50 border border-indigo-100 px-3 py-2.5 min-h-[44px] rounded-xl inline-flex items-center gap-1.5"
         >
-          <RefreshCw className="w-3.5 h-3.5" /> Muat ulang
+          <RefreshCw className="w-3.5 h-3.5" aria-hidden /> Muat ulang
         </button>
       </div>
 
@@ -157,8 +157,9 @@ export default function SystemHealthPage() {
           <section className="space-y-3">
             <h2 className="text-xs font-black uppercase tracking-wide text-slate-500">Log Error & Cara Solving</h2>
             {errors.length === 0 ? (
-              <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-[12px] font-semibold text-emerald-800 inline-flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4" /> Belum ada error tercatat. Jalankan migrasi SQL jika tabel masih kosong.
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-[12px] font-semibold text-slate-700">
+                Belum ada error tercatat pada sampel diagnosis. Ini bukan jaminan sistem sehat — hanya berarti tidak ada
+                log error terbuka yang dimuat.
               </div>
             ) : (
               errors.map((row) => {
@@ -215,34 +216,68 @@ export default function SystemHealthPage() {
           <section className="space-y-3">
             <h2 className="text-xs font-black uppercase tracking-wide text-slate-500">Pesanan menunggu bayar</h2>
             {pending.length === 0 ? (
-              <p className="text-[11px] text-slate-500">Tidak ada antrean pending.</p>
+              <p className="text-[11px] text-slate-500 bg-white border border-slate-200 rounded-2xl p-4">
+                Tidak ada antrean pending pada sampel transaksi terbaru yang diperiksa. Bukan klaim seluruh histori.
+              </p>
             ) : (
-              pending.map((o) => (
-                <div key={o.id} className="bg-white border border-amber-100 rounded-2xl p-3 flex flex-wrap items-center justify-between gap-2 shadow-sm">
-                  <div>
-                    <p className="text-xs font-black text-slate-900">{o.receipt_number || o.id}</p>
-                    <p className="text-[10px] text-slate-600">
-                      {o.customer_name} · Rp {Number(o.amount || 0).toLocaleString('id-ID')}
-                    </p>
+              pending.map((o) => {
+                const pendingHours =
+                  typeof o.pending_hours === 'number'
+                    ? o.pending_hours
+                    : o.created_at
+                      ? Math.max(0, Math.round((Date.now() - new Date(o.created_at).getTime()) / 36e5))
+                      : null;
+                const ageLabel =
+                  pendingHours == null
+                    ? 'lama tertunda belum diketahui'
+                    : pendingHours < 24
+                      ? `${pendingHours} jam`
+                      : `${Math.floor(pendingHours / 24)} hari ${pendingHours % 24} jam`;
+                return (
+                  <div
+                    key={o.id}
+                    className="bg-white border border-amber-100 rounded-2xl p-3 shadow-sm space-y-2"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="min-w-0 space-y-0.5">
+                        <p className="text-xs font-black text-slate-900">{o.receipt_number || o.id}</p>
+                        <p className="text-[10px] text-slate-700">
+                          {o.customer_name || 'Pelanggan'} · {o.customer_phone || '—'} · Rp{' '}
+                          {Number(o.amount || 0).toLocaleString('id-ID')}
+                        </p>
+                        <p className="text-[10px] text-slate-600">
+                          {o.created_at ? new Date(o.created_at).toLocaleString('id-ID') : 'Waktu —'} · tertunda{' '}
+                          {ageLabel}
+                        </p>
+                        <p className="text-[10px] text-slate-600">
+                          Outlet: {o.outlet_name || o.outlet_id || '—'} · metode: {o.payment_method || '—'}
+                        </p>
+                        <p className="text-[10px] text-slate-500">
+                          Status: {o.payment_status || o.status || 'pending'}
+                          {o.mayar_payment_id ? ` · gateway: ${o.mayar_payment_id}` : ' · ID gateway belum ada'}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => void resync(o.id)}
+                          disabled={resyncId === o.id}
+                          className="text-[10px] font-extrabold bg-indigo-50 text-indigo-700 border border-indigo-100 px-2.5 py-2.5 min-h-[44px] rounded-xl disabled:opacity-60"
+                        >
+                          {resyncId === o.id ? 'Re-sync…' : 'Re-sync'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setManualOrder(o)}
+                          className="text-[10px] font-extrabold bg-emerald-600 text-white px-2.5 py-2.5 min-h-[44px] rounded-xl"
+                        >
+                          Tandai Lunas Manual
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => void resync(o.id)}
-                      className="text-[10px] font-extrabold bg-indigo-50 text-indigo-700 border border-indigo-100 px-2.5 py-1.5 rounded-xl"
-                    >
-                      Re-sync
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setManualOrder(o)}
-                      className="text-[10px] font-extrabold bg-emerald-600 text-white px-2.5 py-1.5 rounded-xl"
-                    >
-                      Tandai Lunas Manual
-                    </button>
-                  </div>
-                </div>
-              ))
+                );
+              })
             )}
           </section>
 

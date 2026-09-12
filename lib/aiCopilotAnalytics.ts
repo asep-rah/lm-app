@@ -281,19 +281,32 @@ export function buildPassiveCustomers(txs: any[], now = new Date()): PassiveCust
 
 export function buildGrowthReport(metrics: CopilotMetrics, txs: any[]): TransactionGrowthReport {
   const opexWarn = metrics.opexRatio >= 0.38;
+  const costsUnset =
+    metrics.opex <= 0 && metrics.grossRevenue > 0;
+  const opexInsight: CopilotInsight = costsUnset
+    ? {
+        title: 'Kelengkapan biaya belum jelas',
+        body: `Beban tercatat ${idr(metrics.opex)} pada periode ini sementara omset ${idr(metrics.grossRevenue)}. Angka ini belum bisa dipakai untuk menilai efisiensi atau merekomendasikan promo — pastikan seluruh biaya sudah diinput sebelum menilai laba.`,
+        tone: 'warn'
+      }
+    : opexWarn
+      ? {
+          title: 'Peringatan efisiensi OPEX',
+          body: `Beban ${idr(metrics.opex)} sudah ${(metrics.opexRatio * 100).toFixed(0)}% dari omset. Tahan pengeluaran non-inti minggu ini.`,
+          tone: 'warn'
+        }
+      : {
+          title: 'Beban operasional tercatat',
+          body: `OPEX ${idr(metrics.opex)} (${(metrics.opexRatio * 100).toFixed(0)}% omset). Bandingkan dengan histori outlet yang sama sebelum memutuskan promo.`,
+          tone: 'info'
+        };
   const insights: CopilotInsight[] = [
     {
       title: 'Ringkasan performa',
       body: `${metrics.txCount} transaksi · omset ${idr(metrics.grossRevenue)} · AOV ${idr(metrics.aov)} · repeat ${metrics.repeatRate.toFixed(0)}%.`,
       tone: 'info'
     },
-    {
-      title: opexWarn ? 'Peringatan efisiensi OPEX' : 'OPEX terkendali',
-      body: opexWarn
-        ? `Beban ${idr(metrics.opex)} sudah ${(metrics.opexRatio * 100).toFixed(0)}% dari omset. Tahan pengeluaran non-inti minggu ini.`
-        : `OPEX ${idr(metrics.opex)} (${(metrics.opexRatio * 100).toFixed(0)}% omset). Ruang untuk promo retensi masih aman.`,
-      tone: opexWarn ? 'warn' : 'ok'
-    },
+    opexInsight,
     {
       title: 'Skor SLA operasional',
       body:
@@ -385,9 +398,11 @@ export function buildGrowthReport(metrics: CopilotMetrics, txs: any[]): Transact
     }
   ];
 
-  const summary = opexWarn
-    ? `Omset ${idr(metrics.grossRevenue)} dengan OPEX tinggi (${(metrics.opexRatio * 100).toFixed(0)}%). Prioritas: retensi WhatsApp + tahan belanja, bukan diskon massal.`
-    : `Omset ${idr(metrics.grossRevenue)}, AOV ${idr(metrics.aov)}, SLA ${metrics.slaScore}/100. Fokus naikkan keranjang (Bedcover/Express) dan tarik ${winBack.length} pelanggan pasif.`;
+  const summary = costsUnset
+    ? `Omset ${idr(metrics.grossRevenue)}, AOV ${idr(metrics.aov)}, SLA ${metrics.slaScore}/100. Beban tercatat ${idr(metrics.opex)} pada periode ini; pastikan seluruh biaya sudah diinput sebelum menilai laba atau membuka promo.`
+    : opexWarn
+      ? `Omset ${idr(metrics.grossRevenue)} dengan OPEX tinggi (${(metrics.opexRatio * 100).toFixed(0)}%). Prioritas: retensi WhatsApp + tahan belanja, bukan diskon massal.`
+      : `Omset ${idr(metrics.grossRevenue)}, AOV ${idr(metrics.aov)}, SLA ${metrics.slaScore}/100. Fokus naikkan keranjang (Bedcover/Express) dan tarik ${winBack.length} pelanggan pasif.`;
 
   return {
     metrics,

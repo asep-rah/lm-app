@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { ownerPeriodLabel } from '@/lib/ownerPeriodLabel';
 import TransactionGrowthModal from '@/components/analytics/TransactionGrowthModal';
 import { idr, type CopilotInsight, type CopilotMetrics, type CopilotPeriod } from '@/lib/aiCopilotAnalytics';
 
@@ -141,7 +142,8 @@ export default function AICopilotCard({
               {scope === 'supervisor' ? 'Performa cabang pengawasan' : 'Ringkasan otomatis Owner'}
             </h3>
             <p className="text-[11px] text-slate-400 mt-1">
-              Insight performa, efisiensi OPEX, skor SLA, plus analisa omset.
+              Insight performa untuk filter yang sama dengan dashboard · {ownerPeriodLabel(period)}
+              {outletId && outletId !== 'ALL' ? ' · outlet terpilih' : ' · semua cabang'}.
             </p>
           </div>
           <div className="flex gap-2 text-center">

@@ -11,6 +11,8 @@ import { parseAssignedOutletIds } from '@/lib/driverAttendance';
 import { updateWithFallback } from '@/lib/safeWrite';
 import FinanceAlertListener from '@/components/FinanceAlertListener';
 import WasherFraudAlertListener from '@/components/WasherFraudAlertListener';
+import OwnerActionPriorityStrip from '@/components/owner/OwnerActionPriorityStrip';
+import { ownerPeriodLabel } from '@/lib/ownerPeriodLabel';
 import dynamic from 'next/dynamic';
 import ReceiptLayoutEditor from '@/components/owner/ReceiptLayoutEditor';
 import { OwnerBellButton, type SettingsPanel } from '@/components/owner/OwnerSidebar';
@@ -981,6 +983,7 @@ export default function Dashboard() {
         </div>
 
         {isOwnerRole(currentUserRole) && <FinanceAlertListener />}
+        {isOwnerRole(currentUserRole) && <OwnerActionPriorityStrip />}
         {(isOwnerRole(currentUserRole) || currentUserRole === 'supervisor') && <WasherFraudAlertListener />}
 
         {/* TAB 1: PNL & LEADERBOARD RANKING */}
@@ -988,15 +991,15 @@ export default function Dashboard() {
           <div className="space-y-4 md:space-y-6">
             <div className="bg-white border border-slate-200 rounded-2xl p-4 md:p-6 shadow-sm flex flex-col md:flex-row gap-3 md:gap-4 items-end">
               <div className="w-full md:w-1/3">
-                <label className="block text-xs font-bold text-slate-500 mb-1">Filter Outlet</label>
-                <select value={selectedOutlet} onChange={(e) => setSelectedOutlet(e.target.value)} className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-bold focus:outline-none focus:border-emerald-500">
+                <label htmlFor="owner-filter-outlet" className="block text-xs font-bold text-slate-500 mb-1">Filter Outlet</label>
+                <select id="owner-filter-outlet" value={selectedOutlet} onChange={(e) => setSelectedOutlet(e.target.value)} className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-bold focus:outline-none focus:border-emerald-500 min-h-[44px]">
                   <option value="ALL">Semua Cabang (Pusat)</option>
                   {outlets.map((o) => (<option key={o.id} value={o.id}>{o.name}</option>))}
                 </select>
               </div>
               <div className="w-full md:w-1/3">
-                <label className="block text-xs font-bold text-slate-500 mb-1">Periode Transaksi</label>
-                <select value={period} onChange={(e) => setPeriod(e.target.value)} className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-bold focus:outline-none focus:border-emerald-500">
+                <label htmlFor="owner-filter-period" className="block text-xs font-bold text-slate-500 mb-1">Periode Transaksi</label>
+                <select id="owner-filter-period" value={period} onChange={(e) => setPeriod(e.target.value)} className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-2.5 text-xs font-bold focus:outline-none focus:border-emerald-500 min-h-[44px]">
                   <option value="THIS_MONTH">Bulan Ini</option><option value="LAST_MONTH">Bulan Lalu</option><option value="THIS_YEAR">1 Tahun Terakhir (365 Hari)</option><option value="ALL">Semua Waktu (All Time)</option>
                 </select>
               </div>
@@ -1006,52 +1009,87 @@ export default function Dashboard() {
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 md:gap-6 pt-2">
               <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
                 <div className="bg-indigo-600 text-white p-4 flex justify-between items-center">
-                  <h3 className="font-black text-sm">👔 Leaderboard Supervisor</h3>
+                  <h3 className="font-black text-sm">Leaderboard Supervisor</h3>
+                  <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded font-semibold">{ownerPeriodLabel(period)}</span>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs text-left whitespace-nowrap">
                     <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold">
-                      <tr><th className="p-3">Supervisor</th><th className="p-3 text-center">Cabang</th><th className="p-3 text-right">Omset Offline</th><th className="p-3 text-right">Omset Online</th><th className="p-3 text-right">Total Profit</th></tr>
+                      <tr>
+                        <th className="p-3 sticky left-0 bg-slate-50 z-[1]">Supervisor</th>
+                        <th className="p-3 text-center">Cabang</th>
+                        <th className="p-3 text-right">Total Laba</th>
+                        <th className="p-3 text-right hidden sm:table-cell">Omset Offline</th>
+                        <th className="p-3 text-right hidden sm:table-cell">Omset Online</th>
+                      </tr>
                     </thead>
                     <tbody>
-                      {supervisorLeaderboard.map((s, i) => (
-                        <tr key={i} className="border-b border-slate-100 hover:bg-slate-50">
-                          <td className="p-3 font-bold text-slate-800"><span className="inline-block w-4 text-indigo-600">{i + 1}.</span> {s.name}</td>
-                          <td className="p-3 text-center font-medium text-slate-600">{s.outlets} Outlet</td>
-                          <td className="p-3 text-right font-medium text-slate-600">Rp {s.offline_rev.toLocaleString('id-ID')}</td>
-                          <td className="p-3 text-right font-medium text-indigo-600">Rp {s.online_rev.toLocaleString('id-ID')}</td>
-                          <td className="p-3 text-right font-black text-indigo-600">Rp {s.profit.toLocaleString('id-ID')}</td>
+                      {supervisorLeaderboard.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="p-4 text-center text-slate-400">Belum ada data supervisor untuk periode ini.</td>
                         </tr>
-                      ))}
+                      ) : (
+                        supervisorLeaderboard.map((s, i) => (
+                          <tr key={i} className="border-b border-slate-100 hover:bg-slate-50">
+                            <td className="p-3 font-bold text-slate-800 sticky left-0 bg-white">
+                              <span className="inline-block w-4 text-indigo-600">{i + 1}.</span> {s.name}
+                            </td>
+                            <td className="p-3 text-center font-medium text-slate-600">{s.outlets} Outlet</td>
+                            <td className="p-3 text-right font-black text-indigo-600">Rp {s.profit.toLocaleString('id-ID')}</td>
+                            <td className="p-3 text-right font-medium text-slate-600 hidden sm:table-cell">Rp {s.offline_rev.toLocaleString('id-ID')}</td>
+                            <td className="p-3 text-right font-medium text-indigo-600 hidden sm:table-cell">Rp {s.online_rev.toLocaleString('id-ID')}</td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
               </div>
 
               <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-                <div className="bg-emerald-600 text-white p-4 flex justify-between items-center">
-                  <h3 className="font-black text-sm">🏆 Ranking Omset Outlet</h3>
-                  <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded font-mono">{period.replace('_', ' ')}</span>
+                <div className="bg-emerald-600 text-white p-4 flex justify-between items-center gap-2">
+                  <h3 className="font-black text-sm">Ranking Omset Outlet</h3>
+                  <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded font-semibold shrink-0">{ownerPeriodLabel(period)}</span>
                 </div>
                 <div className="overflow-x-auto">
-                  <table className="w-full text-xs text-left whitespace-nowrap">
+                  <table className="w-full text-xs text-left min-w-[520px]">
                     <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold">
-                      <tr><th className="p-3">No / Outlet</th><th className="p-3">Supervisor</th><th className="p-3 text-right">Omset Offline</th><th className="p-3 text-right">Omset Online</th><th className="p-3 text-right">Total Omset</th><th className="p-3 text-right">Net Profit</th></tr>
+                      <tr>
+                        <th className="p-3 sticky left-0 bg-slate-50 z-[1] min-w-[140px]">No / Outlet</th>
+                        <th className="p-3 text-right min-w-[110px]">Total Omset</th>
+                        <th className="p-3 text-right min-w-[110px]">Laba Bersih</th>
+                        <th className="p-3 text-right hidden md:table-cell">Offline</th>
+                        <th className="p-3 text-right hidden md:table-cell">Online</th>
+                        <th className="p-3 hidden lg:table-cell">Supervisor</th>
+                      </tr>
                     </thead>
                     <tbody>
-                      {outletLeaderboard.map((o, i) => (
-                        <tr key={i} className={`border-b border-slate-100 hover:bg-slate-50 ${selectedOutlet === o.id ? 'bg-emerald-50/60 font-bold' : ''}`}>
-                          <td className="p-3 font-bold text-slate-800"><span className="inline-block w-4 text-emerald-600">{i + 1}.</span> {o.name} {selectedOutlet === o.id && '(Terpilih)'}</td>
-                          <td className="p-3 font-semibold text-indigo-600 text-[10px] uppercase">{o.supervisor}</td>
-                          <td className="p-3 text-right font-medium text-slate-600">Rp {o.offline_rev.toLocaleString('id-ID')}</td>
-                          <td className="p-3 text-right font-medium text-indigo-600">Rp {o.online_rev.toLocaleString('id-ID')}</td>
-                          <td className="p-3 text-right font-black text-slate-900">Rp {o.rev.toLocaleString('id-ID')}</td>
-                          <td className="p-3 text-right font-bold text-emerald-600">Rp {o.profit.toLocaleString('id-ID')}</td>
+                      {outletLeaderboard.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="p-4 text-center text-slate-400">Belum ada data omset outlet untuk periode ini.</td>
                         </tr>
-                      ))}
+                      ) : (
+                        outletLeaderboard.map((o, i) => (
+                          <tr key={i} className={`border-b border-slate-100 hover:bg-slate-50 ${selectedOutlet === o.id ? 'bg-emerald-50/60 font-bold' : ''}`}>
+                            <td className={`p-3 font-bold text-slate-800 sticky left-0 z-[1] ${selectedOutlet === o.id ? 'bg-emerald-50' : 'bg-white'}`}>
+                              <span className="inline-block w-4 text-emerald-600">{i + 1}.</span> {o.name} {selectedOutlet === o.id && '(Terpilih)'}
+                            </td>
+                            <td className="p-3 text-right font-black text-slate-900">Rp {o.rev.toLocaleString('id-ID')}</td>
+                            <td className="p-3 text-right font-bold text-emerald-600">Rp {o.profit.toLocaleString('id-ID')}</td>
+                            <td className="p-3 text-right font-medium text-slate-600 hidden md:table-cell">Rp {o.offline_rev.toLocaleString('id-ID')}</td>
+                            <td className="p-3 text-right font-medium text-indigo-600 hidden md:table-cell">Rp {o.online_rev.toLocaleString('id-ID')}</td>
+                            <td className="p-3 font-semibold text-indigo-600 text-[10px] uppercase hidden lg:table-cell">{o.supervisor}</td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
+                {outletLeaderboard.some((o: any) => Number(o.rev) > 0 && Number(o.exp) === 0) && (
+                  <p className="text-[10px] text-amber-800 bg-amber-50 border-t border-amber-100 px-3 py-2 leading-relaxed">
+                    Beberapa outlet menampilkan beban Rp0 sehingga laba setara omset. Pastikan biaya sudah diinput sebelum menilai profitabilitas.
+                  </p>
+                )}
               </div>
             </div>
 

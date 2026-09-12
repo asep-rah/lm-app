@@ -9,9 +9,11 @@ import {
   buildPnlByOutlets,
   buildPnlCsv,
   downloadCsv,
+  monthLabel,
   pnlCompareMonths,
   printPnlPdf
 } from '@/lib/pnlReport';
+import { monthDateRangeLabel } from '@/lib/ownerPeriodLabel';
 import { DEFAULT_PROFIT_SHARE_PCT, loadProfitShareRates, saveProfitShareRates } from '@/lib/profitShare';
 import { booksOf, loadOutletBooks, monthDepreciation, type OutletBook } from '@/lib/outletBooks';
 
@@ -93,6 +95,12 @@ export default function LabaRugiPage() {
     [scoped, rightRef.year, rightRef.month, outletIds.join(','), JSON.stringify(rates), JSON.stringify(depMaps.right)]
   );
   const outletName = selectedOutlet === 'ALL' ? 'SEMUA CABANG' : outlets.find((o) => o.id === selectedOutlet)?.name?.toUpperCase() || 'OUTLET';
+  const thisMonthPair = pnlCompareMonths('THIS_MONTH');
+  const lastMonthPair = pnlCompareMonths('LAST_MONTH');
+  const periodHint =
+    period === 'LAST_MONTH'
+      ? `${monthLabel(leftRef)} (${monthDateRangeLabel(leftRef.year, leftRef.month)}) → ${monthLabel(rightRef)} (${monthDateRangeLabel(rightRef.year, rightRef.month)}) · acuan: bulan lalu vs 2 bulan lalu`
+      : `${monthLabel(leftRef)} (${monthDateRangeLabel(leftRef.year, leftRef.month)}) → ${monthLabel(rightRef)} (${monthDateRangeLabel(rightRef.year, rightRef.month)}) · acuan: bulan lalu vs bulan ini`;
 
   const saveRates = async () => {
     setSavingRates(true);
@@ -105,7 +113,7 @@ export default function LabaRugiPage() {
   if (!ready) return <div className="min-h-screen bg-slate-50" />;
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 p-3 md:p-8">
+    <div className="min-h-screen bg-slate-50 text-slate-800 p-3 md:p-8 pb-28">
       <div className="max-w-6xl mx-auto space-y-4 md:space-y-6">
         <OwnerChrome
           activeTab="laba-rugi"
@@ -134,18 +142,25 @@ export default function LabaRugiPage() {
 
         <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>
-            <label className="block text-[10px] font-bold text-slate-500 mb-1">Outlet</label>
-            <select value={selectedOutlet} onChange={(e) => setSelectedOutlet(e.target.value)} className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-xs font-bold">
+            <label htmlFor="pnl-outlet" className="block text-[10px] font-bold text-slate-500 mb-1">Outlet</label>
+            <select id="pnl-outlet" value={selectedOutlet} onChange={(e) => setSelectedOutlet(e.target.value)} className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-xs font-bold min-h-[44px]">
               <option value="ALL">Semua Cabang</option>
               {outlets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
             </select>
           </div>
           <div>
-            <label className="block text-[10px] font-bold text-slate-500 mb-1">Periode acuan</label>
-            <select value={period} onChange={(e) => setPeriod(e.target.value)} className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-xs font-bold">
-              <option value="THIS_MONTH">Bulan ini vs bulan lalu</option>
-              <option value="LAST_MONTH">Bulan lalu vs 2 bulan lalu</option>
+            <label htmlFor="pnl-period" className="block text-[10px] font-bold text-slate-500 mb-1">Periode acuan</label>
+            <select id="pnl-period" value={period} onChange={(e) => setPeriod(e.target.value)} className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-xs font-bold min-h-[44px]">
+              <option value="THIS_MONTH">
+                {monthLabel(thisMonthPair[0])} → {monthLabel(thisMonthPair[1])} (bulan lalu vs bulan ini)
+              </option>
+              <option value="LAST_MONTH">
+                {monthLabel(lastMonthPair[0])} → {monthLabel(lastMonthPair[1])} (2 bulan lalu vs bulan lalu)
+              </option>
             </select>
+            <p className="text-[10px] text-slate-500 mt-1.5 leading-relaxed">
+              Kolom kiri = lebih lama, kolom kanan = lebih baru. {periodHint}
+            </p>
           </div>
         </div>
 

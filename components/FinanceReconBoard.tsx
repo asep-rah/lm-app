@@ -29,13 +29,23 @@ const sevTone = (s: string) => {
   return 'slate' as const;
 };
 
-export default function FinanceReconBoard({ embedded = false }: { embedded?: boolean }) {
+type LoadState = 'idle' | 'loading' | 'ready' | 'error';
+
+export default function FinanceReconBoard({
+  embedded = false,
+  onChanged
+}: {
+  embedded?: boolean;
+  onChanged?: () => void;
+}) {
   const session = getStaffSession();
   const [rows, setRows] = useState<any[]>([]);
   const [alerts, setAlerts] = useState<any[]>([]);
   const [outlets, setOutlets] = useState<any[]>([]);
   const [filter, setFilter] = useState<'all' | 'open'>('open');
   const [busy, setBusy] = useState(false);
+  const [loadState, setLoadState] = useState<LoadState>('idle');
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [selected, setSelected] = useState<any | null>(null);
   const [cashAdj, setCashAdj] = useState('');
   const [qrisAdj, setQrisAdj] = useState('');
@@ -46,25 +56,54 @@ export default function FinanceReconBoard({ embedded = false }: { embedded?: boo
   );
 
   const load = async () => {
-    const [{ data: outs }, { data: recon }, { data: leak }] = await Promise.all([
-      supabase.from('outlets').select('id, name').order('name'),
-      supabase.from('daily_reconciliations').select('*').order('date', { ascending: false }).limit(120),
-      supabase
-        .from('financial_leakage_alerts')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(80)
-    ]);
+    setLoadState('loading');
+    setLoadError(null);
+    const [{ data: outs, error: outErr }, { data: recon, error: reconErr }, { data: leak, error: leakErr }] =
+      await Promise.all([
+        supabase.from('outlets').select('id, name').order('name'),
+        supabase.from('daily_reconciliations').select('*').order('date', { ascending: false }).limit(120),
+        supabase
+          .from('financial_leakage_alerts')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(80)
+      ]);
+    if (outErr || reconErr || leakErr) {
+      setOutlets(outs || []);
+      setRows(recon || []);
+      setAlerts(leak || []);
+      setLoadState('error');
+      setLoadError(
+        reconErr?.message ||
+          leakErr?.message ||
+          outErr?.message ||
+          'Data rekonsiliasi belum bisa dibaca. Coba muat ulang atau hubungi admin sistem.'
+      );
+      return;
+    }
     setOutlets(outs || []);
     setRows(recon || []);
     setAlerts(leak || []);
+    setLoadState('ready');
+    onChanged?.();
   };
 
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const visible = rows.filter((r) => (filter === 'open' ? r.status !== 'MATCHED' : true));
+  const unmatched = rows.filter((r) => r.status === 'DISCREPANCY_ALERT').length;
+  const matched = rows.filter((r) => r.status === 'MATCHED').length;
+  const neverRun = loadState === 'ready' && rows.length === 0;
+
+  let lastCheckedAt: string | null = null;
+  for (const r of rows) {
+    const ts = r.updated_at || r.created_at || null;
+    if (ts && (!lastCheckedAt || String(ts) > lastCheckedAt)) lastCheckedAt = String(ts);
+  }
+
   const relatedAlerts = (row: any) =>
     alerts.filter(
       (a) =>
@@ -83,7 +122,11 @@ export default function FinanceReconBoard({ embedded = false }: { embedded?: boo
       } else {
         const local = await runFinanceReconEngine(supabase, { days: 3 });
         if (!local.ok && local.reconUpserts === 0) {
-          toast(local.error || 'Gagal menjalankan rekonsiliasi. Terapkan migrasi SQL dulu.', 'err');
+          toast(
+            local.error ||
+              'Rekonsiliasi gagal dijalankan. Pastikan fitur rekonsiliasi sudah diaktifkan admin, lalu coba lagi.',
+            'err'
+          );
         } else {
           toast(`Rekonsiliasi lokal: ${local.reconUpserts} hari · ${local.alertsCreated} alert.`, local.ok ? 'ok' : 'warn');
         }
@@ -152,6 +195,38 @@ export default function FinanceReconBoard({ embedded = false }: { embedded?: boo
     await load();
   };
 
+  const summaryTone = neverRun
+    ? 'border-amber-200 bg-amber-50 text-amber-950'
+    : unmatched > 0
+      ? 'border-rose-200 bg-rose-50 text-rose-950'
+      : loadState === 'error'
+        ? 'border-amber-200 bg-amber-50 text-amber-950'
+        : loadState === 'loading'
+          ? 'border-slate-200 bg-slate-50 text-slate-600'
+          : 'border-emerald-200 bg-emerald-50 text-emerald-950';
+
+  const summaryTitle = loadState === 'loading'
+    ? 'Memuat log rekonsiliasi…'
+    : loadState === 'error'
+      ? 'Status tidak tersedia'
+      : neverRun
+        ? 'Rekonsiliasi belum dijalankan'
+        : unmatched > 0
+          ? 'Ada selisih (unmatched)'
+          : filter === 'open' && visible.length === 0
+            ? 'Selesai tanpa selisih terbuka'
+            : 'Log rekonsiliasi tersedia';
+
+  const summaryBody = loadState === 'loading'
+    ? 'Menunggu data dari server.'
+    : loadState === 'error'
+      ? loadError
+      : neverRun
+        ? 'Belum ada log pemeriksaan. Nol baris di tabel tidak berarti kas/QRIS sudah aman — tekan Jalankan rekonsiliasi.'
+        : unmatched > 0
+          ? `${unmatched} hari/outlet belum cocok · ${matched} matched · ${rows.length} hari diperiksa.`
+          : `${matched} hari matched · ${rows.length} hari diperiksa. Tidak ada unmatched pada filter saat ini.`;
+
   return (
     <div className="space-y-3">
       {!embedded && (
@@ -162,23 +237,47 @@ export default function FinanceReconBoard({ embedded = false }: { embedded?: boo
           </p>
         </div>
       )}
+
+      <div className={`rounded-xl border px-3 py-2.5 text-[11px] ${summaryTone}`} role="status">
+        <p className="font-black text-xs">{summaryTitle}</p>
+        <p className="mt-0.5 leading-relaxed opacity-90">{summaryBody}</p>
+        {lastCheckedAt && (
+          <p className="mt-1 text-[10px] font-medium opacity-80">
+            Pemeriksaan terakhir:{' '}
+            {new Date(lastCheckedAt).toLocaleString('id-ID', {
+              day: 'numeric',
+              month: 'short',
+              year: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit'
+            })}
+          </p>
+        )}
+      </div>
+
       <div className="flex flex-wrap gap-2 items-center">
         <button
           type="button"
           disabled={busy}
           onClick={runNow}
-          className="text-[11px] font-bold px-3 py-2 rounded-xl bg-slate-900 text-white disabled:opacity-50"
+          className="text-[11px] font-bold px-3 py-2.5 min-h-[44px] rounded-xl bg-slate-900 text-white disabled:opacity-50"
         >
           {busy ? 'Memproses…' : 'Jalankan rekonsiliasi'}
         </button>
         <button
           type="button"
           onClick={() => setFilter(filter === 'open' ? 'all' : 'open')}
-          className="text-[11px] font-bold px-3 py-2 rounded-xl border border-slate-200"
+          className="text-[11px] font-bold px-3 py-2.5 min-h-[44px] rounded-xl border border-slate-200"
+          aria-pressed={filter === 'open'}
         >
           {filter === 'open' ? 'Tampil: Unmatched' : 'Tampil: Semua'}
         </button>
-        <button type="button" onClick={load} className="text-[11px] font-bold px-3 py-2 rounded-xl border border-slate-200">
+        <button
+          type="button"
+          onClick={load}
+          disabled={loadState === 'loading'}
+          className="text-[11px] font-bold px-3 py-2.5 min-h-[44px] rounded-xl border border-slate-200 disabled:opacity-50"
+        >
           Muat ulang
         </button>
       </div>
@@ -187,41 +286,76 @@ export default function FinanceReconBoard({ embedded = false }: { embedded?: boo
         <table className="w-full text-left text-[11px] whitespace-nowrap">
           <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[9px]">
             <tr>
-              <th className="p-2">Tanggal</th>
-              <th className="p-2">Outlet</th>
-              <th className="p-2 text-right">Kas sistem</th>
-              <th className="p-2 text-right">Setoran</th>
-              <th className="p-2 text-right">Selisih kas</th>
-              <th className="p-2 text-right">QRIS</th>
-              <th className="p-2">Status</th>
+              <th className="p-2" scope="col">Tanggal</th>
+              <th className="p-2" scope="col">Outlet</th>
+              <th className="p-2 text-right" scope="col">Kas sistem</th>
+              <th className="p-2 text-right" scope="col">Setoran</th>
+              <th className="p-2 text-right" scope="col">Selisih kas</th>
+              <th className="p-2 text-right" scope="col">QRIS</th>
+              <th className="p-2" scope="col">Status</th>
             </tr>
           </thead>
           <tbody>
-            {visible.map((r) => (
-              <tr
-                key={r.id}
-                onClick={() => openRow(r)}
-                className="border-t border-slate-100 cursor-pointer hover:bg-slate-50"
-              >
-                <td className="p-2 font-mono">{r.date}</td>
-                <td className="p-2 font-bold">{names[r.outlet_id] || '—'}</td>
-                <td className="p-2 text-right">{money(r.system_cash_total)}</td>
-                <td className="p-2 text-right">{money(r.reported_cash_deposit)}</td>
-                <td className={`p-2 text-right font-bold ${Math.abs(Number(r.cash_discrepancy) || 0) > 1 ? 'text-rose-600' : 'text-emerald-700'}`}>
-                  {money(r.cash_discrepancy)}
-                </td>
-                <td className="p-2 text-right">{money(r.qris_discrepancy)}</td>
-                <td className="p-2">
-                  <StatusBadge tone={statusTone(r.status)}>{reconStatusLabel(r.status)}</StatusBadge>
+            {loadState === 'loading' && rows.length === 0 && (
+              <tr>
+                <td colSpan={7} className="p-4 text-center text-slate-500">
+                  Memuat log rekonsiliasi…
                 </td>
               </tr>
-            ))}
-            {visible.length === 0 && (
+            )}
+            {loadState === 'error' && rows.length === 0 && (
               <tr>
-                <td colSpan={7} className="p-4 text-center text-slate-400">
-                  {rows.length === 0
-                    ? 'Belum ada log. Jalankan rekonsiliasi atau terapkan migrasi SQL.'
-                    : 'Semua hari sudah matched.'}
+                <td colSpan={7} className="p-4 text-center text-amber-800">
+                  {loadError || 'Data tidak tersedia. Muat ulang atau hubungi admin sistem.'}
+                </td>
+              </tr>
+            )}
+            {loadState === 'ready' &&
+              visible.map((r) => (
+                <tr
+                  key={r.id}
+                  onClick={() => openRow(r)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      openRow(r);
+                    }
+                  }}
+                  tabIndex={0}
+                  role="button"
+                  aria-label={`Buka detail rekonsiliasi ${names[r.outlet_id] || 'outlet'} ${r.date}`}
+                  className="border-t border-slate-100 cursor-pointer hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-300 focus:ring-inset"
+                >
+                  <td className="p-2 font-mono">{r.date}</td>
+                  <td className="p-2 font-bold">{names[r.outlet_id] || '—'}</td>
+                  <td className="p-2 text-right">{money(r.system_cash_total)}</td>
+                  <td className="p-2 text-right">{money(r.reported_cash_deposit)}</td>
+                  <td
+                    className={`p-2 text-right font-bold ${
+                      Math.abs(Number(r.cash_discrepancy) || 0) > 1 ? 'text-rose-600' : 'text-emerald-700'
+                    }`}
+                  >
+                    {money(r.cash_discrepancy)}
+                  </td>
+                  <td className="p-2 text-right">{money(r.qris_discrepancy)}</td>
+                  <td className="p-2">
+                    <StatusBadge tone={statusTone(r.status)}>{reconStatusLabel(r.status)}</StatusBadge>
+                  </td>
+                </tr>
+              ))}
+            {loadState === 'ready' && visible.length === 0 && (
+              <tr>
+                <td colSpan={7} className="p-4 text-center text-slate-600">
+                  {neverRun ? (
+                    <span>
+                      Belum ada log rekonsiliasi. Tekan <strong>Jalankan rekonsiliasi</strong> untuk memeriksa kas &amp;
+                      QRIS. Jangan anggap kondisi ini aman sebelum pemeriksaan selesai.
+                    </span>
+                  ) : filter === 'open' ? (
+                    'Tidak ada unmatched. Semua hari yang diperiksa sudah matched.'
+                  ) : (
+                    'Tidak ada baris untuk filter ini.'
+                  )}
                 </td>
               </tr>
             )}
@@ -249,7 +383,7 @@ export default function FinanceReconBoard({ embedded = false }: { embedded?: boo
                   type="button"
                   disabled={busy}
                   onClick={() => resolveAlert(a.id)}
-                  className="text-[10px] font-bold text-emerald-700 shrink-0"
+                  className="text-[10px] font-bold text-emerald-700 shrink-0 min-h-[44px] px-2"
                 >
                   Selesai
                 </button>
@@ -259,7 +393,13 @@ export default function FinanceReconBoard({ embedded = false }: { embedded?: boo
       )}
 
       {selected && (
-        <div className="fixed inset-0 z-[60] bg-black/40 flex items-end md:items-center justify-center p-3" onClick={() => setSelected(null)}>
+        <div
+          className="fixed inset-0 z-[60] bg-black/40 flex items-end md:items-center justify-center p-3"
+          onClick={() => setSelected(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Detail analisa rekonsiliasi"
+        >
           <div
             className="bg-white w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl p-4 shadow-xl space-y-3"
             onClick={(e) => e.stopPropagation()}
@@ -271,7 +411,11 @@ export default function FinanceReconBoard({ embedded = false }: { embedded?: boo
                   {names[selected.outlet_id] || 'Outlet'} · {selected.date}
                 </h4>
               </div>
-              <button type="button" onClick={() => setSelected(null)} className="text-xs font-bold text-slate-400">
+              <button
+                type="button"
+                onClick={() => setSelected(null)}
+                className="text-xs font-bold text-slate-400 min-h-[44px] px-2"
+              >
                 Tutup
               </button>
             </div>
@@ -306,21 +450,27 @@ export default function FinanceReconBoard({ embedded = false }: { embedded?: boo
 
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="text-[10px] font-bold text-slate-500 block mb-1">Revisi setoran tunai</label>
+                <label htmlFor="recon-cash-adj" className="text-[10px] font-bold text-slate-500 block mb-1">
+                  Revisi setoran tunai
+                </label>
                 <input
+                  id="recon-cash-adj"
                   type="number"
                   value={cashAdj}
                   onChange={(e) => setCashAdj(e.target.value)}
-                  className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs font-bold"
+                  className="w-full border border-slate-200 rounded-lg px-2 py-2 text-xs font-bold min-h-[44px]"
                 />
               </div>
               <div>
-                <label className="text-[10px] font-bold text-slate-500 block mb-1">Revisi settlement QRIS</label>
+                <label htmlFor="recon-qris-adj" className="text-[10px] font-bold text-slate-500 block mb-1">
+                  Revisi settlement QRIS
+                </label>
                 <input
+                  id="recon-qris-adj"
                   type="number"
                   value={qrisAdj}
                   onChange={(e) => setQrisAdj(e.target.value)}
-                  className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs font-bold"
+                  className="w-full border border-slate-200 rounded-lg px-2 py-2 text-xs font-bold min-h-[44px]"
                 />
               </div>
             </div>
@@ -329,7 +479,7 @@ export default function FinanceReconBoard({ embedded = false }: { embedded?: boo
                 type="button"
                 disabled={busy}
                 onClick={saveAdjust}
-                className="text-[11px] font-bold py-2.5 rounded-xl bg-slate-900 text-white"
+                className="text-[11px] font-bold py-2.5 min-h-[44px] rounded-xl bg-slate-900 text-white"
               >
                 Simpan revisi
               </button>
@@ -337,7 +487,7 @@ export default function FinanceReconBoard({ embedded = false }: { embedded?: boo
                 type="button"
                 disabled={busy}
                 onClick={matchToSystem}
-                className="text-[11px] font-bold py-2.5 rounded-xl bg-emerald-600 text-white"
+                className="text-[11px] font-bold py-2.5 min-h-[44px] rounded-xl bg-emerald-600 text-white"
               >
                 Samakan ke sistem
               </button>
@@ -345,7 +495,7 @@ export default function FinanceReconBoard({ embedded = false }: { embedded?: boo
                 type="button"
                 disabled={busy}
                 onClick={escalate}
-                className="text-[11px] font-bold py-2.5 rounded-xl border border-amber-300 text-amber-800 bg-amber-50"
+                className="text-[11px] font-bold py-2.5 min-h-[44px] rounded-xl border border-amber-300 text-amber-800 bg-amber-50"
               >
                 Eskalasi Supervisor
               </button>

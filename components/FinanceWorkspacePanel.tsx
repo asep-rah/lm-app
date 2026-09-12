@@ -193,7 +193,7 @@ export default function FinanceWorkspacePanel() {
                     <p className="text-sm font-black text-rose-600">{fmt(opex)}</p>
                   </div>
                   <div className="rounded-xl border border-slate-100 p-2.5">
-                    <p className="text-[9px] uppercase font-bold text-slate-400">Net Profit</p>
+                    <p className="text-[9px] uppercase font-bold text-slate-400">Laba Bersih</p>
                     <p className={`text-sm font-black ${profit >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{fmt(profit)}</p>
                   </div>
                 </div>
