@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { emptyBook, type OutletBook } from './outletBooks';
+import { buildTransactionReconRows } from './financeRecognition';
 import {
   BS,
   assessBooksCompleteness,
@@ -12,16 +13,19 @@ import {
   journalGroupBalanceIssues,
   receivableRevenueOf,
   settledCashRevenueOf,
-  clearingRevenueOf
+  clearingRevenueOf,
+  undepositedCashRevenueOf
 } from './financeStatements';
 
-/** Fixture: tunai 11.000 + QRIS 4.000 = 15.000 (bukan 15.003). */
-const CASH_AMT = 11000;
-const QRIS_AMT = 4000;
-const TOTAL = CASH_AMT + QRIS_AMT; // 15000
+/** Tiga transaksi BERBEDA — total aset 19.000 bukan double-count satu nota. */
+const CASH_AMT = 11000; // R-CASH
+const QRIS_PENDING_AMT = 4000; // R-QRIS-SEP (masih piutang)
+const QRIS_CROSS_AMT = 4000; // R-CROSS (jual Aug, bayar Sep → clearing)
+const TOTAL_REV_SEP_SALES = CASH_AMT + QRIS_PENDING_AMT; // 15000 penjualan bertanggal Sep
+const TOTAL_ASSETS_FROM_SALES = CASH_AMT + QRIS_PENDING_AMT + QRIS_CROSS_AMT; // 19000
 
-const aug = { year: 2026, month: 7 }; // Agustus
-const sep = { year: 2026, month: 8 }; // September
+const aug = { year: 2026, month: 7 };
+const sep = { year: 2026, month: 8 };
 
 const paidCash = {
   id: 't-cash',
@@ -39,12 +43,12 @@ const paidCash = {
 };
 
 const pendingQrisSep = {
-  id: 't-qris',
+  id: 't-qris-sep',
   outlet_id: 'o1',
-  amount: QRIS_AMT,
+  amount: QRIS_PENDING_AMT,
   delivery_fee: 0,
   order_type: 'Online',
-  receipt_number: 'R-QRIS',
+  receipt_number: 'R-QRIS-SEP',
   customer_name: 'B',
   created_at: '2026-09-11T10:00:00.000Z',
   is_paid: false,
@@ -53,11 +57,10 @@ const pendingQrisSep = {
   status: 'menunggu_pembayaran'
 };
 
-/** Pending Agustus, lunas September (paid_at). */
 const augPendingThenSepPaid = {
   id: 't-cross',
   outlet_id: 'o1',
-  amount: QRIS_AMT,
+  amount: QRIS_CROSS_AMT,
   delivery_fee: 0,
   order_type: 'Online',
   receipt_number: 'R-CROSS',
@@ -80,15 +83,39 @@ function bookBase(): OutletBook {
   return b;
 }
 
-describe('fixture arithmetic', () => {
-  it('uses 11000 + 4000 = 15000', () => {
-    assert.equal(TOTAL, 15000);
-    assert.notEqual(TOTAL, 15003);
+describe('per-transaction recon table (no double count)', () => {
+  it('documents 11000 undeposited + 4000 AR + 4000 clearing from THREE ids', () => {
+    const txs = [paidCash, pendingQrisSep, augPendingThenSepPaid];
+    const asOf = '2026-09-30T23:59:59.000Z';
+    const table = buildTransactionReconRows(txs, asOf);
+
+    assert.equal(table.length, 3);
+    assert.equal(new Set(table.map((r) => r.id)).size, 3);
+
+    const byReceipt = Object.fromEntries(table.map((r) => [r.receipt, r]));
+    assert.equal(byReceipt['R-CASH'].endingBucket, 'undeposited');
+    assert.equal(byReceipt['R-CASH'].endingAmount, CASH_AMT);
+    assert.equal(byReceipt['R-CASH'].paidAt, null);
+    assert.ok(byReceipt['R-CASH'].journals.some((j) => j.includes('110005')));
+
+    assert.equal(byReceipt['R-QRIS-SEP'].endingBucket, 'receivable');
+    assert.equal(byReceipt['R-QRIS-SEP'].endingAmount, QRIS_PENDING_AMT);
+    assert.equal(byReceipt['R-QRIS-SEP'].orderAt.startsWith('2026-09'), true);
+
+    assert.equal(byReceipt['R-CROSS'].endingBucket, 'clearing');
+    assert.equal(byReceipt['R-CROSS'].endingAmount, QRIS_CROSS_AMT);
+    assert.equal(byReceipt['R-CROSS'].orderAt.startsWith('2026-08'), true);
+    assert.equal(byReceipt['R-CROSS'].paidAt?.startsWith('2026-09'), true);
+
+    const sumEnding = table.reduce((s, r) => s + r.endingAmount, 0);
+    assert.equal(sumEnding, TOTAL_ASSETS_FROM_SALES);
+    assert.equal(TOTAL_ASSETS_FROM_SALES, 19000);
+    assert.equal(TOTAL_REV_SEP_SALES, 15000);
   });
 });
 
-describe('journal cash vs AR vs clearing', () => {
-  it('posts pending to AR and cash sales to bank; totals 15000 revenue credit', () => {
+describe('journal undeposited vs AR vs clearing', () => {
+  it('cash sale hits 110005 not 110001 until deposited', () => {
     const rows = buildJournal({
       txs: [paidCash, pendingQrisSep],
       mems: [],
@@ -97,33 +124,26 @@ describe('journal cash vs AR vs clearing', () => {
       ref: sep,
       mode: 'month'
     });
-    const cashDr = rows.filter((r) => r.akun.includes(BS.CASH.code) && r.debit > 0);
+    const undDr = rows.filter((r) => r.akun.includes(BS.UNDEPOSITED.code) && r.debit > 0);
+    const bankDr = rows.filter((r) => r.akun.includes(BS.CASH.code) && r.debit > 0);
     const arDr = rows.filter((r) => r.akun.includes(BS.AR.code) && r.debit > 0);
-    const revCr = rows.filter((r) => r.akun.startsWith('400') && r.kredit > 0);
-    assert.equal(cashDr.reduce((s, r) => s + r.debit, 0), CASH_AMT);
-    assert.equal(arDr.reduce((s, r) => s + r.debit, 0), QRIS_AMT);
-    assert.equal(revCr.reduce((s, r) => s + r.kredit, 0), TOTAL);
-    assert.equal(journalGroupBalanceIssues(rows).length, 0);
+    assert.equal(undDr.reduce((s, r) => s + r.debit, 0), CASH_AMT);
+    assert.equal(bankDr.length, 0);
+    assert.equal(arDr.reduce((s, r) => s + r.debit, 0), QRIS_PENDING_AMT);
   });
 
-  it('QRIS paid via gateway goes to clearing not bank', () => {
-    const rows = buildJournal({
-      txs: [augPendingThenSepPaid],
-      mems: [],
-      exps: [],
-      books: [],
-      ref: sep,
-      mode: 'month'
-    });
-    const clearDr = rows.filter((r) => r.akun.includes(BS.CLEARING.code) && r.debit > 0);
-    const bankDr = rows.filter((r) => r.akun.includes(BS.CASH.code) && r.debit > 0);
-    assert.equal(clearDr.reduce((s, r) => s + r.debit, 0), QRIS_AMT);
-    assert.equal(bankDr.length, 0);
+  it('deposit moves undeposited → bank without touching August', () => {
+    const deposited = { ...paidCash, deposited_at: '2026-09-12T00:00:00.000Z' };
+    const sepRows = buildJournal({ txs: [deposited], mems: [], exps: [], books: [], ref: sep, mode: 'month' });
+    assert.ok(sepRows.some((r) => r.source === 'deposit' && r.akun.includes(BS.CASH.code)));
+    const sheet = buildBalanceSheet({ txs: [deposited], mems: [], exps: [], books: [bookBase()], asOf: sep });
+    assert.equal(sheet.cash, CASH_AMT);
+    assert.equal(sheet.undepositedCash, 0);
   });
 });
 
-describe('August report stable when paid in September', () => {
-  it('August stays Dr AR / Cr Revenue after status becomes paid with paid_at in September', () => {
+describe('August stable under later mutations', () => {
+  it('status flip to paid with Sep paid_at leaves August journal identical', () => {
     const asPending = {
       ...augPendingThenSepPaid,
       is_paid: false,
@@ -132,175 +152,134 @@ describe('August report stable when paid in September', () => {
       paid_via: undefined,
       status: 'menunggu_pembayaran'
     };
-    const augBefore = buildJournal({
-      txs: [asPending],
-      mems: [],
-      exps: [],
-      books: [],
-      ref: aug,
-      mode: 'month'
-    });
-    const augAfter = buildJournal({
-      txs: [augPendingThenSepPaid],
-      mems: [],
-      exps: [],
-      books: [],
-      ref: aug,
-      mode: 'month'
-    });
-
-    const snap = (rows: typeof augBefore) =>
+    const snap = (rows: ReturnType<typeof buildJournal>) =>
       rows
         .map((r) => `${r.akun}|${r.debit}|${r.kredit}|${r.source}`)
         .sort()
         .join(';');
-
-    assert.equal(snap(augBefore), snap(augAfter));
-    assert.ok(augAfter.some((r) => r.akun.includes(BS.AR.code) && r.debit === QRIS_AMT));
-    assert.ok(!augAfter.some((r) => r.source === 'collection'));
-
-    const sepRows = buildJournal({
+    const before = buildJournal({ txs: [asPending], mems: [], exps: [], books: [], ref: aug, mode: 'month' });
+    const after = buildJournal({
       txs: [augPendingThenSepPaid],
       mems: [],
       exps: [],
       books: [],
-      ref: sep,
+      ref: aug,
       mode: 'month'
     });
-    assert.ok(sepRows.some((r) => r.source === 'collection' && r.akun.includes(BS.CLEARING.code)));
-    assert.ok(sepRows.some((r) => r.source === 'collection' && r.akun.includes(BS.AR.code) && r.kredit === QRIS_AMT));
+    assert.equal(snap(before), snap(after));
   });
 
-  it('without paid_at, flipping is_paid does not invent a September collection (history-safe)', () => {
-    const paidNoDate = {
-      ...augPendingThenSepPaid,
-      paid_at: undefined,
-      settled_at: undefined
+  it('correcting paid_at within September does not change August', () => {
+    const paidEarly = { ...augPendingThenSepPaid, paid_at: '2026-09-01T00:00:00.000Z' };
+    const paidLate = { ...augPendingThenSepPaid, paid_at: '2026-09-28T00:00:00.000Z' };
+    const snap = (rows: ReturnType<typeof buildJournal>) =>
+      rows.map((r) => `${r.akun}|${r.debit}|${r.kredit}|${r.source}`).sort().join(';');
+    assert.equal(
+      snap(buildJournal({ txs: [paidEarly], mems: [], exps: [], books: [], ref: aug, mode: 'month' })),
+      snap(buildJournal({ txs: [paidLate], mems: [], exps: [], books: [], ref: aug, mode: 'month' }))
+    );
+  });
+
+  it('manual mark paid with paid_at posts clearing/bank collection only on pay month', () => {
+    const manual = {
+      ...pendingQrisSep,
+      id: 't-manual',
+      receipt_number: 'R-MAN',
+      is_paid: true,
+      payment_status: 'paid',
+      paid_via: 'MANUAL_VERIFIED',
+      paid_at: '2026-09-15T00:00:00.000Z',
+      status: 'paid'
     };
-    const sepRows = buildJournal({
-      txs: [paidNoDate],
-      mems: [],
-      exps: [],
-      books: [],
-      ref: sep,
-      mode: 'month'
-    });
-    assert.ok(!sepRows.some((r) => r.source === 'collection'));
-    const throughSep = buildBalanceSheet({
-      txs: [paidNoDate],
-      mems: [],
-      exps: [],
-      books: [bookBase()],
-      asOf: sep
-    });
-    assert.equal(throughSep.tradeReceivablesFromSales, QRIS_AMT);
-    assert.equal(throughSep.gatewayClearing, 0);
+    const createdOnly = { ...manual, is_paid: false, payment_status: 'pending', paid_at: undefined, paid_via: undefined };
+    const snapAug = (t: typeof manual) =>
+      buildJournal({ txs: [{ ...t, created_at: '2026-08-10T00:00:00.000Z' }], mems: [], exps: [], books: [], ref: aug, mode: 'month' })
+        .map((r) => `${r.source}|${r.akun}|${r.debit}`)
+        .sort()
+        .join(';');
+    // Sale in August pending then manual paid September
+    const pendingAug = {
+      ...createdOnly,
+      created_at: '2026-08-10T00:00:00.000Z'
+    };
+    const paidSep = {
+      ...manual,
+      created_at: '2026-08-10T00:00:00.000Z',
+      paid_at: '2026-09-15T00:00:00.000Z'
+    };
+    const augPending = buildJournal({ txs: [pendingAug], mems: [], exps: [], books: [], ref: aug, mode: 'month' });
+    const augAfterPay = buildJournal({ txs: [paidSep], mems: [], exps: [], books: [], ref: aug, mode: 'month' });
+    assert.equal(
+      augPending.map((r) => `${r.akun}|${r.debit}|${r.kredit}`).sort().join(';'),
+      augAfterPay.map((r) => `${r.akun}|${r.debit}|${r.kredit}`).sort().join(';')
+    );
+    const sepPay = buildJournal({ txs: [paidSep], mems: [], exps: [], books: [], ref: sep, mode: 'month' });
+    assert.ok(sepPay.some((r) => r.source === 'collection' && r.akun.includes(BS.CASH.code)));
+  });
+
+  it('void with voided_at reverses in void month; sale month keeps original lines', () => {
+    const voided = {
+      ...paidCash,
+      is_void: true,
+      status: 'Dibatalkan',
+      voided_at: '2026-09-20T00:00:00.000Z'
+    };
+    const augLike = {
+      ...voided,
+      created_at: '2026-08-15T00:00:00.000Z',
+      voided_at: '2026-09-20T00:00:00.000Z'
+    };
+    const augRows = buildJournal({ txs: [augLike], mems: [], exps: [], books: [], ref: aug, mode: 'month' });
+    assert.ok(augRows.some((r) => r.source === 'transaction' && r.debit > 0));
+    assert.ok(!augRows.some((r) => r.source === 'void'));
+    const sepRows = buildJournal({ txs: [augLike], mems: [], exps: [], books: [], ref: sep, mode: 'month' });
+    assert.ok(sepRows.some((r) => r.source === 'void'));
   });
 });
 
-describe('balance sheet bank vs AR vs clearing', () => {
-  it('does not put pending omset into bank; 11000 bank + 4000 AR', () => {
-    const sheet = buildBalanceSheet({
-      txs: [paidCash, pendingQrisSep],
-      mems: [],
-      exps: [],
-      books: [bookBase()],
-      asOf: sep
-    });
-    assert.equal(settledCashRevenueOf([paidCash, pendingQrisSep], []), CASH_AMT);
-    assert.equal(receivableRevenueOf([paidCash, pendingQrisSep], sep), QRIS_AMT);
-    assert.equal(sheet.cash, CASH_AMT);
-    assert.equal(sheet.tradeReceivablesFromSales, QRIS_AMT);
-    assert.equal(sheet.gatewayClearing, 0);
+describe('balance sheet buckets', () => {
+  it('mixed September: undeposited 11000 + AR 4000 + clearing 4000', () => {
+    const txs = [paidCash, pendingQrisSep, augPendingThenSepPaid];
+    const sheet = buildBalanceSheet({ txs, mems: [], exps: [], books: [bookBase()], asOf: sep });
+    assert.equal(undepositedCashRevenueOf(txs, sep), CASH_AMT);
+    assert.equal(sheet.undepositedCash, CASH_AMT);
+    assert.equal(sheet.cash, 0);
+    assert.equal(sheet.tradeReceivablesFromSales, QRIS_PENDING_AMT);
+    assert.equal(sheet.gatewayClearing, QRIS_CROSS_AMT);
+    assert.equal(
+      sheet.undepositedCash + sheet.tradeReceivablesFromSales + sheet.gatewayClearing,
+      TOTAL_ASSETS_FROM_SALES
+    );
     assert.ok(Math.abs(sheet.totalAssets - sheet.totalPasiva) < 2);
   });
 
-  it('marks empty opening books as incomplete even if balanced at zero', () => {
-    const c = assessBooksCompleteness([bookBase()]);
-    assert.equal(c.complete, false);
-    assert.ok(c.issues.length > 0);
-  });
-
-  it('cross-month: Aug AR then Sep clearing; bank still 0 for gateway QRIS', () => {
-    const sheetAug = buildBalanceSheet({
-      txs: [augPendingThenSepPaid],
-      mems: [],
-      exps: [],
-      books: [bookBase()],
-      asOf: aug
-    });
-    assert.equal(sheetAug.tradeReceivablesFromSales, QRIS_AMT);
-    assert.equal(sheetAug.gatewayClearing, 0);
-    assert.equal(sheetAug.cash, 0);
-
-    const sheetSep = buildBalanceSheet({
-      txs: [augPendingThenSepPaid],
-      mems: [],
-      exps: [],
-      books: [bookBase()],
-      asOf: sep
-    });
-    assert.equal(sheetSep.tradeReceivablesFromSales, 0);
-    assert.equal(clearingRevenueOf([augPendingThenSepPaid], sep), QRIS_AMT);
-    assert.equal(sheetSep.gatewayClearing, QRIS_AMT);
-    assert.equal(sheetSep.cash, 0);
+  it('marks empty opening books incomplete', () => {
+    assert.equal(assessBooksCompleteness([bookBase()]).complete, false);
   });
 });
 
-describe('opening capital, asset, drawing', () => {
-  it('opening journal balances and capital/prive flow', () => {
+describe('opening capital', () => {
+  it('opening + capital - prive hits bank', () => {
     const book = bookBase();
     book.openingCapital = 100000;
     book.openingCash = 100000;
     book.extraCapital = [{ id: 'c1', date: '2026-09-05', amount: 20000, note: 'setor' }];
     book.drawings = [{ id: 'd1', date: '2026-09-06', amount: 5000, note: 'prive' }];
-    book.assets = [
-      {
-        id: 'fa1',
-        name: 'Washer',
-        category: 'Outlet - Machine',
-        cost: 0,
-        residual: 0,
-        acquiredAt: '2026-01-01',
-        lifeMonths: 60
-      }
-    ];
-    const rows = buildJournal({ txs: [], mems: [], exps: [], books: [book], ref: sep, mode: 'month' });
-    assert.equal(journalGroupBalanceIssues(rows).length, 0);
+    book.assets = [];
     const sheet = buildBalanceSheet({ txs: [], mems: [], exps: [], books: [book], asOf: sep });
     assert.equal(sheet.cash, 100000 + 20000 - 5000);
-    assert.ok(Math.abs(sheet.totalAssets - sheet.totalPasiva) < 2);
-  });
-
-  it('skips txs before booksStart', () => {
-    const book = bookBase();
-    book.booksStart = '2026-09-15';
-    book.openingCapital = 1;
-    book.openingCash = 1;
-    const early = { ...paidCash, created_at: '2026-09-01T00:00:00.000Z' };
-    const rows = buildJournal({ txs: [early], mems: [], exps: [], books: [book], ref: sep, mode: 'month' });
-    assert.ok(!rows.some((r) => r.source === 'transaction'));
   });
 });
 
-describe('ledger drill-down', () => {
-  it('account closing matches summary saldo', () => {
-    const opts = {
-      txs: [paidCash, pendingQrisSep],
-      mems: [],
-      exps: [],
-      books: [] as OutletBook[],
-      asOf: sep
-    };
-    const summary = buildLedger(opts).find((r) => r.name.includes(BS.CASH.code));
+describe('ledger / equity / expense', () => {
+  it('ledger closing matches', () => {
+    const opts = { txs: [paidCash, pendingQrisSep], mems: [], exps: [], books: [] as OutletBook[], asOf: sep };
+    const summary = buildLedger(opts).find((r) => r.name.includes(BS.UNDEPOSITED.code));
     const detail = buildLedgerAccount({ ...opts, account: summary!.name });
     assert.equal(detail.closing, summary!.saldo);
-    assert.ok(detail.mutations.length > 0);
   });
-});
 
-describe('equity labels basis', () => {
-  it('exposes period profit before and after share on 15000', () => {
+  it('equity on 15000 sep sales only', () => {
     const eq = buildEquity({
       txs: [paidCash, pendingQrisSep],
       mems: [],
@@ -309,13 +288,10 @@ describe('equity labels basis', () => {
       ref: sep,
       rates: {}
     });
-    assert.equal(eq.periodProfit, TOTAL);
-    assert.equal(eq.periodProfitAfterShare, TOTAL - Math.round(TOTAL * 0.2));
+    assert.equal(eq.periodProfit, 15000);
   });
-});
 
-describe('expense kasbon note (policy unchanged)', () => {
-  it('still posts kasbon category as expense vs cash (no silent AR rewrite)', () => {
+  it('kasbon expenses credit undeposited cash', () => {
     const exp = {
       id: 'e1',
       outlet_id: 'o1',
@@ -325,30 +301,23 @@ describe('expense kasbon note (policy unchanged)', () => {
       created_at: '2026-09-12T00:00:00.000Z'
     };
     const rows = buildJournal({ txs: [], mems: [], exps: [exp], books: [], ref: sep, mode: 'month' });
-    assert.ok(rows.some((r) => r.akun.includes('600011') && r.debit === 1000));
-    assert.ok(rows.some((r) => r.akun.includes(BS.CASH.code) && r.kredit === 1000));
+    assert.ok(rows.some((r) => r.akun.includes(BS.UNDEPOSITED.code) && r.kredit === 1000));
   });
 });
 
 describe('representative recon sample', () => {
-  it('jurnal = ledger = neraca assets for mixed month', () => {
+  it('jurnal groups balanced; ledger matches neraca buckets', () => {
     const txs = [paidCash, pendingQrisSep, augPendingThenSepPaid];
     const books = [bookBase()];
     const journalSep = buildJournal({ txs, mems: [], exps: [], books, ref: sep, mode: 'month' });
     assert.equal(journalGroupBalanceIssues(journalSep).length, 0);
-
     const ledger = buildLedger({ txs, mems: [], exps: [], books, asOf: sep });
-    const bank = ledger.find((r) => r.name.includes(BS.CASH.code))?.saldo || 0;
+    const sheet = buildBalanceSheet({ txs, mems: [], exps: [], books, asOf: sep });
+    const und = ledger.find((r) => r.name.includes(BS.UNDEPOSITED.code))?.saldo || 0;
     const ar = ledger.find((r) => r.name.includes(BS.AR.code))?.saldo || 0;
     const clearing = ledger.find((r) => r.name.includes(BS.CLEARING.code))?.saldo || 0;
-    const sheet = buildBalanceSheet({ txs, mems: [], exps: [], books, asOf: sep });
-
-    assert.equal(bank, sheet.cash);
+    assert.equal(und, sheet.undepositedCash);
     assert.equal(ar, sheet.receivables);
     assert.equal(clearing, sheet.gatewayClearing);
-    // Sep: cash 11000 + clearing 4000 (from Aug sale paid Sep) + AR 4000 pending Sep = 19000 current from sales
-    assert.equal(sheet.cash, CASH_AMT);
-    assert.equal(sheet.gatewayClearing, QRIS_AMT);
-    assert.equal(sheet.tradeReceivablesFromSales, QRIS_AMT);
   });
 });

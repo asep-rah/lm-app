@@ -7,11 +7,12 @@ import {
   isFinanceMarkedPaid,
   isFinanceSettledToBank,
   missingPaidAtWhilePaid,
+  proposePaidAtBackfill,
   saleAssetBucket,
   unpaidSalesTotal
 } from './financeRecognition';
 
-describe('is_paid vs payment_status vs settled', () => {
+describe('is_paid vs payment_status vs settled vs undeposited', () => {
   const pending = {
     amount: 4000,
     is_paid: false,
@@ -40,21 +41,26 @@ describe('is_paid vs payment_status vs settled', () => {
 
   it('maps buckets correctly', () => {
     assert.equal(saleAssetBucket(pending), 'receivable');
-    assert.equal(saleAssetBucket(cash), 'bank');
+    assert.equal(saleAssetBucket(cash), 'undeposited');
     assert.equal(isFinanceMarkedPaid(paidGateway), true);
     assert.equal(isFinanceSettledToBank(paidGateway), false);
     assert.equal(collectionAssetBucket(paidGateway), 'clearing');
     assert.equal(collectionAssetBucket(paidManual), 'bank');
     assert.equal(financePayKind(pending), 'receivable');
     assert.equal(financePayKind(paidGateway), 'clearing');
-    assert.equal(financePayKind(paidManual), 'cash');
+    assert.equal(financePayKind(cash), 'undeposited');
   });
 
-  it('requires paid_at for dated collection', () => {
+  it('requires paid_at for dated collection; backfill refuses invented dates', () => {
     assert.equal(collectionDateIso(pending), null);
     assert.equal(collectionDateIso(paidGateway), '2026-09-05T12:00:00.000Z');
-    assert.equal(collectionDateIso({ ...paidGateway, paid_at: undefined }), null);
     assert.equal(missingPaidAtWhilePaid({ ...paidGateway, paid_at: undefined }), true);
+    const proposal = proposePaidAtBackfill({
+      ...paidGateway,
+      paid_at: undefined,
+      updated_at: '2026-09-20T00:00:00.000Z'
+    });
+    assert.equal(proposal.apply, false);
     assert.equal(unpaidSalesTotal([pending, cash]), 4000);
   });
 });

@@ -1,26 +1,29 @@
 /**
  * Status pembayaran vs aset di laporan owner.
  *
- * | Konsep           | Field                                    | Arti                                      | Akun aset                          |
- * |------------------|------------------------------------------|-------------------------------------------|------------------------------------|
- * | Belum bayar      | !is_paid, payment_status pending/menunggu| Customer belum bayar                      | 110002 Piutang Usaha               |
- * | is_paid / lunas  | is_paid / payment_status paid\|lunas     | Pembayaran terverifikasi                  | (bukan akun; picu jurnal koleksi)  |
- * | Clearing gateway | QRIS/Mayar lunas, belum di rekening      | Uang di gateway / belum masuk rek outlet  | 110004 QRIS / Gateway Clearing     |
- * | Settled di bank  | Tunai, MANUAL_VERIFIED, atau settled_at  | Sudah di rekening outlet                  | 110001 Bank Outlet                 |
+ * | Konsep              | Field                         | Akun aset                         |
+ * |---------------------|-------------------------------|-----------------------------------|
+ * | Belum bayar         | pending / !is_paid            | 110002 Piutang Usaha              |
+ * | Lunas gateway       | is_paid + paid_at, QRIS       | 110004 Clearing (bukan bank)      |
+ * | Tunai belum setor   | Cash tanpa deposited_at       | 110005 Kas Tunai Belum Disetor    |
+ * | Di rekening bank    | settled_at / deposited_at /   | 110001 Rekening Bank Outlet       |
+ * |                     | MANUAL_VERIFIED (transfer)    |                                   |
  *
- * Pendapatan (PnL) tetap dari transaksi non-void pada created_at.
- * Jurnal:
- *   - created_at: tunai → Dr Bank / Cr Pendapatan; non-tunai → Dr Piutang / Cr Pendapatan
- *   - paid_at/settled_at: Dr Clearing atau Bank / Cr Piutang (hanya jika tanggal koleksi ada)
+ * Jurnal bertanggal:
+ *   created_at  → jual (Dr Piutang|KasBelumSetor / Cr Pendapatan)
+ *   paid_at     → koleksi non-tunai (Dr Clearing|Bank / Cr Piutang)
+ *   deposited_at/settled_at (tunai) → setor (Dr Bank / Cr KasBelumSetor)
+ *   voided_at   → pembalikan bertanggal (bukan menghapus jejak bulan jual)
  *
- * BATASAN RILIS: is_paid tanpa paid_at tidak memindahkan piutang (agar Agustus tidak
- * berubah diam-diam). settled_at belum ada di semua baris → QRIS lunas default ke Clearing.
+ * BATASAN RILIS: is_paid tanpa paid_at → tetap Piutang. Backfill paid_at berbasis bukti
+ * wajib sebelum menganggap saldo produksi lengkap.
  */
 import { isNonCashVerifyMethod, isPaymentLocked } from '@/lib/paymentVerify';
 import { isPaidTx } from '@/lib/financeRecon';
+import { isVoidTransaction } from '@/lib/voidTx';
 
-export type FinancePayKind = 'cash' | 'receivable' | 'clearing' | 'unknown';
-export type FinanceAssetBucket = 'bank' | 'clearing' | 'receivable';
+export type FinancePayKind = 'cash' | 'receivable' | 'clearing' | 'undeposited' | 'unknown';
+export type FinanceAssetBucket = 'bank' | 'clearing' | 'receivable' | 'undeposited';
 
 export function isFinanceMarkedPaid(row: any): boolean {
   return Boolean(row) && isPaidTx(row);
@@ -34,62 +37,80 @@ export function hasReliablePaidAt(row: any): boolean {
   return Boolean(row?.paid_at || row?.settled_at);
 }
 
-/** Sudah dianggap masuk rekening outlet (bukan hanya lunas di gateway). */
+/** Transfer manual / settled → rekening bank. Tunai biasa → belum tentu sudah setor. */
 export function isFinanceSettledToBank(row: any): boolean {
   if (!row) return false;
-  if (row.settled_at) return true;
-  if (!isFinanceNonCashMethod(row)) return true;
-  return String(row.paid_via || '').toUpperCase() === 'MANUAL_VERIFIED';
+  if (row.settled_at || row.deposited_at) return true;
+  if (isFinanceNonCashMethod(row)) {
+    return String(row.paid_via || '').toUpperCase() === 'MANUAL_VERIFIED';
+  }
+  return false;
 }
 
-/** Bucket saat penjualan (created_at). */
+/** Bucket aset pada jurnal penjualan (created_at). */
 export function saleAssetBucket(row: any): FinanceAssetBucket {
   if (isFinanceNonCashMethod(row) || isPaymentLocked(row)) return 'receivable';
-  return 'bank';
+  return 'undeposited'; // tunai di laci/kasir, belum rekening bank
 }
 
-/** Bucket jurnal koleksi setelah lunas. */
+/** Bucket koleksi setelah lunas non-tunai. */
 export function collectionAssetBucket(row: any): FinanceAssetBucket {
   if (isFinanceSettledToBank(row)) return 'bank';
   if (isFinanceMarkedPaid(row) && isFinanceNonCashMethod(row)) return 'clearing';
-  return 'bank';
+  return 'clearing';
 }
 
-/**
- * Tanggal koleksi untuk jurnal Dr Clearing|Bank / Cr Piutang.
- * null = jangan posting koleksi (pending, atau lunas tanpa paid_at).
- */
 export function collectionDateIso(row: any): string | null {
-  if (!isFinanceNonCashMethod(row) && !isPaymentLocked(row)) return null; // tunai: tidak ada koleksi terpisah
+  if (saleAssetBucket(row) !== 'receivable') return null;
   if (!isFinanceMarkedPaid(row)) return null;
   if (row.settled_at) return String(row.settled_at);
   if (row.paid_at) return String(row.paid_at);
   return null;
 }
 
+/** Setor tunai dari 110005 → 110001. */
+export function cashDepositDateIso(row: any): string | null {
+  if (saleAssetBucket(row) !== 'undeposited') return null;
+  if (row.deposited_at) return String(row.deposited_at);
+  if (row.settled_at) return String(row.settled_at);
+  return null;
+}
+
+export function voidDateIso(row: any): string | null {
+  if (!isVoidTransaction(row)) return null;
+  if (row.voided_at) return String(row.voided_at);
+  return null; // void tanpa tanggal → batasan jejak
+}
+
 export function missingPaidAtWhilePaid(row: any): boolean {
   return isFinanceMarkedPaid(row) && isFinanceNonCashMethod(row) && !hasReliablePaidAt(row);
 }
 
-/** Kompatibilitas: “kas di bank” (bukan clearing, bukan piutang). */
+export function missingVoidDate(row: any): boolean {
+  return isVoidTransaction(row) && !row?.voided_at;
+}
+
 export function isFinanceCashReceived(row: any): boolean {
   if (!row) return false;
-  if (saleAssetBucket(row) === 'bank') return true;
+  if (saleAssetBucket(row) === 'undeposited') return true; // kas fisik ada, belum bank
   if (!isFinanceMarkedPaid(row)) return false;
   return collectionAssetBucket(row) === 'bank' && hasReliablePaidAt(row);
 }
 
 export function financePayKind(row: any): FinancePayKind {
   if (!row) return 'unknown';
-  if (saleAssetBucket(row) === 'bank') return 'cash';
+  if (saleAssetBucket(row) === 'undeposited') {
+    return cashDepositDateIso(row) ? 'cash' : 'undeposited';
+  }
   if (!isFinanceMarkedPaid(row)) return 'receivable';
+  if (!hasReliablePaidAt(row)) return 'receivable';
   if (collectionAssetBucket(row) === 'clearing') return 'clearing';
-  if (!hasReliablePaidAt(row)) return 'receivable'; // lunas tanpa tanggal → tetap piutang di buku
   return 'cash';
 }
 
 export function financePayLabel(kind: FinancePayKind): string {
   if (kind === 'cash') return 'Di rekening bank';
+  if (kind === 'undeposited') return 'Kas tunai belum disetor';
   if (kind === 'clearing') return 'Lunas gateway (belum di rekening)';
   if (kind === 'receivable') return 'Piutang (belum lunas / tanpa paid_at)';
   return 'Status bayar belum jelas';
@@ -97,12 +118,140 @@ export function financePayLabel(kind: FinancePayKind): string {
 
 export function unpaidSalesTotal(txs: any[]): number {
   return (txs || []).reduce((s, t) => {
-    if (saleAssetBucket(t) === 'bank') return s;
-    if (collectionDateIso(t)) return s; // sudah dikoleksi bertanggal
+    if (isVoidTransaction(t)) return s;
+    if (saleAssetBucket(t) !== 'receivable') return s;
+    if (collectionDateIso(t)) return s;
     return s + (Number(t.amount) || 0);
   }, 0);
 }
 
 export function paidSalesTotal(txs: any[]): number {
-  return (txs || []).reduce((s, t) => s + (isFinanceMarkedPaid(t) ? Number(t.amount) || 0 : 0), 0);
+  return (txs || []).reduce((s, t) => {
+    if (isVoidTransaction(t)) return s;
+    return s + (isFinanceMarkedPaid(t) ? Number(t.amount) || 0 : 0);
+  }, 0);
+}
+
+export type TxReconRow = {
+  id: string;
+  receipt: string;
+  orderAt: string;
+  paidAt: string | null;
+  depositedAt: string | null;
+  voidedAt: string | null;
+  amount: number;
+  method: string;
+  journals: string[];
+  endingBucket: FinanceAssetBucket | 'voided' | 'revenue_only';
+  endingAmount: number;
+};
+
+/**
+ * Tabel per transaksi untuk menyingkirkan risiko penghitungan ganda pada total aset.
+ */
+export function buildTransactionReconRows(txs: any[], asOfIso?: string): TxReconRow[] {
+  const asOf = asOfIso ? new Date(asOfIso).getTime() : Number.POSITIVE_INFINITY;
+  const before = (iso: string | null | undefined) => {
+    if (!iso) return false;
+    return new Date(iso).getTime() <= asOf;
+  };
+
+  return (txs || []).map((t) => {
+    const amount = Number(t.amount) || 0;
+    const orderAt = String(t.created_at || '');
+    const paidAt = collectionDateIso(t);
+    const depositedAt = cashDepositDateIso(t);
+    const voidedAt = voidDateIso(t);
+    const journals: string[] = [];
+    let endingBucket: TxReconRow['endingBucket'] = 'revenue_only';
+    let endingAmount = 0;
+
+    if (!before(orderAt)) {
+      return {
+        id: String(t.id || ''),
+        receipt: String(t.receipt_number || t.id || ''),
+        orderAt,
+        paidAt,
+        depositedAt,
+        voidedAt,
+        amount,
+        method: String(t.payment_method || ''),
+        journals: ['(di luar as-of)'],
+        endingBucket: 'revenue_only',
+        endingAmount: 0
+      };
+    }
+
+    const saleBucket = saleAssetBucket(t);
+    if (saleBucket === 'receivable') {
+      journals.push(`@order Dr 110002 Piutang ${amount} / Cr Pendapatan`);
+      endingBucket = 'receivable';
+      endingAmount = amount;
+    } else {
+      journals.push(`@order Dr 110005 KasBelumSetor ${amount} / Cr Pendapatan`);
+      endingBucket = 'undeposited';
+      endingAmount = amount;
+    }
+
+    if (paidAt && before(paidAt) && saleBucket === 'receivable') {
+      const dest = collectionAssetBucket(t);
+      const code = dest === 'bank' ? '110001 Bank' : '110004 Clearing';
+      journals.push(`@paid Dr ${code} ${amount} / Cr 110002 Piutang`);
+      endingBucket = dest;
+      endingAmount = amount;
+    }
+
+    if (depositedAt && before(depositedAt) && saleBucket === 'undeposited') {
+      journals.push(`@deposit Dr 110001 Bank ${amount} / Cr 110005 KasBelumSetor`);
+      endingBucket = 'bank';
+      endingAmount = amount;
+    }
+
+    if (voidedAt && before(voidedAt)) {
+      journals.push(`@void pembalikan bertanggal (voided_at)`);
+      endingBucket = 'voided';
+      endingAmount = 0;
+    } else if (isVoidTransaction(t) && !voidedAt) {
+      journals.push(`@void TANPA voided_at — batasan jejak`);
+    }
+
+    return {
+      id: String(t.id || ''),
+      receipt: String(t.receipt_number || t.id || ''),
+      orderAt,
+      paidAt,
+      depositedAt,
+      voidedAt,
+      amount,
+      method: String(t.payment_method || ''),
+      journals,
+      endingBucket,
+      endingAmount
+    };
+  });
+}
+
+/** Usulan backfill paid_at dari bukti yang sudah ada (tidak menulis DB). */
+export function proposePaidAtBackfill(row: any): {
+  proposedPaidAt: string | null;
+  evidence: string;
+  apply: boolean;
+} {
+  if (!missingPaidAtWhilePaid(row)) {
+    return { proposedPaidAt: null, evidence: 'tidak perlu', apply: false };
+  }
+  // Hanya usulkan jika ada jejak waktu non-karangan dari field yang sudah tersimpan.
+  if (row.updated_at && row.is_paid === true) {
+    return {
+      proposedPaidAt: null,
+      evidence:
+        'is_paid tanpa paid_at: jangan isi dari updated_at (bisa koreksi non-bayar). Butuh bukti webhook/audit/mutasi.',
+      apply: false
+    };
+  }
+  return {
+    proposedPaidAt: null,
+    evidence: 'Tidak ada bukti bertanggal yang aman untuk diisi otomatis',
+    apply: false
+  };
 }

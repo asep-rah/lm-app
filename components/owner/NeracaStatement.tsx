@@ -32,6 +32,7 @@ export default function NeracaStatement({ title, asOf, sheet }: Props) {
           <Head>ASET</Head>
           <Sub>ASET LANCAR</Sub>
           <Line label="Rekening Bank Outlet / Omset" value={sheet.cash} indent={2} />
+          <Line label="Kas Tunai Belum Disetor" value={sheet.undepositedCash || 0} indent={2} />
           <Line label="Piutang Usaha" value={sheet.receivables} indent={2} />
           <Line label="QRIS / Gateway Clearing" value={sheet.gatewayClearing || 0} indent={2} />
           <Line label="Aset Lancar Lainnya" value={sheet.otherCurrent} indent={2} />

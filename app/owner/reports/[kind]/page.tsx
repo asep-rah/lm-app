@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import OwnerChrome from '@/components/owner/OwnerChrome';
 import { canAccessSettings, homePathForRole, isOwnerRole } from '@/lib/staffSession';
-import { loadOwnerFinanceBundle, filterByOutlet } from '@/lib/ownerFinanceData';
+import { loadOwnerFinanceBundle, filterByOutlet, ledgerTxsOf } from '@/lib/ownerFinanceData';
 import { monthLabel, type PnlMonthRef } from '@/lib/pnlReport';
 import { booksOf, idr, loadOutletBooks, type OutletBook } from '@/lib/outletBooks';
 import {
@@ -58,6 +58,7 @@ export default function OwnerFinanceKindPage() {
   const [outletId, setOutletId] = useState('ALL');
   const [outlets, setOutlets] = useState<{ id: string; name: string }[]>([]);
   const [txs, setTxs] = useState<any[]>([]);
+  const [voidedTxs, setVoidedTxs] = useState<any[]>([]);
   const [mems, setMems] = useState<any[]>([]);
   const [exps, setExps] = useState<any[]>([]);
   const [store, setStore] = useState<Record<string, OutletBook>>({});
@@ -85,6 +86,7 @@ export default function OwnerFinanceKindPage() {
     Promise.all([loadOwnerFinanceBundle(), loadOutletBooks(), loadProfitShareRates()]).then(([b, books, share]) => {
       setOutlets(b.outlets);
       setTxs(b.txs);
+      setVoidedTxs(b.voidedTxs);
       setMems(b.mems);
       setExps(b.exps);
       setStore(books);
@@ -93,6 +95,8 @@ export default function OwnerFinanceKindPage() {
   }, [ready]);
 
   const scopedTxs = filterByOutlet(txs, outletId);
+  const scopedVoided = filterByOutlet(voidedTxs, outletId);
+  const scopedLedgerTxs = ledgerTxsOf({ txs: scopedTxs, voidedTxs: scopedVoided });
   const scopedMems = filterByOutlet(mems, outletId);
   const scopedExps = filterByOutlet(exps, outletId);
   const books = booksOf(store, outletId);
@@ -111,20 +115,20 @@ export default function OwnerFinanceKindPage() {
   }, [txs, mems, exps, store]);
 
   const journal = useMemo(
-    () => buildJournal({ txs: scopedTxs, mems: scopedMems, exps: scopedExps, books, ref, mode: 'month' }),
-    [scopedTxs, scopedMems, scopedExps, books, year, month]
+    () => buildJournal({ txs: scopedLedgerTxs, mems: scopedMems, exps: scopedExps, books, ref, mode: 'month' }),
+    [scopedLedgerTxs, scopedMems, scopedExps, books, year, month]
   );
   const ledger = useMemo(
-    () => buildLedger({ txs: scopedTxs, mems: scopedMems, exps: scopedExps, books, asOf: ref }),
-    [scopedTxs, scopedMems, scopedExps, books, year, month]
+    () => buildLedger({ txs: scopedLedgerTxs, mems: scopedMems, exps: scopedExps, books, asOf: ref }),
+    [scopedLedgerTxs, scopedMems, scopedExps, books, year, month]
   );
   const equity = useMemo(
     () => buildEquity({ txs: scopedTxs, mems: scopedMems, exps: scopedExps, books, ref, rates }),
     [scopedTxs, scopedMems, scopedExps, books, year, month, rates]
   );
   const neraca = useMemo(
-    () => buildBalanceSheet({ txs: scopedTxs, mems: scopedMems, exps: scopedExps, books, asOf: ref, rates }),
-    [scopedTxs, scopedMems, scopedExps, books, year, month, rates]
+    () => buildBalanceSheet({ txs: scopedLedgerTxs, mems: scopedMems, exps: scopedExps, books, asOf: ref, rates }),
+    [scopedLedgerTxs, scopedMems, scopedExps, books, year, month, rates]
   );
   const completeness = useMemo(() => assessBooksCompleteness(books), [books]);
   const unpaidPeriod = useMemo(
@@ -139,14 +143,14 @@ export default function OwnerFinanceKindPage() {
   const ledgerDetail = useMemo(() => {
     if (!ledgerAccount) return null;
     return buildLedgerAccount({
-      txs: scopedTxs,
+      txs: scopedLedgerTxs,
       mems: scopedMems,
       exps: scopedExps,
       books,
       asOf: ref,
       account: ledgerAccount
     });
-  }, [ledgerAccount, scopedTxs, scopedMems, scopedExps, books, year, month]);
+  }, [ledgerAccount, scopedLedgerTxs, scopedMems, scopedExps, books, year, month]);
 
   const outletTitle = outletId === 'ALL'
     ? 'NERACA SEMUA CABANG'
@@ -195,15 +199,16 @@ export default function OwnerFinanceKindPage() {
         {unpaidPeriod > 0 && (
           <p className="text-[11px] text-slate-700 bg-white border border-slate-200 rounded-xl px-3 py-2 leading-relaxed">
             Periode {monthLabel(ref)}: omset masih di piutang (belum ada jurnal koleksi bertanggal) {idr(unpaidPeriod)}.
-            Alur: jual non-tunai → 110002; lunas gateway (paid_at) → 110004 Clearing; settled/manual/tunai → 110001 Bank.
+            Alur: jual non-tunai → 110002; lunas gateway (paid_at) → 110004 Clearing; tunai → 110005 KasBelumSetor;
+            setor/settled → 110001 Bank.
           </p>
         )}
 
         {missingPaidAt > 0 && (
           <p className="text-[11px] text-rose-900 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2 leading-relaxed">
-            Batasan jejak historis: {missingPaidAt} transaksi berstatus lunas tanpa <code>paid_at</code>.
-            Koleksi tidak dijurnal agar laporan bulan jual tidak berubah diam-diam saat flag is_paid diubah.
-            Backfill paid_at diperlukan sebelum menganggap GL siap rilis produksi.
+            Gate rilis: {missingPaidAt} transaksi <strong>is_paid tanpa paid_at</strong> tetap di Piutang (aman, tanpa
+            mengarang tanggal). Saldo produksi belum lengkap sampai backfill berbasis bukti + rekonsiliasi selesai.
+            Jalankan <code className="text-[10px]">npx tsx scripts/paidAtBackfillDryRun.ts</code> (read-only).
           </p>
         )}
 

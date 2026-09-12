@@ -18,18 +18,22 @@ import {
 } from '@/lib/outletBooks';
 import { PNL_PROFIT_SHARE_RATE, shareRateOf } from '@/lib/pnlReport';
 import {
+  cashDepositDateIso,
   collectionAssetBucket,
   collectionDateIso,
   financePayKind,
   missingPaidAtWhilePaid,
-  saleAssetBucket
+  saleAssetBucket,
+  voidDateIso
 } from '@/lib/financeRecognition';
+import { isVoidTransaction } from '@/lib/voidTx';
 
 export const BS = {
   CASH: { code: '110001', label: 'Rekening Bank Outlet / Omset' },
   AR: { code: '110002', label: 'Piutang Usaha' },
   OCA: { code: '110003', label: 'Aset Lancar Lainnya' },
   CLEARING: { code: '110004', label: 'QRIS / Gateway Clearing' },
+  UNDEPOSITED: { code: '110005', label: 'Kas Tunai Belum Disetor' },
   FA: { code: '150001', label: 'Aset Tetap' },
   ACCUM: { code: '150009', label: 'Akumulasi Penyusutan' },
   AP: { code: '210001', label: 'Utang Usaha' },
@@ -43,9 +47,10 @@ export const BS = {
   DEP: { code: '600029', label: 'Penyusutan Aset' }
 };
 
-const assetAcc = (bucket: 'bank' | 'clearing' | 'receivable') => {
+const assetAcc = (bucket: 'bank' | 'clearing' | 'receivable' | 'undeposited') => {
   if (bucket === 'clearing') return BS.CLEARING;
   if (bucket === 'receivable') return BS.AR;
+  if (bucket === 'undeposited') return BS.UNDEPOSITED;
   return BS.CASH;
 };
 
@@ -59,7 +64,7 @@ export type JournalLine = {
   ref?: string;
   source?: string;
   outletId?: string | null;
-  payStatus?: 'cash' | 'receivable' | 'clearing' | 'n/a';
+  payStatus?: 'cash' | 'receivable' | 'clearing' | 'undeposited' | 'n/a';
 };
 
 export type LedgerRow = {
@@ -207,25 +212,41 @@ export function cashRevenueOf(txs: any[], mems: any[], through?: PnlMonthRef) {
 }
 
 /**
- * Omset yang menambah bank melalui jurnal (tunai pada created_at, atau koleksi settled ke bank pada paid_at).
- * Dipakai sebagai cross-check; neraca bank dihitung dari rumus yang sama.
+ * Omset di rekening bank (bukan kas laci, bukan clearing).
+ * Tunai hanya masuk di sini setelah deposited_at/settled_at.
  */
 export function settledCashRevenueOf(txs: any[], mems: any[], through?: PnlMonthRef) {
   const end = through ? endOfMonthIso(through) : null;
   const before = (iso: string) => !end || new Date(iso).getTime() <= new Date(end).getTime();
   let tx = 0;
   txs.forEach((t) => {
+    if (isVoidTransaction(t) && voidDateIso(t) && before(voidDateIso(t)!)) return;
     const amt = Number(t.amount) || 0;
-    if (saleAssetBucket(t) === 'bank' && before(t.created_at)) tx += amt;
+    const dep = cashDepositDateIso(t);
+    if (dep && before(dep)) tx += amt;
     else {
       const col = collectionDateIso(t);
       if (col && before(col) && collectionAssetBucket(t) === 'bank') tx += amt;
     }
   });
+  // Membership dianggap setor bank pada created_at (kebijakan existing; belum ada laci member).
   const mem = mems
     .filter((m) => before(m.created_at))
     .reduce((s, m) => s + (Number(m.price) || 0), 0);
   return tx + mem;
+}
+
+export function undepositedCashRevenueOf(txs: any[], through?: PnlMonthRef) {
+  const end = through ? endOfMonthIso(through) : null;
+  const before = (iso: string) => !end || new Date(iso).getTime() <= new Date(end).getTime();
+  return txs.reduce((s, t) => {
+    if (isVoidTransaction(t) && voidDateIso(t) && before(voidDateIso(t)!)) return s;
+    if (saleAssetBucket(t) !== 'undeposited') return s;
+    if (!before(t.created_at)) return s;
+    const dep = cashDepositDateIso(t);
+    if (dep && before(dep)) return s;
+    return s + (Number(t.amount) || 0);
+  }, 0);
 }
 
 /** Omset non-tunai yang masih di piutang pada akhir through (belum ada jurnal koleksi bertanggal). */
@@ -233,6 +254,7 @@ export function receivableRevenueOf(txs: any[], through?: PnlMonthRef) {
   const end = through ? endOfMonthIso(through) : null;
   const before = (iso: string) => !end || new Date(iso).getTime() <= new Date(end).getTime();
   return txs.reduce((s, t) => {
+    if (isVoidTransaction(t) && voidDateIso(t) && before(voidDateIso(t)!)) return s;
     if (saleAssetBucket(t) !== 'receivable') return s;
     if (!before(t.created_at)) return s;
     const col = collectionDateIso(t);
@@ -246,6 +268,7 @@ export function clearingRevenueOf(txs: any[], through?: PnlMonthRef) {
   const end = through ? endOfMonthIso(through) : null;
   const before = (iso: string) => !end || new Date(iso).getTime() <= new Date(end).getTime();
   return txs.reduce((s, t) => {
+    if (isVoidTransaction(t) && voidDateIso(t) && before(voidDateIso(t)!)) return s;
     const col = collectionDateIso(t);
     if (!col || !before(col)) return s;
     if (collectionAssetBucket(t) !== 'clearing') return s;
@@ -360,7 +383,13 @@ function pushSalePair(
   if (opts.amount <= 0) return;
   const asset = assetAcc(opts.assetBucket);
   const payStatus =
-    opts.assetBucket === 'bank' ? ('cash' as const) : opts.assetBucket === 'clearing' ? ('clearing' as const) : ('receivable' as const);
+    opts.assetBucket === 'bank'
+      ? ('cash' as const)
+      : opts.assetBucket === 'clearing'
+        ? ('clearing' as const)
+        : opts.assetBucket === 'undeposited'
+          ? ('undeposited' as const)
+          : ('receivable' as const);
   const meta = {
     ref: opts.ref,
     source: opts.source,
@@ -398,6 +427,40 @@ function pushCollection(
     line(opts.date, acc(asset.code, asset.label), opts.desc, opts.amount, 0, opts.group, meta)!,
     line(opts.date, acc(BS.AR.code, BS.AR.label), opts.desc, 0, opts.amount, opts.group, meta)!
   );
+}
+
+function pushCashDeposit(
+  rows: JournalLine[],
+  opts: { date: string; amount: number; desc: string; group: string; outletId?: string | null; ref: string }
+) {
+  if (opts.amount <= 0) return;
+  const meta = { ref: opts.ref, source: 'deposit', outletId: opts.outletId, payStatus: 'cash' as const };
+  rows.push(
+    line(opts.date, acc(BS.CASH.code, BS.CASH.label), opts.desc, opts.amount, 0, opts.group, meta)!,
+    line(opts.date, acc(BS.UNDEPOSITED.code, BS.UNDEPOSITED.label), opts.desc, 0, opts.amount, opts.group, meta)!
+  );
+}
+
+/** Pembalikan bertanggal: tukar debit↔kredit baris sumber pada voided_at. */
+function pushReversal(
+  rows: JournalLine[],
+  sources: JournalLine[],
+  voidAt: string,
+  groupSuffix: string
+) {
+  sources.forEach((s, i) => {
+    rows.push(
+      line(
+        voidAt,
+        s.akun,
+        `VOID · ${s.desc}`,
+        s.kredit,
+        s.debit,
+        `${s.group}${groupSuffix}-${i}`,
+        { ref: s.ref, source: 'void', outletId: s.outletId, payStatus: 'n/a' }
+      )!
+    );
+  });
 }
 
 export function buildJournal(opts: {
@@ -451,9 +514,15 @@ export function buildJournal(opts: {
   });
 
   txs.forEach((t) => {
-    if (!keep(t.created_at) && !(collectionDateIso(t) && keep(collectionDateIso(t)!))) return;
+    const colAt = collectionDateIso(t);
+    const depAt = cashDepositDateIso(t);
+    const voidAt = voidDateIso(t);
+    const relevantDates = [t.created_at, colAt, depAt, voidAt].filter(Boolean) as string[];
+    if (!relevantDates.some((d) => keep(d))) return;
+
     const book = bookByOutlet(books, t.outlet_id);
     if (book && !afterBooksStart(t.created_at, book)) return;
+
     const amt = Number(t.amount) || 0;
     const fee = Number(t.delivery_fee) || 0;
     const laundry = Math.max(0, amt - fee);
@@ -461,75 +530,220 @@ export function buildJournal(opts: {
     const saleBucket = saleAssetBucket(t);
     const refId = String(t.receipt_number || t.id || '');
     const g = `tx-${t.id}`;
-    const saleTag = saleBucket === 'bank' ? 'tunai/bank' : 'piutang';
+    const saleTag =
+      saleBucket === 'undeposited' ? 'tunai-laci' : saleBucket === 'receivable' ? 'piutang' : saleBucket;
     const descSale = `${t.receipt_number || 'TRX'} · ${t.customer_name || '-'} · jual (${saleTag})`;
 
+    const postedSale: JournalLine[] = [];
+    const capture = (fn: () => void) => {
+      const before = rows.length;
+      fn();
+      postedSale.push(...rows.slice(before));
+    };
+
     if (keep(t.created_at)) {
-      if (laundry > 0) {
-        pushSalePair(rows, {
-          date: t.created_at,
-          amount: laundry,
-          revCode: rev.code,
-          revLabel: rev.label,
-          desc: descSale,
-          group: `${g}-l`,
-          outletId: t.outlet_id,
-          assetBucket: saleBucket,
-          ref: refId,
-          source: 'transaction'
+      capture(() => {
+        if (laundry > 0) {
+          pushSalePair(rows, {
+            date: t.created_at,
+            amount: laundry,
+            revCode: rev.code,
+            revLabel: rev.label,
+            desc: descSale,
+            group: `${g}-l`,
+            outletId: t.outlet_id,
+            assetBucket: saleBucket,
+            ref: refId,
+            source: 'transaction'
+          });
+        }
+        if (fee > 0) {
+          pushSalePair(rows, {
+            date: t.created_at,
+            amount: fee,
+            revCode: PNL_REVENUE[2].code,
+            revLabel: PNL_REVENUE[2].label,
+            desc: descSale,
+            group: `${g}-f`,
+            outletId: t.outlet_id,
+            assetBucket: saleBucket,
+            ref: refId,
+            source: 'transaction'
+          });
+        }
+        if (!laundry && !fee && amt > 0) {
+          pushSalePair(rows, {
+            date: t.created_at,
+            amount: amt,
+            revCode: rev.code,
+            revLabel: rev.label,
+            desc: descSale,
+            group: g,
+            outletId: t.outlet_id,
+            assetBucket: saleBucket,
+            ref: refId,
+            source: 'transaction'
+          });
+        }
+      });
+    }
+
+    const postedCol: JournalLine[] = [];
+    if (colAt && keep(colAt) && saleBucket === 'receivable') {
+      const dest = collectionAssetBucket(t);
+      if (dest === 'bank' || dest === 'clearing') {
+        const colTag = dest === 'clearing' ? 'koleksi→clearing' : 'koleksi→bank';
+        const descCol = `${t.receipt_number || 'TRX'} · ${t.customer_name || '-'} · ${colTag}`;
+        const pieces: { amount: number; suffix: string }[] = [];
+        if (laundry > 0) pieces.push({ amount: laundry, suffix: '-l' });
+        if (fee > 0) pieces.push({ amount: fee, suffix: '-f' });
+        if (!laundry && !fee && amt > 0) pieces.push({ amount: amt, suffix: '' });
+        const before = rows.length;
+        pieces.forEach((p) => {
+          pushCollection(rows, {
+            date: colAt,
+            amount: p.amount,
+            desc: descCol,
+            group: `${g}-col${p.suffix}`,
+            outletId: t.outlet_id,
+            assetBucket: dest,
+            ref: refId
+          });
         });
-      }
-      if (fee > 0) {
-        pushSalePair(rows, {
-          date: t.created_at,
-          amount: fee,
-          revCode: PNL_REVENUE[2].code,
-          revLabel: PNL_REVENUE[2].label,
-          desc: descSale,
-          group: `${g}-f`,
-          outletId: t.outlet_id,
-          assetBucket: saleBucket,
-          ref: refId,
-          source: 'transaction'
-        });
-      }
-      if (!laundry && !fee && amt > 0) {
-        pushSalePair(rows, {
-          date: t.created_at,
-          amount: amt,
-          revCode: rev.code,
-          revLabel: rev.label,
-          desc: descSale,
-          group: g,
-          outletId: t.outlet_id,
-          assetBucket: saleBucket,
-          ref: refId,
-          source: 'transaction'
-        });
+        postedCol.push(...rows.slice(before));
       }
     }
 
-    const colAt = collectionDateIso(t);
-    if (colAt && keep(colAt) && saleBucket === 'receivable') {
-      const dest = collectionAssetBucket(t);
-      if (dest === 'receivable') return;
-      const colTag = dest === 'clearing' ? 'koleksi→clearing' : 'koleksi→bank';
-      const descCol = `${t.receipt_number || 'TRX'} · ${t.customer_name || '-'} · ${colTag}`;
+    const postedDep: JournalLine[] = [];
+    if (depAt && keep(depAt) && saleBucket === 'undeposited') {
+      const descDep = `${t.receipt_number || 'TRX'} · setor kas → bank`;
+      const before = rows.length;
       const pieces: { amount: number; suffix: string }[] = [];
       if (laundry > 0) pieces.push({ amount: laundry, suffix: '-l' });
       if (fee > 0) pieces.push({ amount: fee, suffix: '-f' });
       if (!laundry && !fee && amt > 0) pieces.push({ amount: amt, suffix: '' });
       pieces.forEach((p) => {
-        pushCollection(rows, {
-          date: colAt,
+        pushCashDeposit(rows, {
+          date: depAt,
           amount: p.amount,
-          desc: descCol,
-          group: `${g}-col${p.suffix}`,
+          desc: descDep,
+          group: `${g}-dep${p.suffix}`,
           outletId: t.outlet_id,
-          assetBucket: dest,
           ref: refId
         });
       });
+      postedDep.push(...rows.slice(before));
+    }
+
+    if (voidAt && keep(voidAt)) {
+      // Bangun ulang jejak sumber bila bulan void ≠ bulan jual (mode month).
+      const src = [...postedSale, ...postedCol, ...postedDep];
+      if (src.length) {
+        pushReversal(rows, src, voidAt, '-void');
+      } else {
+        // Void di bulan ini tetapi jual di bulan lain: posting jual+koleksi+deposit through void lalu reverse
+        // hanya komponen yang tanggalnya <= voidAt (sudah di through). Untuk mode month: buat mini through.
+        const ghost: JournalLine[] = [];
+        const pushGhostSale = () => {
+          const bucket = saleAssetBucket(t);
+          const parts: { amount: number; code: string; label: string; suffix: string }[] = [];
+          if (laundry > 0) parts.push({ amount: laundry, code: rev.code, label: rev.label, suffix: '-l' });
+          if (fee > 0) {
+            parts.push({
+              amount: fee,
+              code: PNL_REVENUE[2].code,
+              label: PNL_REVENUE[2].label,
+              suffix: '-f'
+            });
+          }
+          if (!laundry && !fee && amt > 0) parts.push({ amount: amt, code: rev.code, label: rev.label, suffix: '' });
+          parts.forEach((p) => {
+            const a = assetAcc(bucket);
+            ghost.push(
+              {
+                date: t.created_at,
+                akun: acc(a.code, a.label),
+                desc: descSale,
+                debit: p.amount,
+                kredit: 0,
+                group: `${g}${p.suffix}`,
+                ref: refId,
+                source: 'transaction',
+                outletId: t.outlet_id
+              },
+              {
+                date: t.created_at,
+                akun: acc(p.code, p.label),
+                desc: descSale,
+                debit: 0,
+                kredit: p.amount,
+                group: `${g}${p.suffix}`,
+                ref: refId,
+                source: 'transaction',
+                outletId: t.outlet_id
+              }
+            );
+          });
+        };
+        pushGhostSale();
+        if (colAt) {
+          const dest = collectionAssetBucket(t);
+          if (dest === 'bank' || dest === 'clearing') {
+            const a = assetAcc(dest);
+            ghost.push(
+              {
+                date: colAt,
+                akun: acc(a.code, a.label),
+                desc: 'koleksi',
+                debit: amt,
+                kredit: 0,
+                group: `${g}-col`,
+                ref: refId,
+                source: 'collection',
+                outletId: t.outlet_id
+              },
+              {
+                date: colAt,
+                akun: acc(BS.AR.code, BS.AR.label),
+                desc: 'koleksi',
+                debit: 0,
+                kredit: amt,
+                group: `${g}-col`,
+                ref: refId,
+                source: 'collection',
+                outletId: t.outlet_id
+              }
+            );
+          }
+        }
+        if (depAt) {
+          ghost.push(
+            {
+              date: depAt,
+              akun: acc(BS.CASH.code, BS.CASH.label),
+              desc: 'setor',
+              debit: amt,
+              kredit: 0,
+              group: `${g}-dep`,
+              ref: refId,
+              source: 'deposit',
+              outletId: t.outlet_id
+            },
+            {
+              date: depAt,
+              akun: acc(BS.UNDEPOSITED.code, BS.UNDEPOSITED.label),
+              desc: 'setor',
+              debit: 0,
+              kredit: amt,
+              group: `${g}-dep`,
+              ref: refId,
+              source: 'deposit',
+              outletId: t.outlet_id
+            }
+          );
+        }
+        pushReversal(rows, ghost, voidAt, '-void');
+      }
     }
   });
 
@@ -570,7 +784,7 @@ export function buildJournal(opts: {
     };
     rows.push(
       line(e.created_at, akun, desc, amt, 0, g, meta)!,
-      line(e.created_at, acc(BS.CASH.code, BS.CASH.label), desc, 0, amt, g, meta)!
+      line(e.created_at, acc(BS.UNDEPOSITED.code, BS.UNDEPOSITED.label), desc, 0, amt, g, meta)!
     );
   });
 
@@ -606,7 +820,7 @@ export function buildLedger(opts: {
     map[name].debit += debit;
     map[name].kredit += kredit;
   };
-  [BS.CASH, BS.AR, BS.CLEARING, BS.OCA, BS.FA, BS.ACCUM, BS.AP, BS.BH, BS.LT, BS.LEASE, BS.CAPITAL, BS.DRAWING, BS.DEP].forEach((a) =>
+  [BS.CASH, BS.AR, BS.CLEARING, BS.UNDEPOSITED, BS.OCA, BS.FA, BS.ACCUM, BS.AP, BS.BH, BS.LT, BS.LEASE, BS.CAPITAL, BS.DRAWING, BS.DEP].forEach((a) =>
     add(acc(a.code, a.label), 0, 0)
   );
   PNL_REVENUE.forEach((a) => add(acc(a.code, a.label), 0, 0));
@@ -768,6 +982,7 @@ export type FaGroupRow = { key: string; label: string; short: string; cost: numb
 
 export type BalanceSheet = {
   cash: number;
+  undepositedCash: number;
   receivables: number;
   tradeReceivablesFromSales: number;
   gatewayClearing: number;
@@ -880,16 +1095,18 @@ export function buildBalanceSheet(opts: {
   const salesAR = receivableRevenueOf(txs, asOf);
   const gatewayClearing = clearingRevenueOf(txs, asOf);
   const expense = cashExpenseOf(exps, asOf);
+  const undepositedCash = Math.max(0, undepositedCashRevenueOf(txs, asOf) - expense);
   const revPrior = cashRevenueOf(txs, mems, prior);
   const expPrior = cashExpenseOf(exps, prior);
   const depAll = books.reduce((s, b) => s + accumDepreciation(b, asOf), 0);
   const depPrior = depThrough(books, prior);
-  const cash = cashOpen + extraAll + settledRevenue - expense - drawAll;
+  // Bank = pembukaan rekening + setoran modal − prive + omset yang sudah di rekening (bukan laci)
+  const cash = cashOpen + extraAll + settledRevenue - drawAll;
   const openingAR = books.reduce((s, b) => s + (Number(b.receivables) || 0), 0);
   const tradeReceivablesFromSales = salesAR;
   const receivables = openingAR + tradeReceivablesFromSales;
   const otherCurrent = books.reduce((s, b) => s + (Number(b.otherCurrentAssets) || 0), 0);
-  const currentAssets = cash + receivables + gatewayClearing + otherCurrent;
+  const currentAssets = cash + undepositedCash + receivables + gatewayClearing + otherCurrent;
 
   const assets = books.flatMap((b) =>
     (b.assets || [])
@@ -947,6 +1164,7 @@ export function buildBalanceSheet(opts: {
 
   return {
     cash,
+    undepositedCash,
     receivables,
     tradeReceivablesFromSales,
     gatewayClearing,
