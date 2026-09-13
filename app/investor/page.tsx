@@ -245,7 +245,8 @@ export default function InvestorDashboard() {
 
   const handleLogout = () => {
     localStorage.removeItem('laundry_user');
-    window.location.href = '/login';
+    localStorage.removeItem('laundry_investor_user');
+    window.location.replace('/login');
   };
 
   return (
