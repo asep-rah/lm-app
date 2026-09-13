@@ -36,7 +36,11 @@ export async function insertPickupOrder(
     });
     return next;
   };
+  const generatedOrderNum =
+    (payload.order_number as string) ||
+    `ORD-${Date.now().toString().slice(-8)}-${Math.floor(1000 + Math.random() * 9000)}`;
   const core = {
+    order_number: generatedOrderNum,
     outlet_id: payload.outlet_id || null,
     customer_name: payload.customer_name || 'Pelanggan',
     customer_phone: payload.customer_phone || payload.phone_number || null,
@@ -47,6 +51,7 @@ export async function insertPickupOrder(
     transaction_id: payload.transaction_id || null
   };
   const coreNoTx = {
+    order_number: generatedOrderNum,
     outlet_id: core.outlet_id,
     customer_name: core.customer_name,
     customer_phone: core.customer_phone,

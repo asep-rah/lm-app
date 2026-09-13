@@ -1333,13 +1333,13 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       );
       memHist?.forEach((m: any) =>
         combinedHistory.push({
-          type: String(m.package_name || '').toLowerCase().includes('top up') ? 'Top Up Deposit' : 'Top-Up Member',
-          title: String(m.package_name || '').toLowerCase().includes('top up')
-            ? `${m.package_name} · QRIS Mayar (+Rp ${Number(m.balance_added).toLocaleString('id-ID')})`
-            : `Paket ${m.package_name} (+Rp ${Number(m.balance_added).toLocaleString('id-ID')})`,
-          amount: m.price,
-          date: m.created_at,
-          status: 'LUNAS'
+        type: String(m.package_name || '').toLowerCase().includes('top up') ? 'Top Up Deposit' : 'Top-Up Member',
+        title: String(m.package_name || '').toLowerCase().includes('top up')
+          ? `${m.package_name} · QRIS Mayar (+Rp ${Number(m.balance_added).toLocaleString('id-ID')})`
+          : `Paket ${m.package_name} (+Rp ${Number(m.balance_added).toLocaleString('id-ID')})`,
+        amount: m.price,
+        date: m.created_at,
+        status: 'LUNAS'
         })
       );
       combinedHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
@@ -2104,12 +2104,12 @@ const handleApplyLoan = async (e: React.FormEvent) => {
           }
 
           void createPaymentVerifyTask({
-            id: newTx.id,
-            receipt_number: generatedResi,
+          id: newTx.id,
+          receipt_number: generatedResi,
             customer_name: String(orderData.customer_name || 'Pelanggan'),
-            customer_phone: normalizedPhone || customerPhone || undefined,
-            amount: totalPay,
-            payment_method: finalPaymentMethodLabel,
+          customer_phone: normalizedPhone || customerPhone || undefined,
+          amount: totalPay,
+          payment_method: finalPaymentMethodLabel,
             outlet_id: selectedOutlet,
             notifyCustomer: false
           });
@@ -2118,7 +2118,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
               {
                 ...newTx,
                 customer_phone: normalizedPhone || customerPhone,
-                outlet_id: selectedOutlet
+          outlet_id: selectedOutlet
               },
               employeeName || 'Kasir',
               mayarCharge || undefined
@@ -2171,29 +2171,29 @@ const handleApplyLoan = async (e: React.FormEvent) => {
 
       // Produksi / siklus mesin hanya setelah lunas (Cash/Deposit di kasir, atau QRIS setelah Mayar).
       if (!needsPayVerify) {
-        const createdCycles = await createWasherCycles({
-          db: supabase as any,
+      const createdCycles = await createWasherCycles({
+        db: supabase as any,
+        orderId: newTx.id,
+        outletId: selectedOutlet,
+        items: cycleItems,
+        splitPerBag,
+        bagCount: Number(bagCount) || cycleItems.length || 1,
+        startedBy: employeeId
+      });
+      const stickers = buildBagStickers(
+        newTx.id,
+        Number(bagCount) || cycleItems.length || 1,
+        cycleItems,
+        {
+          receipt: newTx.receipt_number || generatedResi,
+          customerName: customerName || 'Pelanggan',
           orderId: newTx.id,
-          outletId: selectedOutlet,
-          items: cycleItems,
-          splitPerBag,
-          bagCount: Number(bagCount) || cycleItems.length || 1,
-          startedBy: employeeId
-        });
-        const stickers = buildBagStickers(
-          newTx.id,
-          Number(bagCount) || cycleItems.length || 1,
-          cycleItems,
-          {
-            receipt: newTx.receipt_number || generatedResi,
-            customerName: customerName || 'Pelanggan',
-            orderId: newTx.id,
-            cycles: createdCycles.cycles
-          }
-        );
-        setBagStickers(stickers);
+          cycles: createdCycles.cycles
+        }
+      );
+      setBagStickers(stickers);
       }
-
+      
       qrisPaidHandledRef.current = null;
       setCashReceivedOk(false);
       setCreatedTxSuccess({
@@ -2228,26 +2228,26 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       };
       // Jangan catat omset untuk QRIS pending — baru setelah lunas.
       if (!needsPayVerify) {
-        if (paymentMethod === 'Split Payment') {
-          const amt1 = Number(splitAmount1) || 0;
-          const amt2 = Math.max(0, totalPay - amt1);
-          await logPay(amt1, splitMethod1, `POS ${generatedResi} · ${splitMethod1}`);
-          if (amt2 > 0) await logPay(amt2, splitMethod2, `POS ${generatedResi} · ${splitMethod2}`);
-        } else {
-          await logPay(totalPay, finalPaymentMethodLabel, `POS ${generatedResi}`);
+      if (paymentMethod === 'Split Payment') {
+        const amt1 = Number(splitAmount1) || 0;
+        const amt2 = Math.max(0, totalPay - amt1);
+        await logPay(amt1, splitMethod1, `POS ${generatedResi} · ${splitMethod1}`);
+        if (amt2 > 0) await logPay(amt2, splitMethod2, `POS ${generatedResi} · ${splitMethod2}`);
+      } else {
+        await logPay(totalPay, finalPaymentMethodLabel, `POS ${generatedResi}`);
         }
       }
 
       // Nota POS = cucian diterima kasir. Pickup tetap aktif di Beranda pelanggan
       // (bukan Selesai) sampai diserahkan / diantar.
-      const params = new URLSearchParams(window.location.search);
-      const pickupId = params.get('pickup_id') || customerOrder?.id || '';
+    const params = new URLSearchParams(window.location.search);
+    const pickupId = params.get('pickup_id') || customerOrder?.id || '';
 
-      if (pickupId) {
-        await markPickupConvertedToPos(pickupId, newTx.id);
-        const linked = await supabase.from('transactions').update({ pickup_id: pickupId }).eq('id', newTx.id);
-        if (linked.error) console.warn('pickup_id pada transactions dilewati:', linked.error.message);
-      }
+    if (pickupId) {
+      await markPickupConvertedToPos(pickupId, newTx.id);
+      const linked = await supabase.from('transactions').update({ pickup_id: pickupId }).eq('id', newTx.id);
+      if (linked.error) console.warn('pickup_id pada transactions dilewati:', linked.error.message);
+    }
       setCustomerOrder(null);
       clearPickupPrefill();
       if (normalizedPhone && (customerName || '').trim()) {
@@ -4136,9 +4136,9 @@ const handleStatusChange = async (
                     <p className="text-[9px] font-bold uppercase text-slate-400">Deposit</p>
                     <p className="text-[11px] font-black text-slate-800">Rp {dailyMetrics.deposit.toLocaleString('id-ID')}</p>
                   </button>
+                  </div>
                 </div>
               </div>
-            </div>
           )}
 
           {dayDrillFilter && (() => {
@@ -4195,8 +4195,8 @@ const handleStatusChange = async (
                           </div>
                         </div>
                       ))}
-                    </div>
-                  )}
+            </div>
+          )}
                 </div>
               </div>
             );
@@ -4289,7 +4289,7 @@ const handleStatusChange = async (
               </div>
 
               <div className="space-y-2">
-                <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="block text-[10px] font-bold text-slate-500 mb-1">Nomor WhatsApp Pelanggan</label>
                     <input

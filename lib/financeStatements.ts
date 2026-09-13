@@ -375,7 +375,7 @@ function pushSalePair(
     desc: string;
     group: string;
     outletId?: string | null;
-    assetBucket: 'bank' | 'clearing' | 'receivable';
+    assetBucket: 'bank' | 'clearing' | 'receivable' | 'undeposited';
     ref: string;
     source: string;
   }
