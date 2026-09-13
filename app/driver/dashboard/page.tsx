@@ -142,7 +142,11 @@ export default function DriverDashboard() {
   const handleLogout = () => {
     if (confirm('Apakah Anda yakin ingin keluar dari Portal Driver?')) {
       localStorage.removeItem('laundry_user');
-      window.location.href = '/login';
+      localStorage.removeItem('laundry_owner_user');
+      localStorage.removeItem('laundry_driver_user');
+      localStorage.removeItem('laundry_investor_user');
+      localStorage.removeItem('staff_role');
+      window.location.replace('/login');
     }
   };
 
