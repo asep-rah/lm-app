@@ -23,15 +23,56 @@
 # misc
 .DS_Store
 *.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
 
 # debug
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+*.log
 
-# env files (can opt-in for committing if needed)
-.env*
+# Environment/secrets: never commit real credentials.
+.env
+.env.*
+!.env.example
+!.env.sample
+*.env
+*.secret
+*.secrets
+secrets/
+.private/
+private/
+
+# Common credential/config exports
+service-account*.json
+*service_account*.json
+credentials*.json
+firebase-adminsdk*.json
+supabase-service-role*.json
+
+# Private operational exports / backups / customer data
+backups/
+backup/
+exports/
+export/
+dumps/
+dump/
+*.sql.gz
+*.dump
+*.backup
+*.bak
+*.sqlite
+*.sqlite3
+*.db
+customer-data/
+customer_data/
+production-data/
+production_data/
 
 # vercel
 .vercel
