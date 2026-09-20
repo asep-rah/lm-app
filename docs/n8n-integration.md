@@ -184,6 +184,19 @@ bisnis yang sudah berhasil. Batas waktu 5 detik.
 
 **Hanya dipanggil dari server** (route handler / cron).
 
+## Workflow n8n siap pakai
+
+Dua workflow yang memakai endpoint di atas ada di [`n8n/`](./n8n/) beserta
+langkah pemasangannya:
+
+- `04-lm-app-digest-approval.json` — berjadwal: tarik digest, terbitkan token,
+  kirim permintaan approval lewat WhatsApp.
+- `05-lm-app-terima-balasan-approval.json` — webhook: baca balasan, teruskan
+  keputusan, kabari hasilnya.
+
+Berkas impor sengaja tidak memuat credential; pilih sendiri di n8n setelah
+impor.
+
 ## Uji terima
 
 ```bash

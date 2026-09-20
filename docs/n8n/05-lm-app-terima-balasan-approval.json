@@ -1,0 +1,174 @@
+{
+  "name": "05 - LM App - Terima Balasan Approval WhatsApp",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lm-approval-wa",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -380,
+        0
+      ],
+      "id": "Balasan WhatsApp Masuk",
+      "name": "Balasan WhatsApp Masuk",
+      "webhookId": "lm-approval-wa",
+      "notes": "Arahkan webhook Evolution API instance approver ke URL node ini.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// =====================================================================\n// UBAH KONFIGURASI DI BLOK INI.\n// =====================================================================\nconst cfg = {\n  baseUrl: 'https://GANTI-DENGAN-DOMAIN-LM-APP',\n  evoInstance: 'notif-outlet',\n};\nif (cfg.baseUrl.includes('GANTI')) {\n  throw new Error('Isi baseUrl di node \"1. Baca Balasan\" dengan domain LM App Anda.');\n}\ncfg.baseUrl = cfg.baseUrl.replace(/\\/+$/, '');\n\n// ---------------------------------------------------------------------\n// Baca balasan WhatsApp dari Evolution API.\n//\n// Formatnya HARUS persis \"SETUJU <kode>\" atau \"TOLAK <kode>\". Kalimat bebas\n// sengaja tidak ditebak-tebak: \"jangan disetujui dulu\" mengandung kata\n// \"setuju\", dan membacanya sebagai persetujuan berarti uang keluar atas\n// kalimat yang artinya justru sebaliknya. Yang tidak cocok diabaikan diam-diam\n// supaya percakapan biasa di nomor yang sama tidak ikut terproses.\n// ---------------------------------------------------------------------\nconst out = [];\n\nfor (const item of $input.all()) {\n  const root = item.json || {};\n  const body = root.body || root;\n  const data = body.data || {};\n  const key = data.key || {};\n\n  if (key.fromMe) continue;                                   // pesan kita sendiri\n\n  const jid = String(key.remoteJid || '');\n  if (!jid || jid.endsWith('@g.us')) continue;                // grup, bukan japri\n\n  const msg = data.message || {};\n  const text = String(\n    msg.conversation || (msg.extendedTextMessage && msg.extendedTextMessage.text) || ''\n  ).trim();\n\n  const m = text.match(/^(setuju|approve|tolak|reject)\\s+([A-Za-z0-9_-]{16,})$/i);\n  if (!m) continue;\n\n  out.push({\n    json: {\n      ...cfg,\n      phone: jid.split('@')[0],\n      token: m[2],\n      decision: /^(setuju|approve)$/i.test(m[1]) ? 'approve' : 'reject',\n    },\n  });\n}\n\nconsole.log(`[LM] balasan approval terbaca: ${out.length}`);\nreturn out;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -140,
+        0
+      ],
+      "id": "1. Baca Balasan",
+      "name": "1. Baca Balasan"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.baseUrl }}/api/integrations/n8n/approval-callback",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "token",
+              "value": "={{ $json.token }}"
+            },
+            {
+              "name": "phone",
+              "value": "={{ $json.phone }}"
+            },
+            {
+              "name": "decision",
+              "value": "={{ $json.decision }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        120,
+        0
+      ],
+      "id": "2. Kirim Keputusan ke LM App",
+      "name": "2. Kirim Keputusan ke LM App",
+      "notes": "Credential Header Auth: authorization = Bearer <N8N_SHARED_SECRET>",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Kabari approver hasilnya. Diam setelah dia membalas adalah cara tercepat\n// membuat orang mengira approval-nya gagal lalu mengulanginya.\nconst sumber = $('1. Baca Balasan').all();\nconst masuk = $input.all();\nconst out = [];\n\nfor (let i = 0; i < masuk.length; i++) {\n  const res = masuk[i].json || {};\n  const src = (sumber[i] || sumber[0]).json;\n  const status = res.statusCode;\n  const body = res.body || {};\n\n  let text;\n  if (status === 200 && body.ok) {\n    text = body.decision === 'approve'\n      ? [\n          '✅ Pengajuan *DISETUJUI*.',\n          '',\n          'Diteruskan ke Admin Operasional untuk verifikasi.',\n          'Pembayaran tetap dilakukan Owner di dalam aplikasi.',\n        ].join('\\n')\n      : '🚫 Pengajuan *DITOLAK*.';\n  } else {\n    // Sebutkan alasan apa adanya: \"kode kedaluwarsa\" dan \"sudah dipakai\"\n    // menuntut tindakan yang berbeda dari si approver.\n    text = [\n      `⚠️ Tidak bisa diproses: ${body.error || 'HTTP ' + status}`,\n      '',\n      'Kode hanya berlaku 60 menit dan sekali pakai.',\n      'Selesaikan lewat aplikasi bila perlu.',\n    ].join('\\n');\n  }\n\n  out.push({ json: { number: src.phone, text } });\n}\n\nreturn out;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        380,
+        0
+      ],
+      "id": "3. Susun Balasan",
+      "name": "3. Susun Balasan"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://evolution_api:8080/message/sendText/{{ $('1. Baca Balasan').first().json.evoInstance }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "number",
+              "value": "={{ $json.number }}"
+            },
+            {
+              "name": "text",
+              "value": "={{ $json.text }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        620,
+        0
+      ],
+      "id": "4. Balas ke WhatsApp",
+      "name": "4. Balas ke WhatsApp",
+      "notes": "Credential Header Auth Evolution API.",
+      "notesInFlow": true
+    }
+  ],
+  "connections": {
+    "Balasan WhatsApp Masuk": {
+      "main": [
+        [
+          {
+            "node": "1. Baca Balasan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "1. Baca Balasan": {
+      "main": [
+        [
+          {
+            "node": "2. Kirim Keputusan ke LM App",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Kirim Keputusan ke LM App": {
+      "main": [
+        [
+          {
+            "node": "3. Susun Balasan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3. Susun Balasan": {
+      "main": [
+        [
+          {
+            "node": "4. Balas ke WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

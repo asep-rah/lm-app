@@ -1,0 +1,255 @@
+{
+  "name": "04 - LM App - Digest & Minta Approval WhatsApp",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -380,
+        0
+      ],
+      "id": "Tiap Jam",
+      "name": "Tiap Jam"
+    },
+    {
+      "parameters": {
+        "jsCode": "// =====================================================================\n// SATU-SATUNYA NODE YANG PERLU ANDA UBAH.\n// =====================================================================\nconst cfg = {\n  // Domain LM App di production, TANPA garis miring di akhir.\n  baseUrl: 'https://GANTI-DENGAN-DOMAIN-LM-APP',\n\n  // Nomor yang menerima permintaan approval. WAJIB nomor supervisor/owner\n  // yang sudah diisi di Owner > Karyawan > Edit > No. WhatsApp. Kalau belum\n  // terdaftar di sana, aplikasi menolak dengan 403 dan itu memang benar.\n  approverPhone: '628XXXXXXXXXX',\n\n  // Instance Evolution API untuk MENGIRIM. Yang ada di VPS: notif-outlet, laundry-ai.\n  evoInstance: 'notif-outlet',\n\n  // Jangan ganggu approver untuk pengajuan yang baru saja masuk.\n  minAgeHours: 2,\n\n  // Ambang \"segera jatuh tempo\" untuk ringkasan tugas (1-72).\n  dueSoonHours: 12,\n};\n\n// Gagal keras kalau belum diisi. Lebih baik berhenti di sini daripada\n// menembak domain yang tidak ada lalu diam-diam tidak mengirim apa pun.\nif (cfg.baseUrl.includes('GANTI')) {\n  throw new Error('Isi baseUrl di node Konfigurasi dengan domain LM App Anda.');\n}\nif (!/^62\\d{8,13}$/.test(cfg.approverPhone)) {\n  throw new Error('Isi approverPhone dengan format 62..., bukan 08... atau +62...');\n}\ncfg.baseUrl = cfg.baseUrl.replace(/\\/+$/, '');\n\nreturn [{ json: cfg }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -160,
+        0
+      ],
+      "id": "1. Konfigurasi",
+      "name": "1. Konfigurasi"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.baseUrl }}/api/integrations/n8n/task-digest?hours={{ $json.dueSoonHours }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        60,
+        0
+      ],
+      "id": "2. Ambil Digest",
+      "name": "2. Ambil Digest",
+      "notes": "Butuh credential Header Auth: authorization = Bearer <N8N_SHARED_SECRET>",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Ambil hanya antrean yang menunggu persetujuan supervisor.\n// Tahap lain (verifikasi Admin Ops, pembayaran owner) sengaja tidak disentuh:\n// tidak ada aksi WhatsApp untuk keduanya.\nconst cfg = $('1. Konfigurasi').first().json;\nconst digest = $input.first().json;\n\nconst pending = (digest.requisitions && digest.requisitions.pendingApproval) || [];\nconst layak = pending.filter((r) => (r.ageHours ?? 0) >= cfg.minAgeHours);\n\nconsole.log(`[LM] pending=${pending.length} layak=${layak.length} (minAgeHours=${cfg.minAgeHours})`);\n\n// Array kosong = cabang berhenti di sini. Tidak ada pengajuan, tidak ada pesan.\nreturn layak.map((r) => ({ json: r }));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        280,
+        0
+      ],
+      "id": "3. Pilih Yang Menunggu",
+      "name": "3. Pilih Yang Menunggu"
+    },
+    {
+      "parameters": {
+        "operation": "removeItemsSeenInPreviousExecutions",
+        "dedupeValue": "={{ 'lm-approval:' + $json.id }}",
+        "options": {
+          "scope": "node",
+          "historySize": 10000
+        }
+      },
+      "type": "n8n-nodes-base.removeDuplicates",
+      "typeVersion": 2,
+      "position": [
+        500,
+        0
+      ],
+      "id": "4. Buang Yang Sudah Dikirim",
+      "name": "4. Buang Yang Sudah Dikirim",
+      "notes": "Sebelum penerbitan token, supaya satu pengajuan tidak melahirkan token hidup berulang kali.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('1. Konfigurasi').first().json.baseUrl }}/api/integrations/n8n/request-approval-token",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "requisition_id",
+              "value": "={{ $json.id }}"
+            },
+            {
+              "name": "phone",
+              "value": "={{ $('1. Konfigurasi').first().json.approverPhone }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        720,
+        0
+      ],
+      "id": "5. Minta Token",
+      "name": "5. Minta Token"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Ubah hasil penerbitan token jadi teks WhatsApp.\n//\n// Token dikirim apa adanya dan harus disalin kembali oleh approver. Itu memang\n// lebih repot daripada balas \"YA\", dan itulah maksudnya: \"YA\" bisa datang dari\n// siapa pun yang tahu formatnya, sedangkan kode ini sekali pakai, 60 menit,\n// dan hanya sah dari nomor yang menerimanya.\nconst cfg = $('1. Konfigurasi').first().json;\nconst out = [];\n\nfor (const item of $input.all()) {\n  const res = item.json || {};\n  const status = res.statusCode;\n  const body = res.body || {};\n\n  if (status !== 200 || !body.ok || !body.token) {\n    // Dilewati, bukan dihentikan: satu pengajuan yang gagal tidak boleh\n    // menahan sisanya. Pengajuan ini tetap bisa disetujui di dalam aplikasi.\n    console.log(`[LM] gagal minta token (HTTP ${status}): ${JSON.stringify(body).slice(0, 200)}`);\n    continue;\n  }\n\n  const r = body.requisition || {};\n  const rupiah = new Intl.NumberFormat('id-ID').format(Number(r.amount) || 0);\n\n  const text = [\n    '🧾 *Persetujuan Pengajuan*',\n    '',\n    `${r.title || 'Pengajuan Pembelian'}`,\n    `Rp ${rupiah}`,\n    '',\n    'Balas dengan MENYALIN salah satu baris di bawah ini persis seperti adanya:',\n    '',\n    `SETUJU ${body.token}`,\n    '',\n    `TOLAK ${body.token}`,\n    '',\n    '⏳ Berlaku 60 menit, sekali pakai, dan hanya sah dari nomor ini.',\n    'Pembayaran tetap dilakukan Owner di dalam aplikasi.',\n  ].join('\\n');\n\n  out.push({ json: { number: cfg.approverPhone, text, requisitionId: r.id } });\n}\n\nreturn out;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        940,
+        0
+      ],
+      "id": "6. Susun Pesan",
+      "name": "6. Susun Pesan"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://evolution_api:8080/message/sendText/{{ $('1. Konfigurasi').first().json.evoInstance }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {},
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "number",
+              "value": "={{ $json.number }}"
+            },
+            {
+              "name": "text",
+              "value": "={{ $json.text }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1160,
+        0
+      ],
+      "id": "7. Kirim WhatsApp",
+      "name": "7. Kirim WhatsApp",
+      "notes": "Credential Header Auth Evolution API yang sudah Anda pakai di workflow lain.",
+      "notesInFlow": true
+    }
+  ],
+  "connections": {
+    "Tiap Jam": {
+      "main": [
+        [
+          {
+            "node": "1. Konfigurasi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "1. Konfigurasi": {
+      "main": [
+        [
+          {
+            "node": "2. Ambil Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Ambil Digest": {
+      "main": [
+        [
+          {
+            "node": "3. Pilih Yang Menunggu",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3. Pilih Yang Menunggu": {
+      "main": [
+        [
+          {
+            "node": "4. Buang Yang Sudah Dikirim",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. Buang Yang Sudah Dikirim": {
+      "main": [
+        [
+          {
+            "node": "5. Minta Token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "5. Minta Token": {
+      "main": [
+        [
+          {
+            "node": "6. Susun Pesan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6. Susun Pesan": {
+      "main": [
+        [
+          {
+            "node": "7. Kirim WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
