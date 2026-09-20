@@ -2,10 +2,16 @@ import { NextResponse } from 'next/server';
 import { hashStaffPassword } from '@/lib/staffPassword';
 import { insertAuditLog, paymentServiceDb } from '@/lib/paymentSecurity';
 import { requirePaymentOpsAuth } from '@/lib/requirePaymentOpsAuth';
+import { normalizePhone } from '@/lib/approvalTokens';
 import { sanitizePublicError } from '@/lib/supabaseEnv';
 
 export const dynamic = 'force-dynamic';
 
+// Tangga kolom: yang terkaya dulu, mundur satu tingkat tiap kolom belum ada di
+// DB. `whatsapp` dipisah ke tingkat sendiri supaya DB yang belum menjalankan
+// migrasi 20260920_n8n_integration tidak ikut kehilangan join outlets.
+const EMP_SAFE_WA =
+  'id, name, role, outlet_id, username, basic_salary, access_outlets, assigned_outlet_ids, whatsapp, created_at, outlets(id, name)';
 const EMP_SAFE =
   'id, name, role, outlet_id, username, basic_salary, access_outlets, assigned_outlet_ids, created_at, outlets(id, name)';
 const EMP_SAFE_MIN =
@@ -45,7 +51,7 @@ export async function GET(req: Request) {
     const db = paymentServiceDb();
     let data: any[] | null = null;
     let error: { message?: string } | null = null;
-    for (const cols of [EMP_SAFE, EMP_SAFE_MIN, EMP_SAFE_BARE]) {
+    for (const cols of [EMP_SAFE_WA, EMP_SAFE, EMP_SAFE_MIN, EMP_SAFE_BARE]) {
       const res = await db.from('employees').select(cols).order('created_at', { ascending: false });
       if (!res.error) {
         data = res.data;
@@ -111,8 +117,37 @@ export async function POST(req: Request) {
       const plainPw = String(body.password || '').trim();
       if (plainPw) patch.password = hashStaffPassword(plainPw);
 
+      // Nomor WhatsApp approver (migrasi 20260920_n8n_integration).
+      //
+      // Disimpan sudah dinormalkan ke 62xxx: approval-callback membandingkan
+      // nomor pengirim dengan kolom ini, dan satu nomor yang sama ditulis
+      // sebagai 08xx di satu baris dan 628xx di baris lain akan membuat
+      // pencocokan bergantung pada cara owner mengetik.
+      const wantsWhatsapp = body.whatsapp !== undefined;
+      if (wantsWhatsapp) {
+        const wa = normalizePhone(String(body.whatsapp || ''));
+        if (String(body.whatsapp || '').trim() && !wa) {
+          return NextResponse.json({ error: 'Nomor WhatsApp tidak valid' }, { status: 400 });
+        }
+        patch.whatsapp = wa || null;
+      }
+
       const { error } = await db.from('employees').update(patch).eq('id', id);
-      if (error) return fail(error.message, 400);
+      if (error) {
+        // Gagal keras, bukan diam-diam menyimpan tanpa nomor: owner yang mengira
+        // approver-nya terdaftar padahal tidak akan menunggu balasan WhatsApp
+        // yang tidak akan pernah diterima endpoint approval.
+        if (wantsWhatsapp && /whatsapp/i.test(error.message) && /does not exist/i.test(error.message)) {
+          return NextResponse.json(
+            {
+              error:
+                'Kolom employees.whatsapp belum ada. Jalankan migrasi supabase/migrations/20260920_n8n_integration.sql lebih dulu.'
+            },
+            { status: 409 }
+          );
+        }
+        return fail(error.message, 400);
+      }
       await insertAuditLog({
         action: 'EMPLOYEE_UPDATE',
         user_id: auth.staffId,
@@ -147,7 +182,9 @@ export async function POST(req: Request) {
     };
     if (body.access_outlets !== undefined) row.access_outlets = body.access_outlets;
     if (body.assigned_outlet_ids !== undefined) row.assigned_outlet_ids = body.assigned_outlet_ids;
-    // phone/whatsapp opsional — banyak DB production belum punya kolom ini
+    // Nomor WhatsApp sengaja tidak diterima di jalur create. Jalur ini punya
+    // tangga percobaan yang membuang kolom yang belum ada, jadi nomor bisa
+    // hilang tanpa pemberitahuan. Set lewat op 'update' yang gagal keras.
 
     const attempts = [
       row,

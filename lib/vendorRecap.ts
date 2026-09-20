@@ -270,8 +270,13 @@ export const dedupeByExternalId = (rows: Record<string, unknown>[]) => {
   return out;
 };
 
-/** Klien Supabase minimal yang dibutuhkan importUsageEntries. */
-type UpsertClient = {
+/**
+ * Klien Supabase minimal yang dibutuhkan importUsageEntries.
+ *
+ * Di-inject supaya endpoint n8n bisa memakai service role sementara pengujian
+ * memakai klien tiruan; diekspor agar pemanggil tidak perlu cast ke `never`.
+ */
+export type UpsertClient = {
   from: (table: string) => {
     upsert: (
       rows: Record<string, unknown>[],

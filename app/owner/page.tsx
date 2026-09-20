@@ -104,6 +104,7 @@ export default function Dashboard() {
   const [editingEmp, setEditingEmp] = useState<any>(null);
   const [editEmpRole, setEditEmpRole] = useState('');
   const [editEmpPassword, setEditEmpPassword] = useState('');
+  const [editEmpWhatsapp, setEditEmpWhatsapp] = useState('');
   const [editEmpOutlet, setEditEmpOutlet] = useState('ALL');
   const [editEmpOutlets, setEditEmpOutlets] = useState<string[]>([]);
   const [employees, setEmployees] = useState<any[]>([]);
@@ -721,6 +722,14 @@ export default function Dashboard() {
       assigned_outlet_ids: editEmpRole === 'driver' ? editEmpOutlets : undefined
     };
     if (editEmpPassword.trim()) payload.password = editEmpPassword.trim();
+    // Hanya dikirim bila BERUBAH. Mengirimnya di setiap penyimpanan akan
+    // membuat semua edit karyawan gagal di database yang belum menjalankan
+    // migrasi 20260920_n8n_integration -- ganti role pun ikut tertahan.
+    // Nilai kosong tetap dikirim bila sebelumnya terisi, supaya nomor approver
+    // bisa DICABUT, bukan hanya ditambah.
+    if (editEmpWhatsapp.trim() !== String(editingEmp.whatsapp || '').trim()) {
+      payload.whatsapp = editEmpWhatsapp.trim();
+    }
 
     const res = await fetch('/api/owner/employees', {
       method: 'POST',
@@ -732,6 +741,7 @@ export default function Dashboard() {
       alert('✅ Data karyawan berhasil diperbarui!');
       setEditingEmp(null);
       setEditEmpPassword('');
+      setEditEmpWhatsapp('');
       await refreshEmployees();
     } else {
       alert('❌ Gagal memperbarui karyawan: ' + sanitizePublicError(json.error || 'error'));
@@ -1574,6 +1584,7 @@ export default function Dashboard() {
       setEditEmpOutlet(emp.outlet_id || 'ALL');
       setEditEmpOutlets(parseAssignedOutletIds(emp));
       setEditEmpPassword('');
+      setEditEmpWhatsapp(emp.whatsapp || '');
     }} 
     className="bg-indigo-100 text-indigo-700 hover:bg-indigo-200 px-2.5 py-1 rounded text-[10px] font-bold transition"
   >
@@ -1686,6 +1697,21 @@ export default function Dashboard() {
                 onChange={(e) => setEditEmpPassword(e.target.value)}
                 className="w-full border rounded-xl px-3 py-2 text-xs"
               />
+              <div>
+                <input
+                  type="tel"
+                  inputMode="tel"
+                  placeholder="No. WhatsApp (mis. 081234567890)"
+                  value={editEmpWhatsapp}
+                  onChange={(e) => setEditEmpWhatsapp(e.target.value)}
+                  className="w-full border rounded-xl px-3 py-2 text-xs"
+                />
+                <p className="text-[10px] text-slate-500 mt-1 leading-snug">
+                  {editEmpRole === 'supervisor' || editEmpRole === 'owner'
+                    ? '✅ Dipakai untuk menyetujui pengajuan lewat balasan WhatsApp. Hanya nomor ini yang balasannya diterima.'
+                    : 'Approval lewat WhatsApp hanya berlaku untuk supervisor/owner.'}
+                </p>
+              </div>
               <div className="flex gap-2">
                 <button type="button" onClick={() => setEditingEmp(null)} className="flex-1 border rounded-xl py-2 text-xs font-bold">Batal</button>
                 <button type="submit" disabled={isSaving} className="flex-1 bg-indigo-600 text-white rounded-xl py-2 text-xs font-bold">Simpan</button>
