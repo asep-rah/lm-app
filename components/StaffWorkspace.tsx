@@ -394,6 +394,15 @@ export default function StaffWorkspace() {
             <h2 className="text-sm font-semibold mb-1">Quick Activity & Context</h2>
             <p className="text-[11px] text-slate-400 mb-3">Panel sesuai alur kerja role Anda.</p>
 
+            {(role === 'digital_marketing' || role === 'supervisor') && (
+              <Link
+                href="/workspace/marketing"
+                className="block text-center text-xs font-semibold py-2.5 rounded-lg bg-slate-900 text-white"
+              >
+                {role === 'supervisor' ? 'Ajukan ke Digital Marketing' : 'Papan Pengajuan Marketing'}
+              </Link>
+            )}
+
             {(role === 'digital_marketing') && (
               <div className="space-y-2">
                 <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Campaign / redemption</p>
@@ -407,6 +416,15 @@ export default function StaffWorkspace() {
                   </div>
                 ))}
               </div>
+            )}
+
+            {role === 'owner_relation' && (
+              <Link
+                href="/workspace/investor-relations"
+                className="block text-center text-xs font-semibold py-2.5 rounded-lg bg-slate-900 text-white"
+              >
+                Laporan & Meeting Investor
+              </Link>
             )}
 
             {role === 'owner_relation' && (
