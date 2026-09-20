@@ -7,8 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --import tsx --test lib/financeRecognition.test.ts lib/financeStatements.test.ts lib/taskRoles.test.ts lib/supervisionVisit.test.ts",
-    "finance:paid-at-dry-run": "tsx scripts/paidAtBackfillDryRun.ts"
+    "test": "node --import tsx --test lib/financeRecognition.test.ts lib/financeStatements.test.ts lib/taskRoles.test.ts lib/supervisionVisit.test.ts lib/requisitionFlow.test.ts lib/vendorRecap.test.ts",
+    "finance:paid-at-dry-run": "tsx scripts/paidAtBackfillDryRun.ts",
+    "finance:duplicate-expense-check": "tsx scripts/duplicateExpenseCheck.ts"
   },
   "dependencies": {
     "@google/genai": "^2.17.1",

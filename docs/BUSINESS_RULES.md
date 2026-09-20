@@ -163,6 +163,41 @@ AI must not by default:
 - invent canonical business rules/statuses
 - expose or commit secrets
 
-## 18. Change-Control Rule
+## 18. Internal Purchase Requisition Rules
+
+Approved 2026-09-20. This section replaces the earlier implementation in which Admin Operasional
+recorded payment. It was written before the code change, as required by section 19.
+
+### Canonical status flow
+
+| Status | Actor who sets it |
+|---|---|
+| `Pending Approval` | outlet staff submits |
+| `Approved - Awaiting Admin Ops` | supervisor approves |
+| `Needs Revision` | Admin Ops returns it, reason mandatory |
+| `Awaiting Owner Payment` | Admin Ops verifies and forwards |
+| `Paid` | owner pays; expense is recorded |
+| `Rejected` | supervisor or owner rejects (final) |
+
+`Fulfilled` remains a post-payment state meaning the goods arrived.
+
+### Rules
+
+1. Admin Operasional is a verification gate, not the payer. Admin Ops must not set `Paid`.
+2. Only the owner sets `Paid`, and pays one requisition at a time so each amount is seen individually.
+3. The owner must not see a requisition that Admin Ops has not verified.
+4. One requisition must produce at most one expense row. This is enforced in the database by a
+   unique index on `expenses (requisition_id)`, not by UI state.
+5. Expense recording must be idempotent and must run before or together with the status change, so
+   that a retry after a failed status update cannot create a second expense.
+6. Every expense created from a requisition must carry its `requisition_id` on all write paths,
+   including fallback payloads. An untraceable expense is not acceptable.
+7. Transfer proof is uploaded by Admin Ops after the owner notifies them. `Paid` with an empty
+   `payment_proof_url` is therefore a valid state, and Admin Ops owns the queue of missing proofs.
+8. Suspected duplicate submissions are flagged as a warning to Admin Ops, never an automatic block.
+   The human decides. Detection thresholds live in one named constant.
+9. Verification, revision and payment each record their actor and timestamp.
+
+## 19. Change-Control Rule
 
 If a requested feature conflicts with this document, the coding agent must stop treating the request as a routine implementation. The conflict must be surfaced, and the business-rule/document change must be explicitly approved together with the code change.

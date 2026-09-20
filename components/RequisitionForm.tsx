@@ -4,8 +4,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import {
   canCreateRequisition,
+  canVerifyRequisition,
   getStaffSession,
-  isAdminOpsRole,
   isSupervisorRole
 } from '@/lib/staffSession';
 import {
@@ -13,17 +13,25 @@ import {
   cmsInsertPayload,
   exportPurchaseRequestsCsv,
   isPrApprovedAwaiting,
+  isPrAwaitingOwner,
   isPrFulfilled,
+  isPrNeedsRevision,
   isPrPaid,
   isPrPending,
   prAmount,
   prDescription,
   prQty,
-  prReceiptUrl,
   prRequestedBy,
   prStatusLabel,
   prTitle
 } from '@/lib/cmsRequisition';
+import {
+  attachPaymentProof,
+  needsProofUpload,
+  returnForRevision,
+  verifyAndForwardToOwner
+} from '@/lib/requisitionPayment';
+import { duplicateSuspicionMap } from '@/lib/requisitionVerify';
 import { toast } from '@/lib/toast';
 import FileProofInput from '@/components/FileProofInput';
 import { updateWithFallback } from '@/lib/safeWrite';
@@ -36,6 +44,8 @@ const statusBadge = (status: string) => {
   const s = String(status || '');
   if (s === PR_STATUS.PENDING) return 'bg-amber-100 text-amber-800 border-amber-200';
   if (s === PR_STATUS.APPROVED) return 'bg-blue-100 text-blue-800 border-blue-200';
+  if (s === PR_STATUS.AWAITING_OWNER) return 'bg-indigo-100 text-indigo-800 border-indigo-200';
+  if (s === PR_STATUS.NEEDS_REVISION) return 'bg-orange-100 text-orange-800 border-orange-200';
   if (s === PR_STATUS.PAID) return 'bg-emerald-100 text-emerald-800 border-emerald-200';
   if (String(s).toLowerCase().includes('fulfil')) return 'bg-violet-100 text-violet-800 border-violet-200';
   if (s.toLowerCase().includes('reject')) return 'bg-rose-100 text-rose-800 border-rose-200';
@@ -98,7 +108,9 @@ export default function RequisitionForm({
 
   const canCreate = canCreateRequisition(actorRole);
   const canApprove = isSupervisorRole(actorRole);
-  const canPay = isAdminOpsRole(actorRole);
+  // Admin Ops memverifikasi dan meneruskan; yang membayar adalah owner, lewat
+  // antrean di halaman Owner. Tombol "Mark Paid" di sini sudah dihapus.
+  const canVerify = canVerifyRequisition(actorRole);
 
   const [outlets, setOutlets] = useState<any[]>([]);
   const [outletId, setOutletId] = useState(outletHint || '');
@@ -112,7 +124,7 @@ export default function RequisitionForm({
   const [msg, setMsg] = useState('');
   const [requests, setRequests] = useState<any[]>([]);
   const [rejectReason, setRejectReason] = useState<Record<string, string>>({});
-  const [actualCost, setActualCost] = useState<Record<string, string>>({});
+  const [revisionReason, setRevisionReason] = useState<Record<string, string>>({});
   const [payProof, setPayProof] = useState<Record<string, File | null>>({});
   const [tableQ, setTableQ] = useState('');
   const [tableCat, setTableCat] = useState('ALL');
@@ -246,63 +258,61 @@ export default function RequisitionForm({
     setBusyId(null);
   };
 
-  const handleMarkPaid = async (req: any) => {
-    const paidAmount = Number(actualCost[req.id] ?? prAmount(req)) || 0;
-    if (paidAmount <= 0) return alert('Nominal transfer harus lebih dari 0.');
+  const handleVerify = async (req: any) => {
+    const suspicions = duplicates[req.id] || [];
+    if (suspicions.length) {
+      const detail = suspicions
+        .slice(0, 3)
+        .map((d) => `• ${d.title} — ${formatRp(d.amount)} (${d.reasons.join(', ')})`)
+        .join('\n');
+      if (!confirm(`Pengajuan ini mirip dengan:\n\n${detail}\n\nTetap teruskan ke Owner?`)) return;
+    }
 
     setBusyId(req.id);
+    const { error } = await verifyAndForwardToOwner({
+      req,
+      actorName,
+      duplicateOfId: suspicions[0]?.id || null
+    });
+    setBusyId(null);
+    if (error) {
+      toast('Gagal memverifikasi: ' + error.message, 'err');
+      return;
+    }
+    toast('Diteruskan ke Owner untuk dibayar.', 'ok');
+    loadRequests();
+  };
+
+  const handleReturn = async (req: any) => {
+    const reason = (revisionReason[req.id] || '').trim();
+    if (!reason) return alert('Isi alasan pengembalian.');
+    setBusyId(req.id);
+    const { error } = await returnForRevision({ req, reason, actorName });
+    setBusyId(null);
+    if (error) {
+      toast('Gagal mengembalikan: ' + error.message, 'err');
+      return;
+    }
+    setRevisionReason({ ...revisionReason, [req.id]: '' });
+    toast('Pengajuan dikembalikan ke pemohon.', 'ok');
+    loadRequests();
+  };
+
+  // Bukti transfer diunggah Admin Ops setelah owner membayar (§18 butir 7),
+  // jadi ini aksi terpisah dari pembayaran, bukan bagian darinya.
+  const handleUploadProof = async (req: any) => {
+    const file = payProof[req.id];
+    if (!file) return alert('Pilih file bukti transfer.');
+    setBusyId(req.id);
     try {
-      let proofUrl = prReceiptUrl(req);
-      const file = payProof[req.id];
-      if (file) {
-        try {
-          proofUrl = await uploadReceipt(file);
-        } catch (upErr: any) {
-          if (!confirm(`${upErr.message}\n\nTandai Paid tanpa bukti transfer?`)) {
-            setBusyId(null);
-            return;
-          }
-        }
-      }
-
-      const now = new Date().toISOString();
-      const desc =
-        prDescription(req) ||
-        `${prTitle(req)} — ${prRequestedBy(req) || 'Outlet'}`;
-
-      const cmsRow = {
-        outlet_id: req.outlet_id,
-        amount: paidAmount,
-        category: req.category || 'Lain-lain',
-        proof_url: proofUrl || null,
-        created_at: now
-      };
-      const { error: expErr } = await supabase.from('expenses').insert([
-        { ...cmsRow, description: desc, notes: desc, requisition_id: req.id, status: 'PAID', created_by: actorName }
-      ]);
-      if (expErr) {
-        const { error: expErr2 } = await supabase.from('expenses').insert([cmsRow]);
-        if (expErr2) {
-          const { error: expErr3 } = await supabase.from('expenses').insert([
-            { outlet_id: req.outlet_id, category: req.category || 'Lain-lain', amount: paidAmount, description: desc }
-          ]);
-          if (expErr3) throw expErr3;
-        }
-      }
-
-      await updatePr(req.id, [
-        {
-          status: PR_STATUS.PAID,
-          admin_paid_at: now,
-          amount: paidAmount,
-          proof_url: proofUrl || null,
-          receipt_url: proofUrl || prReceiptUrl(req) || null
-        },
-        { status: PR_STATUS.PAID, paid_at: now }
-      ]);
+      const proofUrl = await uploadReceipt(file);
+      const { error } = await attachPaymentProof({ req, proofUrl, actorName });
+      if (error) throw new Error(error.message);
+      setPayProof({ ...payProof, [req.id]: null });
+      toast('Bukti transfer tersimpan.', 'ok');
       loadRequests();
     } catch (err: any) {
-      alert('❌ Gagal menandai Paid: ' + (err.message || 'Koneksi bermasalah'));
+      toast('Gagal mengunggah bukti: ' + (err.message || 'Koneksi bermasalah'), 'err');
     } finally {
       setBusyId(null);
     }
@@ -328,11 +338,20 @@ export default function RequisitionForm({
     (r) => prRequestedBy(r) === actorName || r.outlet_id === outletId
   );
   const pending = requests.filter(isPrPending);
-  const awaitingPay = requests.filter(isPrApprovedAwaiting);
+  const awaitingVerify = requests.filter(isPrApprovedAwaiting);
+  const awaitingOwner = requests.filter(isPrAwaitingOwner);
+  const missingProof = requests.filter(needsProofUpload);
+
+  // Dugaan kembaran dihitung sekali untuk seluruh daftar, bukan per baris saat
+  // render. Hasilnya peringatan untuk Admin Ops, bukan pemblokir.
+  const duplicates = useMemo(
+    () => (canVerify ? duplicateSuspicionMap(requests) : {}),
+    [requests, canVerify]
+  );
   const cats = Array.from(
     new Set([...EXPENSE_COA_OPTIONS, ...requests.map((r) => String(r.category || '').trim()).filter(Boolean)])
   );
-  const tableRows = [...(canCreate && !canApprove && !canPay ? mine : requests)]
+  const tableRows = [...(canCreate && !canApprove && !canVerify ? mine : requests)]
     .filter((r) => {
       const hay = `${prTitle(r)} ${prRequestedBy(r)} ${r.status} ${r.category}`.toLowerCase();
       if (tableQ && !hay.includes(tableQ.toLowerCase())) return false;
@@ -352,7 +371,7 @@ export default function RequisitionForm({
           <div>
             <h3 className="text-sm font-black text-slate-800">Pengajuan Pembayaran</h3>
             <p className="text-[10px] text-slate-500 mt-0.5">
-              Outlet → <b>Pending Approval</b> → Supervisor → <b>Approved - Awaiting Admin Ops</b> → Finance <b>Paid</b>
+              Outlet → <b>Pending</b> → Supervisor <b>Approve</b> → Admin Ops <b>Verifikasi</b> → Owner <b>Bayar</b>
             </p>
           </div>
           {msg && <p className="text-xs font-bold text-emerald-600">{msg}</p>}
@@ -446,7 +465,9 @@ export default function RequisitionForm({
           <div>
             <h3 className="text-sm font-black text-slate-900">Purchase Requisitions</h3>
             <p className="text-[11px] text-slate-400">
-              {pending.length} Pending · {awaitingPay.length} Approved · Paid / Fulfilled
+              {pending.length} Pending · {awaitingVerify.length} Perlu verifikasi ·{' '}
+              {awaitingOwner.length} Menunggu Owner
+              {canVerify && missingProof.length > 0 && ` · ${missingProof.length} bukti belum diunggah`}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -545,33 +566,82 @@ export default function RequisitionForm({
                           </div>
                         </>
                       )}
-                      {canPay && isPrApprovedAwaiting(req) && (
+                      {canVerify && isPrApprovedAwaiting(req) && (
                         <>
+                          {(duplicates[req.id] || []).length > 0 && (
+                            <div className="w-full text-left bg-amber-50 border border-amber-200 rounded-lg p-1.5">
+                              <p className="text-[9px] font-bold text-amber-800">
+                                Dugaan pengajuan double
+                              </p>
+                              {(duplicates[req.id] || []).slice(0, 2).map((d) => (
+                                <p key={d.id} className="text-[9px] text-amber-700 leading-snug">
+                                  {d.title} · {formatRp(d.amount)} · {d.reasons.join(', ')}
+                                </p>
+                              ))}
+                              <p className="text-[8px] text-amber-600 mt-0.5">
+                                Peringatan saja — Anda yang memutuskan.
+                              </p>
+                            </div>
+                          )}
                           <input
-                            type="number"
-                            value={actualCost[req.id] ?? String(prAmount(req) || '')}
-                            onChange={(e) => setActualCost({ ...actualCost, [req.id]: e.target.value })}
-                            className="w-full border border-slate-200 rounded-lg p-1.5 text-[10px] font-bold"
+                            placeholder="Alasan kembalikan"
+                            value={revisionReason[req.id] || ''}
+                            onChange={(e) => setRevisionReason({ ...revisionReason, [req.id]: e.target.value })}
+                            className="w-full border border-slate-200 rounded-lg p-1.5 text-[10px]"
                           />
-                          <FileProofInput
-                            file={payProof[req.id] || null}
-                            onFile={(f) => setPayProof({ ...payProof, [req.id]: f })}
-                            accept="image/*,.pdf"
-                            icon="upload"
-                          />
-                          <button
-                            disabled={busyId === req.id}
-                            onClick={() => handleMarkPaid(req)}
-                            className="w-full bg-sky-500 text-white font-bold py-1.5 rounded-lg text-[10px]"
-                          >
-                            {busyId === req.id ? '…' : 'Mark Paid'}
-                          </button>
+                          <div className="flex gap-1 w-full">
+                            <button
+                              disabled={busyId === req.id}
+                              onClick={() => handleVerify(req)}
+                              className="flex-1 bg-indigo-600 text-white font-bold py-1.5 rounded-lg text-[10px]"
+                            >
+                              {busyId === req.id ? '…' : 'Verifikasi & Teruskan'}
+                            </button>
+                            <button
+                              disabled={busyId === req.id}
+                              onClick={() => handleReturn(req)}
+                              className="flex-1 bg-orange-50 text-orange-700 font-bold py-1.5 rounded-lg text-[10px]"
+                            >
+                              Kembalikan
+                            </button>
+                          </div>
                         </>
+                      )}
+                      {isPrAwaitingOwner(req) && (
+                        <span className="text-[10px] text-indigo-700 font-bold">
+                          Menunggu pembayaran Owner
+                        </span>
+                      )}
+                      {isPrNeedsRevision(req) && (
+                        <span className="text-[10px] text-orange-700 font-bold text-right">
+                          Dikembalikan: {req.revision_reason || 'perlu revisi'}
+                        </span>
                       )}
                       {isPrPaid(req) && !isPrFulfilled(req) && (
                         <>
-                          <span className="text-[10px] text-emerald-600 font-bold">Logged to expenses</span>
-                          {canPay && (
+                          <span className="text-[10px] text-emerald-600 font-bold">
+                            Dibayar Owner · tercatat di expenses
+                          </span>
+                          {canVerify && needsProofUpload(req) && (
+                            <>
+                              <p className="text-[9px] text-amber-700 font-bold">Bukti transfer belum diunggah</p>
+                              <FileProofInput
+                                file={payProof[req.id] || null}
+                                onFile={(f) => setPayProof({ ...payProof, [req.id]: f })}
+                                accept="image/*,.pdf"
+                                icon="upload"
+                              />
+                              <button
+                                type="button"
+                                disabled={busyId === req.id}
+                                onClick={() => handleUploadProof(req)}
+                                className="w-full bg-sky-500 text-white font-bold py-1.5 rounded-lg text-[10px]"
+                              >
+                                {busyId === req.id ? '…' : 'Unggah Bukti Transfer'}
+                              </button>
+                            </>
+                          )}
+                          {canVerify && (
                             <button
                               type="button"
                               disabled={busyId === req.id}

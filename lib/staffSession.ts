@@ -83,6 +83,19 @@ export const canAccessFinanceRecon = (role: string) => {
   return r === 'finance' || r === 'head_finance' || r === 'owner';
 };
 
+/**
+ * Gerbang verifikasi pengajuan pembelian: Admin Ops / Finance, TANPA owner.
+ *
+ * Owner sengaja dikecualikan walaupun isAdminOpsRole memuatnya. Verifikasi dan
+ * pembayaran harus dipegang dua pihak berbeda (docs/BUSINESS_RULES.md §18) --
+ * kalau owner bisa keduanya, gerbangnya tidak menahan apa pun.
+ */
+export const canVerifyRequisition = (role: string) =>
+  ['admin_ops', 'admin', 'finance', 'head_finance'].includes(String(role || '').toLowerCase().trim());
+
+/** Yang membayar pengajuan hanya owner (docs/BUSINESS_RULES.md §18 butir 2). */
+export const canPayRequisition = (role: string) => isOwnerRole(role);
+
 /** Purchase Request (CMS) hanya Kasir / POS yang boleh mengajukan. */
 export const canCreateRequisition = (role: string) =>
   ['kasir', 'pos'].includes(String(role || '').toLowerCase().trim());

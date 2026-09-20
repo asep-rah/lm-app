@@ -3,6 +3,8 @@
 export const PR_STATUS = {
   PENDING: 'Pending Approval',
   APPROVED: 'Approved - Awaiting Admin Ops',
+  NEEDS_REVISION: 'Needs Revision',
+  AWAITING_OWNER: 'Awaiting Owner Payment',
   REJECTED: 'Rejected',
   PAID: 'Paid',
   FULFILLED: 'Fulfilled'
@@ -33,7 +35,22 @@ export const isPrPending = (row: any) =>
   String(row?.status || '') === PR_STATUS.PENDING ||
   String(row?.status || '').toLowerCase().includes('pending');
 
+export const isPrAwaitingOwner = (row: any) =>
+  String(row?.status || '').toLowerCase().trim() === PR_STATUS.AWAITING_OWNER.toLowerCase();
+
+export const isPrNeedsRevision = (row: any) =>
+  String(row?.status || '').toLowerCase().trim() === PR_STATUS.NEEDS_REVISION.toLowerCase();
+
+/**
+ * Antrean verifikasi Admin Ops: sudah disetujui supervisor, belum diteruskan ke owner.
+ *
+ * Pencocokan substring 'awaiting' dipertahankan untuk baris lama yang statusnya
+ * bervariasi, tetapi dua status baru harus dikecualikan lebih dulu -- tanpa itu
+ * 'Awaiting Owner Payment' ikut tertangkap dan pengajuan yang sudah diteruskan
+ * akan muncul kembali di antrean Admin Ops.
+ */
 export const isPrApprovedAwaiting = (row: any) => {
+  if (isPrAwaitingOwner(row) || isPrNeedsRevision(row)) return false;
   const s = String(row?.status || '');
   return s === PR_STATUS.APPROVED || s.toLowerCase().includes('awaiting');
 };
@@ -60,6 +77,8 @@ export const prQty = (row: any) => {
 export const prStatusLabel = (row: any) => {
   if (isPrFulfilled(row)) return 'Fulfilled';
   if (isPrPaid(row)) return 'Paid';
+  if (isPrAwaitingOwner(row)) return 'Menunggu Bayar Owner';
+  if (isPrNeedsRevision(row)) return 'Perlu Revisi';
   if (isPrApprovedAwaiting(row)) return 'Approved';
   if (isPrPending(row)) return 'Pending';
   if (String(row?.status || '').toLowerCase().includes('reject')) return 'Rejected';

@@ -6,11 +6,14 @@ import { updateWithFallback } from '@/lib/safeWrite';
 import { toast } from '@/lib/toast';
 import {
   PR_STATUS,
+  isPrAwaitingOwner,
   isPrPending,
   prAmount,
+  prDescription,
   prRequestedBy,
   prTitle
 } from '@/lib/cmsRequisition';
+import { payRequisition, returnToAdminOps } from '@/lib/requisitionPayment';
 
 /** Tab Persetujuan ringkas — digabung dari /owner/dashboard agar satu halaman owner. */
 export default function OwnerApprovalsTab({ currentUserName }: { currentUserName: string }) {
@@ -19,6 +22,7 @@ export default function OwnerApprovalsTab({ currentUserName }: { currentUserName
   const [loansList, setLoansList] = useState<any[]>([]);
   const [outletIssues, setOutletIssues] = useState<any[]>([]);
   const [approvalBusy, setApprovalBusy] = useState<string | null>(null);
+  const [payReturnReason, setPayReturnReason] = useState<Record<string, string>>({});
 
   const refresh = useCallback(async () => {
     const [{ data: prs }, { data: subs }, { data: loans }, { data: issues }] = await Promise.all([
@@ -51,6 +55,15 @@ export default function OwnerApprovalsTab({ currentUserName }: { currentUserName
   };
 
   const pendingPurchases = useMemo(() => purchaseRequests.filter((r) => isPrPending(r)), [purchaseRequests]);
+  /**
+   * Antrean bayar owner: hanya yang sudah diverifikasi Admin Ops. Owner tidak
+   * boleh melihat pengajuan yang belum lewat gerbang verifikasi
+   * (docs/BUSINESS_RULES.md §18 butir 3).
+   */
+  const awaitingOwnerPayment = useMemo(
+    () => purchaseRequests.filter((r) => isPrAwaitingOwner(r)),
+    [purchaseRequests]
+  );
   const pendingLoans = useMemo(
     () => loansList.filter((l) => String(l.status || '').toLowerCase().includes('pending')),
     [loansList]
@@ -79,7 +92,11 @@ export default function OwnerApprovalsTab({ currentUserName }: { currentUserName
   }, [submissionsList, pendingPurchases, pendingLoans]);
 
   const approvalCount =
-    pendingPurchases.length + pendingLoans.length + openIssues.length + pendingSubs.length;
+    pendingPurchases.length +
+    awaitingOwnerPayment.length +
+    pendingLoans.length +
+    openIssues.length +
+    pendingSubs.length;
 
   const handleApprovePurchase = async (req: any) => {
     setApprovalBusy(req.id);
@@ -111,6 +128,46 @@ export default function OwnerApprovalsTab({ currentUserName }: { currentUserName
     await markSubmission(req.id, 'rejected');
     if (error) toast(error.message, 'err');
     else toast('Pengajuan pembelian ditolak.', 'ok');
+    await refresh();
+    setApprovalBusy(null);
+  };
+
+  /**
+   * Owner membayar satu pengajuan. Pencatatan biaya dan perubahan status
+   * dipusatkan di payRequisition() supaya idempoten: satu pengajuan tetap satu
+   * baris expenses walau tombol ditekan dua kali atau update status gagal.
+   */
+  const handlePayPurchase = async (req: any) => {
+    const amount = prAmount(req);
+    if (
+      !confirm(
+        `Bayar pengajuan ini?\n\n${prTitle(req)}\n${req.outlets?.name || 'Outlet'} · Rp ${amount.toLocaleString('id-ID')}\n\nBiaya akan tercatat di laporan pengeluaran.`
+      )
+    ) {
+      return;
+    }
+    setApprovalBusy(req.id);
+    const { error, alreadyRecorded } = await payRequisition({
+      req,
+      actorName: currentUserName || 'Owner'
+    });
+    if (error) toast(error.message, 'err');
+    else if (alreadyRecorded) toast('Status diselesaikan — biaya sudah tercatat sebelumnya.', 'ok');
+    else toast('Pengajuan dibayar dan tercatat di pengeluaran.', 'ok');
+    await refresh();
+    setApprovalBusy(null);
+  };
+
+  const handleReturnToAdminOps = async (req: any) => {
+    const reason = (payReturnReason[req.id] || '').trim();
+    if (!reason) return alert('Isi alasan pengembalian ke Admin Ops.');
+    setApprovalBusy(req.id);
+    const { error } = await returnToAdminOps({ req, reason, actorName: currentUserName || 'Owner' });
+    if (error) toast(error.message, 'err');
+    else {
+      setPayReturnReason({ ...payReturnReason, [req.id]: '' });
+      toast('Dikembalikan ke Admin Operasional.', 'ok');
+    }
     await refresh();
     setApprovalBusy(null);
   };
@@ -225,6 +282,71 @@ export default function OwnerApprovalsTab({ currentUserName }: { currentUserName
         ))}
         {pendingPurchases.length === 0 && (
           <p className="text-xs text-slate-400 text-center py-4">Tidak ada pengajuan pembelian menunggu.</p>
+        )}
+      </div>
+
+      <div className="bg-white border border-emerald-200 p-4 md:p-6 rounded-2xl shadow-sm space-y-3">
+        <div>
+          <h4 className="font-bold text-emerald-800 text-xs uppercase">Menunggu Pembayaran Anda</h4>
+          <p className="text-[10px] text-slate-500">
+            Sudah disetujui Supervisor dan diverifikasi Admin Operasional. Bayar satu per satu;
+            bukti transfer diunggah Admin Ops setelah Anda beri tahu.
+          </p>
+        </div>
+        {awaitingOwnerPayment.map((req) => (
+          <div key={req.id} className="border border-emerald-200 bg-emerald-50/40 rounded-xl p-3 space-y-2">
+            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-xs font-black text-slate-900">{prTitle(req)}</p>
+                <p className="text-[10px] text-slate-500">
+                  {prRequestedBy(req) || 'Kasir'} · {req.outlets?.name || 'Outlet'} · {req.category || '—'}
+                </p>
+                {prDescription(req) && (
+                  <p className="text-[10px] text-slate-500 mt-1 leading-snug">{prDescription(req)}</p>
+                )}
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Disetujui: {req.approved_by || req.supervisor_approved_at ? 'Supervisor' : '—'} · Diverifikasi:{' '}
+                  {req.verified_by_name || 'Admin Ops'}
+                  {req.verified_at ? ` (${new Date(req.verified_at).toLocaleDateString('id-ID')})` : ''}
+                </p>
+                {req.duplicate_of_id && (
+                  <p className="text-[10px] text-amber-700 font-bold mt-1">
+                    Ditandai mirip pengajuan lain — Admin Ops sudah memeriksa.
+                  </p>
+                )}
+              </div>
+              <p className="text-sm font-black text-slate-900 shrink-0">
+                Rp {prAmount(req).toLocaleString('id-ID')}
+              </p>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <button
+                type="button"
+                disabled={approvalBusy === req.id}
+                onClick={() => handlePayPurchase(req)}
+                className="bg-emerald-600 text-white text-[10px] font-bold px-3 py-2 rounded-lg disabled:opacity-50"
+              >
+                {approvalBusy === req.id ? '…' : 'Bayar'}
+              </button>
+              <input
+                placeholder="Alasan kembalikan ke Admin Ops"
+                value={payReturnReason[req.id] || ''}
+                onChange={(e) => setPayReturnReason({ ...payReturnReason, [req.id]: e.target.value })}
+                className="flex-1 border border-slate-200 rounded-lg px-2 py-2 text-[10px]"
+              />
+              <button
+                type="button"
+                disabled={approvalBusy === req.id}
+                onClick={() => handleReturnToAdminOps(req)}
+                className="bg-orange-50 text-orange-700 text-[10px] font-bold px-3 py-2 rounded-lg disabled:opacity-50"
+              >
+                Kembalikan
+              </button>
+            </div>
+          </div>
+        ))}
+        {awaitingOwnerPayment.length === 0 && (
+          <p className="text-xs text-slate-400 text-center py-4">Tidak ada pengajuan menunggu pembayaran.</p>
         )}
       </div>
 

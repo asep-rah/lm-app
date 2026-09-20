@@ -427,7 +427,15 @@ export default function StaffWorkspace() {
             {(role === 'admin_ops' || role === 'admin') && (
               <div className="space-y-2">
                 <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">CMS Approval & Fulfillment</p>
-                <p className="text-[11px] text-slate-500">Pending → Approved → Paid → Fulfilled. Export untuk log restock.</p>
+                <p className="text-[11px] text-slate-500">
+                  Pending → Verifikasi Admin Ops → Bayar Owner → Fulfilled. Export untuk log restock.
+                </p>
+                <Link
+                  href="/workspace/rekap"
+                  className="block text-center text-xs font-semibold py-2.5 rounded-lg bg-slate-900 text-white"
+                >
+                  Rekap Pemakaian Vendor
+                </Link>
               </div>
             )}
 
