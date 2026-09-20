@@ -80,3 +80,33 @@ export const overduePenaltyForRole = (tasks: any[], kpiKey: string, now = Date.n
     .filter((t) => isTaskOverdueOpen(t, now))
     .reduce((sum, t) => sum + Math.abs(Number(t.kpi_penalty_points) || 0), 0);
 };
+
+/** Task ditugaskan langsung ke orang ini? */
+export const isTaskAssignedToEmployee = (task: any, employeeId: string) => {
+  const target = String(task?.assigned_to_employee_id || '').trim();
+  if (!target) return false;
+  return target === String(employeeId || '').trim();
+};
+
+/**
+ * Inbox seseorang: task untuk role-nya DITAMBAH task yang ditujukan khusus
+ * ke dirinya. Task yang sudah dipegang orang lain tidak muncul di inbox role,
+ * supaya tugas bernama tidak terasa jadi tanggung jawab semua orang.
+ */
+export const tasksVisibleForEmployee = (
+  tasks: any[],
+  session: { id?: string; role?: string }
+) => {
+  const role = String(session?.role || '').toLowerCase().trim();
+  const employeeId = String(session?.id || '').trim();
+  if (role === 'owner') return tasks || [];
+
+  const aliases = new Set(inboxRolesFor(role));
+  aliases.add(role);
+
+  return (tasks || []).filter((task) => {
+    if (employeeId && isTaskAssignedToEmployee(task, employeeId)) return true;
+    if (String(task?.assigned_to_employee_id || '').trim()) return false;
+    return aliases.has(taskTargetRole(task));
+  });
+};

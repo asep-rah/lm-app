@@ -53,3 +53,23 @@ export const isMultiOutletRole = (role: string) =>
 export const roleLabelOf = (role: string) =>
   STAFF_ROLES.find((r) => r.value === String(role || '').toLowerCase())?.label ||
   String(role || 'staf');
+
+/**
+ * Role yang bisa diberi tugas lewat delegasi, berikut label tampilannya.
+ * Daftar ini sengaja lebih pendek dari STAFF_ROLES: investor hanya membaca,
+ * dan owner/head adalah pemberi tugas, bukan penerima.
+ *
+ * 'courier' tidak didaftarkan terpisah karena inboxRolesFor('driver') sudah
+ * mencakup courier/kurir -- dua pilihan untuk satu inbox hanya membingungkan.
+ */
+export const DELEGATABLE_ROLES: { value: string; label: string }[] = [
+  { value: 'kasir', label: '🛒 Kasir / POS' },
+  { value: 'driver', label: '🛵 Driver / Kurir' },
+  { value: 'cs', label: '💬 Customer Service' },
+  { value: 'cs_care', label: '🛠️ Quality Service (CS Care)' },
+  { value: 'supervisor', label: '🛡️ Supervisor Operasional' },
+  { value: 'admin_ops', label: '📦 Admin Operasional' },
+  { value: 'digital_marketing', label: '🚀 Digital Marketing' },
+  { value: 'finance', label: '💰 Finance' },
+  { value: 'owner_relation', label: '🤝 Owner Relation' }
+];

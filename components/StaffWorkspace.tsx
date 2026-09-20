@@ -11,10 +11,16 @@ import {
   isCsRole,
   isHeadManagementRole
 } from '@/lib/staffSession';
-import { inboxRolesFor, isTaskCompleted, isTaskInProgress, isTaskOverdueOpen } from '@/lib/taskRoles';
+import {
+  inboxRolesFor,
+  isTaskCompleted,
+  isTaskInProgress,
+  isTaskOverdueOpen,
+  tasksVisibleForEmployee
+} from '@/lib/taskRoles';
 import { roleLabelOf } from '@/lib/staffRoles';
-import { completeTaskWithSlaCheck } from '@/utils/taskSlaEvaluator';
 import HeadTaskDelegator from '@/components/HeadTaskDelegator';
+import TaskReportForm from '@/components/TaskReportForm';
 import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
 import FinanceWorkspacePanel from '@/components/FinanceWorkspacePanel';
 import RequisitionForm from '@/components/RequisitionForm';
@@ -63,6 +69,7 @@ export default function StaffWorkspace() {
   const [tasks, setTasks] = useState<any[]>([]);
   const [query, setQuery] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [reportTask, setReportTask] = useState<any | null>(null);
   const [promos, setPromos] = useState<any[]>([]);
   const [investorNotes, setInvestorNotes] = useState<any[]>([]);
   const [issues, setIssues] = useState<any[]>([]);
@@ -136,8 +143,11 @@ export default function StaffWorkspace() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [role]);
 
-  const openTasks = tasks.filter((t) => !isTaskCompleted(t.status));
-  const completedToday = tasks.filter((t) => {
+  // Task bernama hanya muncul untuk orangnya; sisanya tetap inbox seluruh tim.
+  const myTasks = tasksVisibleForEmployee(tasks, session);
+
+  const openTasks = myTasks.filter((t) => !isTaskCompleted(t.status));
+  const completedToday = myTasks.filter((t) => {
     if (!isTaskCompleted(t.status)) return false;
     const ts = t.completed_at || t.due_date;
     if (!ts) return false;
@@ -163,22 +173,6 @@ export default function StaffWorkspace() {
       return;
     }
     toast('Tugas masuk proses.', 'ok');
-    loadTasks();
-  };
-
-  const markDone = async (taskId: string) => {
-    setBusyId(taskId);
-    const res = await completeTaskWithSlaCheck(taskId, {
-      id: session.id || session.name,
-      name: session.name,
-      role
-    });
-    setBusyId(null);
-    if (!res.success) {
-      toast(res.message || 'Gagal menyelesaikan tugas', 'err');
-      return;
-    }
-    toast(res.isOverdue ? `Selesai, SLA terlewati (−${Math.abs(res.penalty || 0)})` : 'Tugas selesai.', res.isOverdue ? 'warn' : 'ok');
     loadTasks();
   };
 
@@ -367,7 +361,7 @@ export default function StaffWorkspace() {
                     </div>
                   </div>
                   <p className="text-[10px] text-slate-400 mt-2">
-                    {t.assigned_to_role}
+                    {t.assigned_to_name ? `👤 ${t.assigned_to_name}` : t.assigned_to_role}
                     {t.due_date ? ` · due ${new Date(t.due_date).toLocaleString('id-ID')}` : ''}
                     {t.sla_hours ? ` · SLA ${t.sla_hours}j` : ''}
                   </p>
@@ -383,10 +377,10 @@ export default function StaffWorkspace() {
                     <button
                       type="button"
                       disabled={busyId === t.id}
-                      onClick={() => markDone(t.id)}
+                      onClick={() => setReportTask(t)}
                       className="flex-1 text-[11px] font-semibold py-2 rounded-lg bg-slate-900 text-white hover:bg-slate-800"
                     >
-                      {busyId === t.id ? '…' : 'Tandai Selesai'}
+                      {busyId === t.id ? '…' : 'Selesai & Lapor'}
                     </button>
                   </div>
                 </article>
@@ -533,6 +527,15 @@ export default function StaffWorkspace() {
         </aside>
         </div>
       </main>
+
+      {reportTask && (
+        <TaskReportForm
+          task={reportTask}
+          session={{ id: session.id || session.name, name: session.name, role }}
+          onClose={() => setReportTask(null)}
+          onDone={loadTasks}
+        />
+      )}
     </div>
   );
 }
