@@ -431,6 +431,15 @@ export default function StaffWorkspace() {
               </div>
             )}
 
+            {(role === 'supervisor' || isHeadManagementRole(role)) && (
+              <Link
+                href="/workspace/supervisi"
+                className="block text-center text-xs font-semibold py-2.5 rounded-lg bg-slate-900 text-white"
+              >
+                Laporan Supervisi Outlet
+              </Link>
+            )}
+
             {role === 'supervisor' && (
               <div className="space-y-2">
                 <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Kapasitas outlet</p>
