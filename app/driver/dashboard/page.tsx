@@ -144,7 +144,6 @@ export default function DriverDashboard() {
       localStorage.removeItem('laundry_user');
       localStorage.removeItem('laundry_owner_user');
       localStorage.removeItem('laundry_driver_user');
-      localStorage.removeItem('laundry_investor_user');
       localStorage.removeItem('staff_role');
       window.location.replace('/login');
     }
