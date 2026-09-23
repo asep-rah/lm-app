@@ -14,6 +14,11 @@ Dokumen ini wajib dibaca Owner / Admin Ops sebelum production.
 | `MAYAR_API_KEY` | Fallback global; utamakan key per outlet. |
 | `MAYAR_WEBHOOK_TOKEN` / `MAYAR_WEBHOOK_SECRET` | Verifikasi webhook. |
 | `PAYMENT_GATEWAY_SERVER_KEY` | Opsional HMAC. |
+| `CUSTOMER_AUTH_SECRET` | Tanda tangan sesi customer + HMAC kode login (≥ 32 karakter). Server-only. |
+| `CUSTOMER_WA_LOGIN_ENABLED` / `CUSTOMER_WA_LOGIN_NUMBER` / `EVOLUTION_INSTANCE` / `EVOLUTION_WEBHOOK_TOKEN` | Login WhatsApp terverifikasi (Evolution API). Lihat `docs/customer-verified-login.md`. |
+| `EVOLUTION_API_URL` / `EVOLUTION_API_KEY` | Opsional: balasan WA "berhasil masuk". |
+| `CUSTOMER_EMAIL_LOGIN_ENABLED` / `RESEND_API_KEY` / `CUSTOMER_AUTH_EMAIL_FROM` | Login email cadangan. |
+| `CUSTOMER_LEGACY_LOGIN_ENABLED` | Default `true`. Set `false` setelah login WA terverifikasi diuji → login lama (tanpa verifikasi) dimatikan. |
 
 Tanpa `PAYMENT_OPS_SECRET`/`CRON_SECRET` di production, endpoint mark-manual / resync / diagnosis / deposit **menolak** request.
 
@@ -27,6 +32,7 @@ Urutan di SQL Editor:
 4. **`20260910_money_guardrails.sql`** — soft-void; REVOKE DELETE transaksi; RPC deposit hanya service_role.
 5. **`20260910_employees_password_rls.sql`** — kolom `password` tidak readable/writable oleh anon.
 6. `20260908_outlet_books.sql`, loyalty window, dll.
+7. `20260923_customer_verified_login.sql` — tabel login customer (service-role only), sebelum mengaktifkan login WA/email terverifikasi.
 
 Cek cepat:
 
