@@ -40,7 +40,7 @@ export default function NearbyOutlets({
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-xs font-bold text-slate-800 tracking-wide uppercase flex items-center gap-1.5 min-w-0">
-          <MapPin className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+          <MapPin className="w-3.5 h-3.5 text-brand-600 shrink-0" />
           Outlet Terdekat
         </h2>
         <div className="flex items-center gap-2 shrink-0">
@@ -71,7 +71,7 @@ export default function NearbyOutlets({
             </label>
           )}
           {onRequestLocation && (
-            <button type="button" onClick={onRequestLocation} className="text-[10px] font-bold text-blue-700 whitespace-nowrap">
+            <button type="button" onClick={onRequestLocation} className="text-[10px] font-bold text-brand-700 whitespace-nowrap">
               {locating ? 'Mencari GPS…' : 'GPS untuk cabang terdekat'}
             </button>
           )}
@@ -87,7 +87,7 @@ export default function NearbyOutlets({
             <button
               type="button"
               onClick={onShowAllCities}
-              className="text-[11px] font-extrabold text-blue-700 underline"
+              className="text-[11px] font-extrabold text-brand-700 underline"
             >
               Lihat Semua Kota
             </button>
@@ -102,9 +102,9 @@ export default function NearbyOutlets({
                 key={String(outlet.id)}
                 type="button"
                 onClick={() => onOpen(outlet)}
-                className="w-full bg-white border border-slate-300 rounded-2xl p-3 text-left shadow-sm hover:border-blue-400 transition flex items-start gap-3"
+                className="w-full bg-white border border-slate-300 rounded-2xl p-3 text-left shadow-sm hover:border-brand-400 transition flex items-start gap-3"
               >
-                <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-700 flex items-center justify-center shrink-0">
+                <div className="w-10 h-10 rounded-xl bg-brand-50 text-brand-700 flex items-center justify-center shrink-0">
                   <Navigation className="w-4 h-4" />
                 </div>
                 <div className="min-w-0 flex-1">
@@ -114,7 +114,7 @@ export default function NearbyOutlets({
                   </p>
                   <p className="text-[10px] text-slate-600 truncate">{outletAddressOf(outlet) || 'Alamat belum diisi'}</p>
                   {km != null ? (
-                    <p className="text-[10px] font-bold text-blue-700 mt-0.5">{distanceLabelKm(km)}</p>
+                    <p className="text-[10px] font-bold text-brand-700 mt-0.5">{distanceLabelKm(km)}</p>
                   ) : (
                     <p className="text-[10px] text-slate-600 mt-0.5">
                       {isComingSoonOutlet(outlet) ? 'Segera dibuka' : 'Jarak belum tersedia'}

@@ -8,6 +8,7 @@ import {
   type SavedAddress
 } from '@/lib/customerAddresses';
 import type { GeoPoint } from '@/lib/mapsNav';
+import { addressDisplayLabel } from '@/lib/customerAddressLabels';
 import { composePickupAddress, isValidHouseNumber, splitHouseNumber } from '@/lib/pickupAddress';
 import { reverseGeocodeAddress } from '@/lib/reverseGeocode';
 
@@ -109,7 +110,7 @@ export default function AddressManager({
           <button
             type="button"
             onClick={startNew}
-            className="text-[10px] font-extrabold text-blue-600 hover:underline inline-flex items-center gap-1"
+            className="text-[10px] font-extrabold text-brand-600 hover:underline inline-flex items-center gap-1"
           >
             <Plus className="w-3 h-3" /> Tambah Alamat
           </button>
@@ -147,9 +148,9 @@ export default function AddressManager({
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <p className="text-[11px] font-black text-slate-800 inline-flex items-center gap-1.5">
-                  <MapPin className="w-3.5 h-3.5 text-blue-500" /> {row.label}
+                  <MapPin className="w-3.5 h-3.5 text-brand-500 shrink-0" /> {addressDisplayLabel(row, addresses)}
                   {row.is_primary && (
-                    <span className="bg-blue-600 text-white text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full">
+                    <span className="bg-brand-600 text-white text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full">
                       Utama
                     </span>
                   )}
@@ -176,7 +177,7 @@ export default function AddressManager({
               <button
                 type="button"
                 onClick={() => startEdit(row)}
-                className="text-[10px] font-extrabold text-blue-600 bg-white border border-slate-200 px-2 py-1 rounded-lg inline-flex items-center gap-1"
+                className="text-[10px] font-extrabold text-brand-600 bg-white border border-slate-200 px-2 py-1 rounded-lg inline-flex items-center gap-1"
               >
                 <Pencil className="w-3 h-3" /> Edit
               </button>
@@ -184,7 +185,7 @@ export default function AddressManager({
                 type="button"
                 disabled={busy}
                 onClick={() => {
-                  if (!confirm(`Hapus alamat "${row.label}"?`)) return;
+                  if (!confirm(`Hapus alamat "${addressDisplayLabel(row, addresses)}"?`)) return;
                   onDelete(row.id);
                 }}
                 className="text-[10px] font-extrabold text-rose-600 bg-rose-50 border border-rose-100 px-2 py-1 rounded-lg inline-flex items-center gap-1"
@@ -274,7 +275,7 @@ function AddressForm({
   };
 
   return (
-    <div className="space-y-2 bg-white border border-blue-100 rounded-2xl p-3">
+    <div className="space-y-2 bg-white border border-brand-100 rounded-2xl p-3">
       <div className="flex flex-wrap gap-1.5">
         {ADDRESS_LABEL_PRESETS.map((preset) => (
           <button
@@ -282,7 +283,7 @@ function AddressForm({
             type="button"
             onClick={() => onLabel(preset)}
             className={`text-[10px] font-extrabold px-2.5 py-1 rounded-lg border ${
-              label === preset ? 'bg-blue-600 text-white border-blue-600' : 'bg-slate-50 text-slate-600 border-slate-200'
+              label === preset ? 'bg-brand-600 text-white border-brand-600' : 'bg-slate-50 text-slate-600 border-slate-200'
             }`}
           >
             {preset}
@@ -323,7 +324,7 @@ function AddressForm({
           type="button"
           disabled={busy}
           onClick={onSubmit}
-          className="flex-1 bg-blue-600 text-white font-extrabold py-2.5 rounded-xl text-xs shadow-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-50"
+          className="flex-1 bg-brand-600 text-white font-extrabold py-2.5 rounded-xl text-xs shadow-sm inline-flex items-center justify-center gap-1.5 disabled:opacity-50"
         >
           <Check className="w-3.5 h-3.5" /> {submitLabel}
         </button>
