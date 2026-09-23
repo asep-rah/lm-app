@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --import tsx --test lib/financeRecognition.test.ts lib/financeStatements.test.ts",
+    "test": "node --import tsx --test lib/financeRecognition.test.ts lib/financeStatements.test.ts lib/customerAuth/core.test.ts lib/customerOrderView.test.ts lib/outletShowcase.test.ts lib/customerAddressLabels.test.ts",
     "finance:paid-at-dry-run": "tsx scripts/paidAtBackfillDryRun.ts"
   },
   "dependencies": {

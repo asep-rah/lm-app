@@ -7,11 +7,11 @@ import { createClient } from '@supabase/supabase-js';
 import { fetchThreadMessages, insertChatMessage, isStaffOnlyMessage, phoneVariants, threadKeyOf } from '@/lib/csChat';
 import { parseChatInvoice } from '@/lib/chatInvoice';
 import { findPromoByCode, mapDbPromo, mapSettingsPromo, promoDiscountRp, promoIsClaimable, type CatalogPromo } from '@/lib/promoCatalog';
-import { DEFAULT_CRM_SETTINGS, idr, type CrmProfile, type CrmSettings } from '@/lib/crm';
+import { cashbackCopy, DEFAULT_CRM_SETTINGS, idr, type CrmProfile, type CrmSettings } from '@/lib/crm';
 import { loadFreshCrmProfile } from '@/lib/crm-automation';
 import { redeemLoyaltyPoints, redeemableAmounts } from '@/lib/loyaltyRedeem';
 import { createPickupRoleTasks, insertPickupOrder, requestDriverDelivery } from '@/lib/pickupDispatch';
-import { displayStatusLabel, stageKeyOf } from '@/lib/stageTimeline';
+import { stageKeyOf, type WorkLogRow } from '@/lib/stageTimeline';
 import { laundryFallbackReply } from '@/lib/laundryFaq';
 import {
   confirmThirdPartyReceived,
@@ -19,7 +19,7 @@ import {
   thirdPartyFromOrder
 } from '@/lib/thirdPartyDelivery';
 import { fileToCompressedDataUrl, uploadChatAttachment, uploadProofFile } from '@/lib/uploadProof';
-import { displayItemAmount, kiloanLineTotal } from '@/lib/kiloanPrice';
+import { kiloanLineTotal } from '@/lib/kiloanPrice';
 import { formatEstSelesai, formatTrxId } from '@/lib/posQueue';
 import { DEPOSIT_PACKAGES, depositBonusOf, depositPackageShort } from '@/lib/depositTopup';
 import { requestMayarInvoice, simulateMayarAutoPay } from '@/lib/mayar';
@@ -68,6 +68,7 @@ import {
 } from '@/lib/customerAddresses';
 import { reverseGeocodeAddress, reverseGeocodeCity } from '@/lib/reverseGeocode';
 import { composePickupAddress, isValidHouseNumber, splitHouseNumber } from '@/lib/pickupAddress';
+import { addressDisplayLabel } from '@/lib/customerAddressLabels';
 import { fetchCustomerRoadKm, ongkirRoundTripFromOneWayKm } from '@/lib/roadDistance';
 import { matchOutletFromQuery, persistCustomerOutlet, readStoredCustomerOutlet } from '@/lib/outletUuid';
 import ActivitySegmentTabs from '@/components/customer/ActivitySegmentTabs';
@@ -87,6 +88,21 @@ import { updateWithFallback } from '@/lib/safeWrite';
 import { hasOnDutyDriverAtOutlet } from '@/lib/driverAttendance';
 import { isPaymentLocked } from '@/lib/paymentVerify';
 import CheckPaymentStatusButton from '@/components/payment/CheckPaymentStatusButton';
+import { PaymentBadge, ProgressBar } from '@/components/customer/OrderStatusBadges';
+import {
+  customerPaymentOf,
+  customerProgressOf,
+  isTransactionRow,
+  priceBreakdownOf,
+  serviceSummaryOf
+} from '@/lib/customerOrderView';
+import {
+  clearCustomerLocal,
+  fetchCustomerAuthState,
+  logoutCustomer,
+  persistCustomerLocal,
+  type CustomerAuthState
+} from '@/lib/customerAuth/client';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -127,6 +143,7 @@ const ComplaintTicketChat = dynamic(() => import('@/components/ComplaintTicketCh
 const PromoVoucherModal = dynamic(() => import('@/components/customer/PromoVoucherModal'), { ssr: false });
 const PromoBannerDetailModal = dynamic(() => import('@/components/customer/PromoBannerDetailModal'), { ssr: false });
 const OutletProfileDrawer = dynamic(() => import('@/components/customer/OutletProfileDrawer'), { ssr: false });
+const BackupEmailCard = dynamic(() => import('@/components/customer/BackupEmailCard'), { ssr: false });
 const AddressManager = dynamic(() => import('@/components/customer/AddressManager'), { ssr: false });
 const PickupLocationPicker = dynamic(() => import('@/components/customer/PickupLocationPicker'), { ssr: false });
 
@@ -241,6 +258,10 @@ function CustomerDashboardPage() {
   const [editScheduleTime, setEditScheduleTime] = useState('09:00');
   const [activeSupportTab, setActiveSupportTab] = useState<'cs' | 'ai'>('cs');
   const [customerPhone, setCustomerPhone] = useState('');
+  const [authState, setAuthState] = useState<CustomerAuthState | null>(null);
+  // Form nomor-saja (tanpa verifikasi) hanya dipakai selama login lama masih aktif
+  // dan login WhatsApp terverifikasi belum dikonfigurasi.
+  const inlinePhoneLoginAllowed = Boolean(authState?.config.legacy && !authState?.config.whatsapp);
   const [customerData, setCustomerData] = useState<any>(null);
   const [outletsList, setOutletsList] = useState<any[]>([]);
   const [filteredOutlets, setFilteredOutlets] = useState<any[]>([]);
@@ -327,6 +348,11 @@ function CustomerDashboardPage() {
   const [detailPayBusy, setDetailPayBusy] = useState(false);
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [orderStep, setOrderStep] = useState<1 | 2 | 3>(1);
+  const [orderFormError, setOrderFormError] = useState('');
+  const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null);
+  const orderSubmitLockRef = useRef(false);
+  const draftOrderNoRef = useRef('');
 
   const [depositCheckout, setDepositCheckout] = useState<any | null>(null);
   const [depositPayBusy, setDepositPayBusy] = useState(false);
@@ -393,6 +419,9 @@ function CustomerDashboardPage() {
     fetchQueue();
   }, []);
   const [activeOrders, setActiveOrders] = useState<any[]>([]);
+  // Log tahap produksi per transaksi aktif — agar progres di kartu Aktivitas sama
+  // dengan timeline di detail pesanan.
+  const [workLogsByTx, setWorkLogsByTx] = useState<Record<string, WorkLogRow[]>>({});
   const [completedOrders, setCompletedOrders] = useState<any[]>([]);
   const [depositLogs, setDepositLogs] = useState<any[]>([]);
   const [readyPopup, setReadyPopup] = useState<any>(null);
@@ -1075,7 +1104,18 @@ function CustomerDashboardPage() {
       const { data: bannerPromos } = await supabase.from('promotions').select('*').order('created_at', { ascending: false });
       if (bannerPromos) setShowcasePromos(bannerPromos);
 
-      const savedPhone = localStorage.getItem('laundry_customer_phone');
+      // Sesi terverifikasi (cookie HttpOnly) diutamakan. Nomor di localStorage tanpa
+      // sesi hanya diterima selama login lama (CUSTOMER_LEGACY_LOGIN_ENABLED) aktif.
+      const auth = await fetchCustomerAuthState();
+      setAuthState(auth);
+      let savedPhone = localStorage.getItem('laundry_customer_phone');
+      if (auth.session?.phone) {
+        savedPhone = auth.session.phone;
+        persistCustomerLocal(savedPhone);
+      } else if (!auth.config.legacy) {
+        clearCustomerLocal();
+        savedPhone = null;
+      }
       const savedAddr = localStorage.getItem('laundry_customer_address');
       if (savedAddr) setCustomerAddress(savedAddr);
 
@@ -1295,6 +1335,26 @@ function CustomerDashboardPage() {
 
   setActiveOrders(mergedActive);
 
+  const activeTxIds = mergedActive
+    .filter((o) => isTransactionRow(o) && !isOrderFinished(o))
+    .map((o) => String(o.id))
+    .slice(0, 50);
+  if (activeTxIds.length) {
+    const { data: logRows } = await supabase
+      .from('work_logs')
+      .select('transaction_id, stage, created_at')
+      .in('transaction_id', activeTxIds)
+      .order('created_at', { ascending: true });
+    const grouped: Record<string, WorkLogRow[]> = {};
+    (logRows || []).forEach((row: WorkLogRow & { transaction_id: string }) => {
+      const key = String(row.transaction_id);
+      (grouped[key] = grouped[key] || []).push(row);
+    });
+    setWorkLogsByTx(grouped);
+  } else {
+    setWorkLogsByTx({});
+  }
+
   const unpaidBills = mergedActive.filter((o: any) => isPaymentLocked(o));
   setPendingCashierInvoice(unpaidBills);
 
@@ -1384,8 +1444,14 @@ function CustomerDashboardPage() {
     }
   };
 
+  const goToLogin = () => {
+    const here = typeof window !== 'undefined' ? window.location.pathname + window.location.search : '/customer/dashboard';
+    router.push(`/customer/login?next=${encodeURIComponent(here)}`);
+  };
+
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!inlinePhoneLoginAllowed) return goToLogin();
     const norm = cleanPhone(customerPhone);
     if (!norm) return alert('Ketik nomor WA aktif!');
     localStorage.setItem('laundry_customer_phone', norm);
@@ -1397,6 +1463,7 @@ function CustomerDashboardPage() {
   };
 
   const handleLogout = () => {
+    void logoutCustomer();
     localStorage.removeItem('laundry_customer_phone');
     setCustomerPhone('');
     setCustomerData(null);
@@ -1667,31 +1734,81 @@ function CustomerDashboardPage() {
     return handleClaimPromo(found);
   };
 
+  // Validasi per langkah form pesanan. Aturan sama dengan validasi submit lama,
+  // hanya dipindah ke langkah terkait agar pesan muncul lebih awal.
+  const orderStepError = (step: 1 | 2 | 3): string => {
+    if (step === 1) {
+      if (!customerAddress || customerAddress.trim().length < 5) return 'Cari dan pilih nama jalan / lokasi penjemputan dulu.';
+      if (!isValidHouseNumber(houseNumber)) return 'Isi nomor rumah / blok. Boleh lengkap, contoh: 117, 12A, B-3, atau rumah no.117.';
+      if (!userCoords) return 'Pasang titik di peta dulu: pilih saran, tekan GPS, atau geser peta ke gerbang.';
+      if (!selectedOutlet || !orderOutlets.some((o) => String(o.id) === String(selectedOutlet))) {
+        return orderOutlets.length ? 'Pilih outlet yang melayani alamat Anda.' : 'Belum ada cabang terdekat yang bisa menerima pesanan dari titik ini.';
+      }
+      if (pickupLater) {
+        const sched = parsePickupSchedule(pickupDate, pickupTime);
+        if (!sched) return 'Isi tanggal dan jam jemput yang valid (contoh 03/09/2026 dan 09.00).';
+        if (sched.at.getTime() <= Date.now()) return 'Jadwal jemput harus di masa depan.';
+      }
+      if (courierType === 'INTERNAL' && !internalDriverOnDuty) {
+        return 'Driver internal cabang ini sedang tidak bertugas. Silakan pilih kurir instan/antar mandiri.';
+      }
+      return '';
+    }
+    if (step === 2) {
+      if (!isKiloanChecked && !kiloanLines.length && (!isSatuanChecked || cartSatuan.length === 0)) {
+        return 'Pilih minimal 1 paket Kiloan atau Satuan!';
+      }
+      if (isSatuanChecked && cartSatuan.length === 0) {
+        return 'Tekan "Tambah Item Satuan Ini" untuk memasukkan item satuan, atau hapus centang Items Satuan.';
+      }
+      return '';
+    }
+    if (!customerName.trim()) return 'Isi nama lengkap pemesan.';
+    if (!agreedNoValuables) return 'Centang pernyataan tidak ada barang berharga / selain cucian di saku atau tas.';
+    if (!agreedTerms) return 'Centang persetujuan Syarat & Ketentuan untuk melanjutkan pesanan.';
+    return '';
+  };
+
+  const goOrderStep = (target: 1 | 2 | 3) => {
+    // Maju hanya jika langkah sebelumnya valid; mundur selalu boleh.
+    for (let st = 1 as 1 | 2 | 3; st < target; st = (st + 1) as 1 | 2 | 3) {
+      const msg = orderStepError(st);
+      if (msg) {
+        setOrderStep(st);
+        setOrderFormError(msg);
+        return false;
+      }
+    }
+    setOrderFormError('');
+    setOrderStep(target);
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+    return true;
+  };
+
   const handleOrderSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Cegah pesanan ganda: kunci sinkron sebelum state React sempat diperbarui.
+    if (orderSubmitLockRef.current) return;
     if (!customerPhone) return alert('Login terlebih dahulu!');
-    if (!customerAddress || customerAddress.trim().length < 5) {
-      return alert('Cari dan pilih nama jalan / lokasi penjemputan dulu.');
+    for (const st of [1, 2, 3] as const) {
+      const msg = orderStepError(st);
+      if (msg) {
+        setOrderStep(st);
+        setOrderFormError(msg);
+        return;
+      }
     }
-    if (!isValidHouseNumber(houseNumber)) {
-      return alert('Isi nomor rumah / blok. Boleh lengkap, contoh: 117, 12A, B-3, atau rumah no.117.');
+    setOrderFormError('');
+    orderSubmitLockRef.current = true;
+    try {
+      await submitValidatedOrder();
+    } finally {
+      orderSubmitLockRef.current = false;
+      setIsSubmitting(false);
     }
-    if (!userCoords) {
-      return alert('Pasang titik di peta dulu: pilih saran, tekan GPS, atau geser peta ke gerbang.');
-    }
-    if (!isKiloanChecked && !kiloanLines.length && (!isSatuanChecked || cartSatuan.length === 0)) {
-      return alert('Pilih minimal 1 paket Kiloan atau Satuan!');
-    }
-    if (courierType === 'INTERNAL' && !internalDriverOnDuty) {
-      alert('Driver internal cabang ini sedang tidak bertugas. Silakan pilih kurir instan/antar mandiri.');
-      return;
-    }
-    if (!agreedNoValuables) {
-      return alert('Centang pernyataan tidak ada barang berharga / selain cucian di saku atau tas.');
-    }
-    if (!agreedTerms) {
-      return alert('Centang persetujuan Syarat & Ketentuan untuk melanjutkan pesanan.');
-    }
+  };
+
+  const submitValidatedOrder = async () => {
     // PENGAMAN: Blokir total pembayaran COD
     if ((typeof paymentMethod !== 'undefined' && paymentMethod === 'COD') || (typeof paymentMethod !== 'undefined' && paymentMethod === 'Cash on Delivery')) {
       alert('Mohon maaf, Laundrivery saat ini hanya melayani pembayaran cashless / transfer online. Pembayaran COD tidak tersedia.');
@@ -1724,7 +1841,10 @@ function CustomerDashboardPage() {
       : `Satuan (${cartSatuan.length} Item)`;
     const pickupFull = composePickupAddress(customerAddress, houseNumber, pickupLandmark);
     const notesCombined = `Alamat: ${pickupFull} | Detail: ${detailLines.join(' | ')}${notes ? ` | Catatan: ${notes}` : ''}`;
-    const autoOrderNo = `ORD-${Date.now().toString().slice(-8)}`;
+    // Nomor order dibuat sekali per draf dan dipakai ulang saat kirim ulang setelah
+    // gagal jaringan, sehingga percobaan ulang tidak membuat pesanan kedua.
+    if (!draftOrderNoRef.current) draftOrderNoRef.current = `ORD-${Date.now().toString().slice(-8)}`;
+    const autoOrderNo = draftOrderNoRef.current;
 
     const schedule = pickupLater ? parsePickupSchedule(pickupDate, pickupTime) : null;
     if (pickupLater && !schedule) {
@@ -1802,7 +1922,14 @@ function CustomerDashboardPage() {
       courier_type: isFuturePickup ? null : courierType || 'INTERNAL'
     };
 
-    const { data: insertedData, error } = await insertPickupOrder(payload);
+    const { data: existingDraft } = await supabase
+      .from('pickup_orders')
+      .select('id')
+      .eq('order_number', autoOrderNo)
+      .limit(1);
+    const { data: insertedData, error } = existingDraft?.length
+      ? { data: existingDraft as { id: string }[], error: null }
+      : await insertPickupOrder(payload);
 
     if (!error && insertedData && insertedData.length > 0) {
       if (!isFuturePickup) {
@@ -1872,6 +1999,8 @@ function CustomerDashboardPage() {
       setAgreedNoValuables(false);
       setAgreedTerms(false);
       setPickupLater(false);
+      setOrderStep(1);
+      draftOrderNoRef.current = '';
 
       goActivity(isFuturePickup ? 'terjadwal' : 'berlangsung');
       fetchCustomerProfile(normPhone);
@@ -1986,7 +2115,7 @@ function CustomerDashboardPage() {
 
       {!customerData ? (
         <form onSubmit={handleLogin} className="bg-white border border-slate-200 p-6 rounded-3xl space-y-4 shadow-sm my-6">
-          <div className="w-14 h-14 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
+          <div className="w-14 h-14 bg-brand-50 text-brand-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
             <Phone className="w-6 h-6" />
           </div>
           <div className="text-center">
@@ -1998,16 +2127,22 @@ function CustomerDashboardPage() {
               </p>
             ) : null}
           </div>
-          <input
-            type="tel"
-            placeholder="Contoh: 08123456789"
-            value={customerPhone}
-            onChange={(e) => setCustomerPhone(e.target.value)}
-            className="w-full bg-slate-50 border border-slate-300 rounded-2xl px-4 py-3.5 text-sm font-bold text-slate-900 focus:outline-none focus:border-blue-600 focus:bg-white transition"
-            required
-          />
-          <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-4 rounded-2xl text-xs uppercase shadow-lg shadow-blue-200 transition">
-            Lanjutkan
+          {inlinePhoneLoginAllowed ? (
+            <input
+              type="tel"
+              placeholder="Contoh: 08123456789"
+              value={customerPhone}
+              onChange={(e) => setCustomerPhone(e.target.value)}
+              className="w-full bg-slate-50 border border-slate-300 rounded-2xl px-4 py-3.5 text-sm font-bold text-slate-900 focus:outline-none focus:border-brand-600 focus:bg-white transition"
+              required
+            />
+          ) : null}
+          <button
+            type="submit"
+            disabled={!authState}
+            className="w-full bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white font-extrabold py-4 rounded-2xl text-xs uppercase shadow-lg shadow-brand-200 transition"
+          >
+            {inlinePhoneLoginAllowed || !authState ? 'Lanjutkan' : 'Masuk dengan WhatsApp'}
           </button>
         </form>
       ) : null}
@@ -2087,7 +2222,7 @@ function CustomerDashboardPage() {
                 <button
                   type="button"
                   onClick={() => setActiveTab('order')}
-                  className="bg-white border border-slate-200 p-3 rounded-3xl flex flex-col gap-2 hover:border-blue-500 transition shadow-sm text-left min-w-0"
+                  className="bg-white border border-slate-200 p-3 rounded-3xl flex flex-col gap-2 hover:border-brand-500 transition shadow-sm text-left min-w-0"
                 >
                   <IconBadge icon={Truck} tone="blue" size="lg" />
                   <div className="min-w-0">
@@ -2109,6 +2244,28 @@ function CustomerDashboardPage() {
                   </div>
                 </button>
               </div>
+
+              <details className="group bg-white border border-slate-200 rounded-2xl px-4 py-2.5 shadow-sm text-[11px]">
+                <summary className="cursor-pointer list-none font-extrabold text-slate-700 inline-flex items-center gap-1.5">
+                  <Info className="w-3.5 h-3.5 text-brand-600" /> Arti Pesan Express, poin & deposit
+                  <ChevronRight className="w-3.5 h-3.5 transition group-open:rotate-90" />
+                </summary>
+                <ul className="mt-2 space-y-1.5 text-slate-600 leading-relaxed">
+                  <li>
+                    <b className="text-slate-800">Pesan Express</b> — pesan jemput cucian ke alamat Anda lewat aplikasi, lalu
+                    diantar kembali. Durasi cuci (Reguler, Oneday, Express 6 jam, Quick 3 jam) dipilih di langkah Layanan.
+                  </li>
+                  <li>
+                    <b className="text-slate-800">Poin loyalty</b> — cashback poin dari transaksi sesuai level Anda
+                    ({cashbackCopy(loyaltyProfile?.tier_level || 'Standard', loyaltySettings).replace(/^Level [^:]+:\s*/, '')}). 1 poin = Rp1,
+                    bisa ditukar sebagai potongan {redeemableAmounts(loyaltySettings).map((n) => idr(n)).join(' / ')} saat memesan atau di kasir.
+                  </li>
+                  <li>
+                    <b className="text-slate-800">Saldo deposit</b> — saldo prabayar dari top up (bonus saldo sesuai paket). Dipakai untuk
+                    membayar tagihan cucian di kasir outlet.
+                  </li>
+                </ul>
+              </details>
 
               <NearbyOutlets
                 items={nearbyItems}
@@ -2155,42 +2312,78 @@ function CustomerDashboardPage() {
           )}
 
           {activeTab === 'order' && (
-            <form onSubmit={handleOrderSubmit} className="space-y-4 pb-32">
-              <div className="bg-white border border-slate-200 p-5 rounded-3xl space-y-4 shadow-sm">
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-extrabold text-slate-500 uppercase">Alamat Penjemputan *</label>
-                  {savedAddresses.length > 0 && (
-                    <div className="space-y-1">
-                      <div className="flex flex-wrap gap-1.5">
-                        {savedAddresses.map((addr) => {
-                          const parts = splitHouseNumber(addr.full_address);
-                          return (
-                          <button
-                            key={addr.id}
-                            type="button"
-                            onClick={() => {
-                              setCustomerAddress(parts.street);
-                              setHouseNumber(parts.house);
-                              pickupPinLockedRef.current = Boolean(addr.latitude && addr.longitude);
-                              if (addr.latitude != null && addr.longitude != null) {
-                                setUserCoords({ lat: Number(addr.latitude), lon: Number(addr.longitude) });
-                              } else {
-                                setUserCoords(null);
-                              }
-                            }}
-                            className={`text-[10px] font-extrabold px-2.5 py-1.5 rounded-lg border ${
-                              customerAddress === parts.street
-                                ? 'bg-blue-600 text-white border-blue-600'
-                                : 'bg-white text-slate-600 border-slate-200'
-                            }`}
-                          >
-                            {addr.label}{addr.is_primary ? ' · Utama' : ''}
-                          </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
+            <form onSubmit={handleOrderSubmit} className="space-y-4 pb-48" noValidate>
+              <div className="bg-white border border-slate-200 rounded-2xl p-1.5 grid grid-cols-3 gap-1 shadow-sm" role="tablist" aria-label="Langkah pemesanan">
+                {([
+                  [1, 'Alamat & Jemput'],
+                  [2, 'Layanan'],
+                  [3, 'Periksa & Pesan']
+                ] as const).map(([n, label]) => (
+                  <button
+                    key={n}
+                    type="button"
+                    role="tab"
+                    aria-selected={orderStep === n}
+                    onClick={() => goOrderStep(n)}
+                    className={`rounded-xl px-1.5 py-2 text-left transition ${
+                      orderStep === n ? 'bg-brand-600 text-white shadow-sm' : orderStep > n ? 'bg-brand-50 text-brand-800' : 'text-slate-500'
+                    }`}
+                  >
+                    <span className="block text-[9px] font-black uppercase tracking-wide opacity-80">Langkah {n}</span>
+                    <span className="block text-[11px] font-extrabold leading-tight">{label}</span>
+                  </button>
+                ))}
+              </div>
+              {orderStep === 1 && (
+                <>
+              <div className="bg-white border border-slate-200 p-4 rounded-3xl space-y-3 shadow-sm">
+                <h3 className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wide">Alamat penjemputan *</h3>
+                {savedAddresses.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {savedAddresses.map((addr) => {
+                      const parts = splitHouseNumber(addr.full_address);
+                      const active = selectedAddressId ? selectedAddressId === addr.id : customerAddress === parts.street;
+                      return (
+                        <button
+                          key={addr.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedAddressId(addr.id);
+                            setCustomerAddress(parts.street);
+                            setHouseNumber(parts.house);
+                            pickupPinLockedRef.current = Boolean(addr.latitude && addr.longitude);
+                            if (addr.latitude != null && addr.longitude != null) {
+                              setUserCoords({ lat: Number(addr.latitude), lon: Number(addr.longitude) });
+                            } else {
+                              setUserCoords(null);
+                            }
+                          }}
+                          className={`text-[10px] font-extrabold px-2.5 py-1.5 rounded-lg border max-w-full truncate ${
+                            active ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-slate-600 border-slate-200'
+                          }`}
+                        >
+                          {addressDisplayLabel(addr, savedAddresses)}{addr.is_primary ? ' · Utama' : ''}
+                        </button>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedAddressId('NEW');
+                        setCustomerAddress('');
+                        setHouseNumber('');
+                        setPickupLandmark('');
+                        pickupPinLockedRef.current = false;
+                        setUserCoords(null);
+                      }}
+                      className={`text-[10px] font-extrabold px-2.5 py-1.5 rounded-lg border ${
+                        selectedAddressId === 'NEW' ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-brand-700 border-brand-200'
+                      }`}
+                    >
+                      + Alamat baru
+                    </button>
+                  </div>
+                )}
                   <PickupLocationPicker
                     street={customerAddress}
                     houseNo={houseNumber}
@@ -2208,116 +2401,182 @@ function CustomerDashboardPage() {
                       if (streetLabel) setCustomerAddress(splitHouseNumber(streetLabel).street);
                     }}
                   />
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Pilih Outlet</label>
-                  {!userCoords ? (
-                    <p className="text-[11px] font-semibold text-slate-500 bg-slate-50 border border-slate-200 rounded-2xl px-3 py-2.5">
-                      Isi alamat dan pasang pin dulu. Nanti muncul 3 cabang terdekat yang bisa menerima semua durasi.
-                    </p>
-                  ) : orderOutlets.length === 0 ? (
-                    <p className="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-100 rounded-2xl px-3 py-2.5">
-                      Belum ada cabang terdekat yang bisa menerima pesanan (penuh / overload).
-                    </p>
-                  ) : (
+              </div>
+              <div className="bg-white border border-slate-200 p-4 rounded-3xl space-y-3 shadow-sm">
+                <h3 className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wide">Outlet yang melayani</h3>
+                {!userCoords ? (
+                  <p className="text-[11px] font-semibold text-slate-500 bg-slate-50 border border-slate-200 rounded-2xl px-3 py-2.5">
+                    Isi alamat dan pasang pin dulu. Nanti muncul 3 cabang terdekat yang bisa menerima semua durasi.
+                  </p>
+                ) : orderOutlets.length === 0 ? (
+                  <p className="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-100 rounded-2xl px-3 py-2.5">
+                    Belum ada cabang terdekat yang bisa menerima pesanan (penuh / overload).
+                  </p>
+                ) : (
+                  <>
                     <select
                       value={selectedOutlet}
                       onChange={(e) => chooseOutlet(e.target.value, { clearQuery: true })}
-                      className="w-full bg-slate-50 border border-slate-300 rounded-2xl px-3.5 py-3 text-xs font-bold text-slate-800"
+                      aria-label="Pilih outlet"
+                      className="w-full bg-slate-50 border border-slate-300 rounded-2xl px-3.5 py-3 text-sm font-bold text-slate-800"
                     >
                       {orderOutlets.map((o) => (
                         <option key={o.id} value={o.id}>{o.name}</option>
                       ))}
                     </select>
-                  )}
+                    <p className="text-[10px] text-slate-500 font-medium">
+                      {distanceLoading
+                        ? 'Menghitung jarak ke outlet…'
+                        : distanceKm != null
+                        ? `Jarak jalan ±${distanceKm.toFixed(1)} km dari titik jemput.`
+                        : 'Outlet terdekat dari titik jemput Anda.'}
+                    </p>
+                  </>
+                )}
+              </div>
+              <div className="bg-white border border-slate-200 p-4 rounded-3xl space-y-3 shadow-sm">
+                <h3 className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wide">Waktu & metode penjemputan</h3>
+                <div className="grid grid-cols-2 gap-1 bg-slate-100 p-1 rounded-2xl">
+                  {([
+                    [false, 'Jemput sekarang'],
+                    [true, 'Jadwalkan']
+                  ] as const).map(([later, label]) => (
+                    <button
+                      key={label}
+                      type="button"
+                      onClick={() => setPickupLater(later)}
+                      aria-pressed={pickupLater === later}
+                      className={`py-2 rounded-xl text-[11px] font-extrabold inline-flex items-center justify-center gap-1 ${
+                        pickupLater === later ? 'bg-white text-brand-700 shadow-sm' : 'text-slate-500'
+                      }`}
+                    >
+                      {later ? <Calendar className="w-3.5 h-3.5" /> : <Clock className="w-3.5 h-3.5" />} {label}
+                    </button>
+                  ))}
                 </div>
-
-                <div>
-                  <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Nama Lengkap Pemesan</label>
-                  <input
-                    type="text"
-                    placeholder="Nama Anda"
-                    value={customerName}
-                    onChange={(e) => setCustomerName(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-2xl px-4 py-3 text-xs font-semibold text-slate-800"
-                    required
-                  />
-                </div>
-
-                {loyaltyProfile && (
-                  <div className="bg-emerald-50 border border-emerald-200 p-3.5 rounded-2xl space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="font-extrabold text-emerald-900 text-[11px]">Klaim poin loyalty</p>
-                      <p className="text-[10px] font-bold text-emerald-700">
-                        {Math.round(Number(loyaltyProfile.loyalty_points) || 0).toLocaleString('id-ID')} poin
-                      </p>
+                {pickupLater && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 mb-1">Tanggal</label>
+                      <input
+                        type="date"
+                        min={new Date().toISOString().split('T')[0]}
+                        value={pickupDate}
+                        onChange={(e) => setPickupDate(e.target.value)}
+                        className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-2 text-sm font-bold text-slate-800"
+                      />
                     </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {redeemableAmounts(loyaltySettings).map((amt) => {
-                        const ok = Number(loyaltyProfile.loyalty_points) >= amt && basketAfterPromo >= amt;
-                        return (
-                          <button
-                            key={amt}
-                            type="button"
-                            disabled={!ok}
-                            onClick={() => setLoyaltyRedeem((prev) => (prev === amt ? 0 : amt))}
-                            className={`px-2.5 py-1.5 rounded-xl text-[10px] font-black ${
-                              loyaltyRedeem === amt
-                                ? 'bg-emerald-600 text-white'
-                                : ok
-                                ? 'bg-white border border-emerald-200 text-emerald-800'
-                                : 'bg-white/60 border border-emerald-100 text-emerald-300'
-                            }`}
-                          >
-                            {idr(amt)}
-                          </button>
-                        );
-                      })}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 mb-1">Jam</label>
+                      <input
+                        type="time"
+                        value={pickupTime}
+                        onChange={(e) => setPickupTime(e.target.value)}
+                        className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-2 text-sm font-bold text-slate-800"
+                      />
                     </div>
+                    <p className="col-span-2 text-[10px] text-slate-500">
+                      Driver baru ditugaskan mendekati jadwal. Pesanan tampil di tab Terjadwal.
+                    </p>
                   </div>
                 )}
+                <label className="text-[10px] font-extrabold text-slate-500 uppercase block">Metode penjemputan</label>
+                  <div className="grid grid-cols-1 gap-2.5">
+                    <button
+                      type="button"
+                      disabled={!internalDriverOnDuty}
+                      onClick={() => {
+                        if (!internalDriverOnDuty) return;
+                        setCourierType('INTERNAL');
+                      }}
+                      className={`p-3.5 rounded-2xl border text-left transition ${
+                        !internalDriverOnDuty
+                          ? 'bg-slate-100 border-slate-200 opacity-60 cursor-not-allowed'
+                          : courierType === 'INTERNAL' 
+                          ? 'bg-emerald-50 border-emerald-400 ring-2 ring-emerald-100' 
+                          : 'bg-slate-50 border-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="text-xs font-black text-slate-900 inline-flex items-center gap-1">
+                          <Truck className="w-3.5 h-3.5" /> Driver Internal
+                        </span>
+                        {internalDriverOnDuty ? (
+                          <span className="bg-emerald-100 text-emerald-700 border border-emerald-200 text-[9px] font-black uppercase px-2 py-0.5 rounded-full">
+                            FREE
+                          </span>
+                        ) : (
+                          <span className="bg-slate-200 text-slate-600 text-[9px] font-black uppercase px-2 py-0.5 rounded-full">
+                            Tidak bertugas
+                          </span>
+                        )}
+                      </div>
+                      {internalDriverOnDuty ? (
+                        <p className="text-[10px] text-slate-500 font-semibold leading-relaxed">
+                          {queueCount} Antrean • Est. Penjemputan ~{estimatedPickupMinutes} Menit
+                        </p>
+                      ) : (
+                        <p className="text-[10px] text-rose-600 font-bold leading-relaxed">
+                          Driver internal cabang ini sedang tidak bertugas. Silakan pilih kurir instan/antar mandiri.
+                        </p>
+                      )}
+                    </button>
 
-                <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200/80 p-3.5 rounded-2xl flex justify-between items-center text-xs">
-                  <div>
-                    <p className="font-extrabold text-amber-900 text-[11px] inline-flex items-center gap-1">
-                      <Gift className="w-3.5 h-3.5" />
-                      {claimedPromo ? claimedPromo.title : 'Gunakan Voucher Promo'}
-                    </p>
-                    <p className="text-[9px] text-amber-700">
-                      {claimedPromo ? `Diskon Terpasang: -Rp ${promoDiscountVal.toLocaleString('id-ID')}` : 'Hemat ongkir dan cuci kiloan'}
-                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setCourierType('THIRD_PARTY')}
+                      className={`p-3.5 rounded-2xl border text-left transition ${
+                        courierType === 'THIRD_PARTY' 
+                          ? 'bg-amber-50 border-amber-400 ring-2 ring-amber-100' 
+                          : 'bg-slate-50 border-slate-200'
+                      }`}
+                    >
+                      <span className="text-xs font-black text-slate-900 inline-flex items-center gap-1">
+                        <Package className="w-3.5 h-3.5" /> Instan (Gojek / Grab / Lalamove)
+                      </span>
+                      <p className="text-[10px] text-slate-500 font-semibold leading-relaxed mt-1">
+                        {distanceLoading
+                          ? 'Menghitung estimasi ongkir…'
+                          : deliveryFee !== null
+                          ? `Estimasi ongkir antar-jemput Rp ${Number(deliveryFee).toLocaleString('id-ID')}${distanceKm != null ? ` (±${distanceKm.toFixed(1)} km)` : ''}`
+                          : 'Ongkir muncul setelah alamat & pin diisi'}{' '}
+                        • Waktu tunggu 20–30 menit • Dipesankan oleh CS
+                      </p>
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowPromoModal(true)}
-                    className="bg-amber-500 hover:bg-amber-600 text-white font-extrabold px-3 py-1.5 rounded-xl text-[10px] shadow-sm transition"
-                  >
-                    {claimedPromo ? 'Ganti' : 'Pilih Promo'}
-                  </button>
-                </div>
-
-                <div className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100 space-y-3">
+                <input
+                  type="text"
+                  placeholder="Catatan penjemputan (misal: titip di satpam)"
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3.5 text-sm text-slate-800 font-medium"
+                />
+              </div>
+                </>
+              )}
+              {orderStep === 2 && (
+                <>
+                <div className="bg-brand-50/50 p-4 rounded-2xl border border-brand-100 space-y-3">
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
                       type="checkbox"
                       checked={isKiloanChecked}
                       onChange={(e) => setIsKiloanChecked(e.target.checked)}
-                      className="w-4 h-4 accent-blue-600 rounded"
+                      className="w-4 h-4 accent-brand-600 rounded"
                     />
-                    <span className="text-xs font-extrabold text-blue-900 inline-flex items-center gap-1.5">
+                    <span className="text-xs font-extrabold text-brand-900 inline-flex items-center gap-1.5">
                       <img src="/assets/icons/washing-machine.svg" alt="" className="w-7 h-7" /> Paket Laundry Kiloan
                     </span>
                   </label>
 
                   {isKiloanChecked && (
-                    <div className="space-y-2.5 pt-2 border-t border-blue-100">
+                    <div className="space-y-2.5 pt-2 border-t border-brand-100">
                       <div>
                         <label className="block text-[10px] text-slate-500 font-bold mb-1">Pilih Jenis Kiloan</label>
                         <select
                           value={selectedKiloanSvc}
                           onChange={(e) => setSelectedKiloanSvc(e.target.value)}
-                          className="w-full bg-white border border-blue-200 rounded-xl p-2.5 text-xs font-bold text-slate-800"
+                          className="w-full bg-white border border-brand-200 rounded-xl p-2.5 text-xs font-bold text-slate-800"
                         >
                           {kiloanServicesList.map((svc, i) => (
                             <option key={i} value={svc.name}>{svc.name}</option>
@@ -2354,7 +2613,7 @@ function CustomerDashboardPage() {
                               min="3"
                               value={kiloanEstKg}
                               onChange={(e) => setKiloanEstKg(String(Math.max(3, Number(e.target.value) || 3)))}
-                              className="w-full bg-white border border-blue-200 rounded-xl p-2 text-xs font-extrabold text-blue-700 text-center"
+                              className="w-full bg-white border border-brand-200 rounded-xl p-2 text-xs font-extrabold text-brand-700 text-center"
                             />
                             <StepperBtn
                               variant="plus"
@@ -2367,17 +2626,17 @@ function CustomerDashboardPage() {
                         <label className="block text-[10px] text-slate-500 font-bold mb-1">Jumlah Pcs</label>
                         <div className="flex items-center gap-1">
                           <StepperBtn variant="minus" disabled={Number(kiloanQty) <= 1} onClick={() => setKiloanQty(String(Math.max(1, (Number(kiloanQty) || 1) - 1)))} />
-                          <input type="number" min="1" value={kiloanQty} onChange={(e) => setKiloanQty(String(Math.max(1, Number(e.target.value) || 1)))} className="w-full bg-white border border-blue-200 rounded-xl p-2 text-xs font-extrabold text-center" />
+                          <input type="number" min="1" value={kiloanQty} onChange={(e) => setKiloanQty(String(Math.max(1, Number(e.target.value) || 1)))} className="w-full bg-white border border-brand-200 rounded-xl p-2 text-xs font-extrabold text-center" />
                           <StepperBtn variant="plus" onClick={() => setKiloanQty(String((Number(kiloanQty) || 1) + 1))} />
                         </div>
                       </div>
                       <p className="text-[10px] text-slate-400 font-medium">
                         Jumlah Pcs hanya catatan kasir (contoh: 4 Kg berisi 10 Pcs), tidak mengubah harga.
                       </p>
-                      <p className="text-[10px] bg-blue-50 border border-blue-100 text-blue-800 rounded-xl px-2.5 py-1.5 font-semibold">
+                      <p className="text-[10px] bg-brand-50 border border-brand-100 text-brand-800 rounded-xl px-2.5 py-1.5 font-semibold">
                         Info: Minimal 3kg per order (1 Mesin Cuci = 1 Customer, pakaian tidak dicampur)
                       </p>
-                      <p className="text-[10px] text-blue-600 font-bold text-right">
+                      <p className="text-[10px] text-brand-600 font-bold text-right">
                         Harga: Rp {kiloanActiveUnitPrice.toLocaleString('id-ID')}/Kg · Total Rp {kiloanLineTotal(kiloanActiveUnitPrice, Math.max(3, Number(kiloanEstKg) || 3)).toLocaleString('id-ID')}
                       </p>
 
@@ -2437,20 +2696,20 @@ function CustomerDashboardPage() {
                         </div>
                       </div>
 
-                      <button type="button" onClick={handleAddKiloanToCart} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-sm inline-flex items-center justify-center gap-1.5">
+                      <button type="button" onClick={handleAddKiloanToCart} className="w-full bg-brand-600 hover:bg-brand-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-sm inline-flex items-center justify-center gap-1.5">
                         Tambah Paket Kiloan Ini
                       </button>
                       {cartKiloan.length > 0 && (
                         <div className="space-y-1.5">
                           {cartKiloan.map((item, idx) => (
-                            <div key={idx} className="bg-white p-2.5 rounded-xl flex justify-between items-center text-xs border border-blue-100">
+                            <div key={idx} className="bg-white p-2.5 rounded-xl flex justify-between items-center text-xs border border-brand-100">
                               <div>
                                 <span className="font-bold text-slate-800 block">{item.name} · {item.kg} Kg</span>
                                 <span className="text-[9px] text-slate-500 font-semibold">{item.qty} Pcs (catatan)</span>
                                 <span className="text-[9px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-bold ml-1">{item.duration}</span>
                               </div>
                               <div className="flex items-center gap-2">
-                                <span className="font-extrabold text-blue-600">Rp {kiloanLineTotal(item.price, item.kg).toLocaleString('id-ID')}</span>
+                                <span className="font-extrabold text-brand-600">Rp {kiloanLineTotal(item.price, item.kg).toLocaleString('id-ID')}</span>
                                 <button type="button" onClick={() => handleRemoveKiloan(idx)} className="text-rose-500 p-1 rounded-full hover:bg-rose-50" aria-label="Hapus">
                                   <X className="w-4 h-4" />
                                 </button>
@@ -2599,7 +2858,7 @@ function CustomerDashboardPage() {
                                 {extra && <span className="block text-[9px] text-slate-500 font-semibold mt-0.5">{extra}</span>}
                               </div>
                               <div className="flex items-center gap-2">
-                                <span className="font-extrabold text-blue-600">Rp {(item.price * item.qty).toLocaleString('id-ID')}</span>
+                                <span className="font-extrabold text-brand-600">Rp {(item.price * item.qty).toLocaleString('id-ID')}</span>
                                 <button type="button" onClick={() => handleRemoveSatuan(idx)} className="text-rose-500 p-1 rounded-full hover:bg-rose-50" aria-label="Hapus">
                                   <X className="w-4 h-4" />
                                 </button>
@@ -2613,54 +2872,140 @@ function CustomerDashboardPage() {
                   )}
                 </div>
 
-                <div className="bg-indigo-50/70 border border-indigo-100 rounded-2xl p-3.5 space-y-3">
-                  <label className="flex items-center justify-between gap-3 cursor-pointer">
-                    <span className="text-xs font-extrabold text-slate-800 inline-flex items-center gap-1.5">
-                      <Calendar className="w-3.5 h-3.5 text-indigo-600" /> Jadwalkan jemput
-                    </span>
-                    <input
-                      type="checkbox"
-                      checked={pickupLater}
-                      onChange={(e) => setPickupLater(e.target.checked)}
-                      className="w-4 h-4 accent-indigo-600 rounded"
-                    />
-                  </label>
-                  {pickupLater && (
-                    <div className="grid grid-cols-2 gap-2 pt-1 border-t border-indigo-100">
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-500 mb-1">Tanggal</label>
-                        <input
-                          type="date"
-                          min={new Date().toISOString().split('T')[0]}
-                          value={pickupDate}
-                          onChange={(e) => setPickupDate(e.target.value)}
-                          className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-2 text-xs font-bold text-slate-800"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-500 mb-1">Jam</label>
-                        <input
-                          type="time"
-                          value={pickupTime}
-                          onChange={(e) => setPickupTime(e.target.value)}
-                          className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-2 text-xs font-bold text-slate-800"
-                        />
-                      </div>
-                      <p className="col-span-2 text-[10px] text-slate-500">
-                        Driver baru ditugaskan mendekati jadwal. Pesanan tampil di tab Terjadwal.
-                      </p>
-                    </div>
-                  )}
+              <div className="bg-white border border-slate-200 p-4 rounded-3xl space-y-3 shadow-sm">
+                <h3 className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wide">Voucher & poin loyalty</h3>
+                <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200/80 p-3.5 rounded-2xl flex justify-between items-center text-xs">
+                  <div>
+                    <p className="font-extrabold text-amber-900 text-[11px] inline-flex items-center gap-1">
+                      <Gift className="w-3.5 h-3.5" />
+                      {claimedPromo ? claimedPromo.title : 'Gunakan Voucher Promo'}
+                    </p>
+                    <p className="text-[9px] text-amber-700">
+                      {claimedPromo ? `Diskon Terpasang: -Rp ${promoDiscountVal.toLocaleString('id-ID')}` : 'Hemat ongkir dan cuci kiloan'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowPromoModal(true)}
+                    className="bg-amber-500 hover:bg-amber-600 text-white font-extrabold px-3 py-1.5 rounded-xl text-[10px] shadow-sm transition"
+                  >
+                    {claimedPromo ? 'Ganti' : 'Pilih Promo'}
+                  </button>
                 </div>
 
+                {loyaltyProfile && (
+                  <div className="bg-emerald-50 border border-emerald-200 p-3.5 rounded-2xl space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-extrabold text-emerald-900 text-[11px]">Klaim poin loyalty</p>
+                      <p className="text-[10px] font-bold text-emerald-700">
+                        {Math.round(Number(loyaltyProfile.loyalty_points) || 0).toLocaleString('id-ID')} poin
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {redeemableAmounts(loyaltySettings).map((amt) => {
+                        const ok = Number(loyaltyProfile.loyalty_points) >= amt && basketAfterPromo >= amt;
+                        return (
+                          <button
+                            key={amt}
+                            type="button"
+                            disabled={!ok}
+                            onClick={() => setLoyaltyRedeem((prev) => (prev === amt ? 0 : amt))}
+                            className={`px-2.5 py-1.5 rounded-xl text-[10px] font-black ${
+                              loyaltyRedeem === amt
+                                ? 'bg-emerald-600 text-white'
+                                : ok
+                                ? 'bg-white border border-emerald-200 text-emerald-800'
+                                : 'bg-white/60 border border-emerald-100 text-emerald-300'
+                            }`}
+                          >
+                            {idr(amt)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+              </div>
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-xs flex justify-between font-bold text-slate-700">
+                <span>Subtotal layanan</span>
+                <span>Rp {rawSubtotal.toLocaleString('id-ID')}</span>
+              </div>
+                </>
+              )}
+              {orderStep === 3 && (
+                <>
+              <div className="bg-white border border-slate-200 rounded-3xl p-4 space-y-3 shadow-sm text-xs">
+                <div className="flex justify-between items-start gap-2">
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-extrabold text-slate-500 uppercase">Alamat & outlet</p>
+                    <p className="font-bold text-slate-900 mt-0.5 break-words">{composePickupAddress(customerAddress, houseNumber, pickupLandmark) || '-'}</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">
+                      {userCoords ? 'Pin gerbang terpasang' : 'Pin belum dipasang'} · Outlet: <b className="text-slate-700">{currentOutletObj?.name || '-'}</b>
+                    </p>
+                  </div>
+                  <button type="button" onClick={() => goOrderStep(1)} className="text-[10px] font-extrabold text-brand-700 inline-flex items-center gap-0.5"><Pencil className="w-3 h-3" /> Ubah</button>
+                </div>
+                <div className="flex justify-between items-start gap-2 border-t border-slate-100 pt-3">
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-extrabold text-slate-500 uppercase">Penjemputan</p>
+                    <p className="font-bold text-slate-900 mt-0.5">
+                      {pickupLater
+                        ? `Terjadwal ${(() => {
+                            const sc = parsePickupSchedule(pickupDate, pickupTime);
+                            return sc
+                              ? sc.at.toLocaleString('id-ID', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+                              : '-';
+                          })()}`
+                        : 'Jemput sekarang'}
+                      {' · '}
+                      {isInternalDriver ? 'Driver Internal' : 'Instan (Gojek / Grab / Lalamove)'}
+                    </p>
+                    {!pickupLater && isInternalDriver && (
+                      <p className="text-[10px] text-slate-500">{queueCount} antrean · est. dijemput ~{estimatedPickupMinutes} menit</p>
+                    )}
+                    {notes ? <p className="text-[10px] text-slate-500 mt-0.5">Catatan: {notes}</p> : null}
+                  </div>
+                  <button type="button" onClick={() => goOrderStep(1)} className="text-[10px] font-extrabold text-brand-700 inline-flex items-center gap-0.5"><Pencil className="w-3 h-3" /> Ubah</button>
+                </div>
+                <div className="flex justify-between items-start gap-2 border-t border-slate-100 pt-3">
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <p className="text-[10px] font-extrabold text-slate-500 uppercase">Layanan</p>
+                    {kiloanLines.map((k, i) => (
+                      <p key={`k-${i}`} className="flex justify-between gap-2 font-semibold text-slate-800">
+                        <span className="min-w-0">{k.name} · {k.kg} Kg · {k.duration}</span>
+                        <span className="shrink-0">Rp {kiloanLineTotal(k.price, k.kg).toLocaleString('id-ID')}</span>
+                      </p>
+                    ))}
+                    {isSatuanChecked &&
+                      cartSatuan.map((it, i) => (
+                        <p key={`s-${i}`} className="flex justify-between gap-2 font-semibold text-slate-800">
+                          <span className="min-w-0">{it.name} ×{it.qty} · {it.duration}</span>
+                          <span className="shrink-0">Rp {(it.price * it.qty).toLocaleString('id-ID')}</span>
+                        </p>
+                      ))}
+                    {kiloanLines.length > 0 && (bagCount || washProcess || hasFading) ? (
+                      <p className="text-[10px] text-slate-500">
+                        Kantong: {bagCount || '-'} · Cuci: {washProcess || '-'} · Luntur: {hasFading || '-'}
+                      </p>
+                    ) : null}
+                    {claimedPromo ? <p className="text-[10px] text-emerald-700 font-bold">Promo: {claimedPromo.title}</p> : null}
+                    {loyaltyDiscountVal > 0 ? <p className="text-[10px] text-emerald-700 font-bold">Poin loyalty: -{idr(loyaltyDiscountVal)}</p> : null}
+                  </div>
+                  <button type="button" onClick={() => goOrderStep(2)} className="text-[10px] font-extrabold text-brand-700 inline-flex items-center gap-0.5"><Pencil className="w-3 h-3" /> Ubah</button>
+                </div>
+              </div>
+
+              <div className="bg-white border border-slate-200 p-4 rounded-3xl shadow-sm">
+                <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Nama lengkap pemesan *</label>
                 <input
                   type="text"
-                  placeholder="Catatan Penjemputan (misal: Tolong ambil jam 2)"
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3.5 text-xs text-slate-800 font-medium"
+                  placeholder="Nama Anda"
+                  value={customerName}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-2xl px-4 py-3 text-sm font-semibold text-slate-800"
                 />
-
+              </div>
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-1.5 text-xs">
                   <div className="flex justify-between text-slate-500 font-medium"><span>Subtotal Kiloan:</span><span>Rp {kiloanSubtotal.toLocaleString('id-ID')}</span></div>
                   <div className="flex justify-between text-slate-500 font-medium"><span>Subtotal Satuan:</span><span>Rp {satuanSubtotal.toLocaleString('id-ID')}</span></div>
@@ -2691,13 +3036,13 @@ function CustomerDashboardPage() {
                     </div>
                   )}
 
-                  <div className="flex justify-between items-center font-black text-blue-600 text-sm border-t border-slate-200 pt-2 mt-1">
+                  <div className="flex justify-between items-center font-black text-brand-600 text-sm border-t border-slate-200 pt-2 mt-1">
                     <div className="flex items-center gap-1.5">
                       <span>ESTIMASI TOTAL:</span>
                       <button
                         type="button"
                         onClick={() => setShowEstimateInfoModal(true)}
-                        className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 hover:bg-blue-200 flex items-center justify-center border border-blue-200"
+                        className="w-5 h-5 rounded-full bg-brand-100 text-brand-700 hover:bg-brand-200 flex items-center justify-center border border-brand-200"
                         title="Informasi Estimasi Harga"
                       >
                         <Info className="w-3 h-3" />
@@ -2708,75 +3053,12 @@ function CustomerDashboardPage() {
                 </div>
 
                 <div className="bg-white border border-slate-200 p-4 rounded-2xl space-y-3">
-                  <label className="text-xs font-extrabold text-slate-700 block">Pilih Metode Penjemputan</label>
-                  
-                  <div className="grid grid-cols-1 gap-2.5">
-                    <button
-                      type="button"
-                      disabled={!internalDriverOnDuty}
-                      onClick={() => {
-                        if (!internalDriverOnDuty) return;
-                        setCourierType('INTERNAL');
-                      }}
-                      className={`p-3.5 rounded-2xl border text-left transition ${
-                        !internalDriverOnDuty
-                          ? 'bg-slate-100 border-slate-200 opacity-60 cursor-not-allowed'
-                          : courierType === 'INTERNAL' 
-                          ? 'bg-emerald-50 border-emerald-400 ring-2 ring-emerald-100' 
-                          : 'bg-slate-50 border-slate-200'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2 mb-1">
-                        <span className="text-xs font-black text-slate-900 inline-flex items-center gap-1">
-                          <Truck className="w-3.5 h-3.5" /> Driver Internal
-                        </span>
-                        {internalDriverOnDuty ? (
-                          <span className="bg-emerald-100 text-emerald-700 border border-emerald-200 text-[9px] font-black uppercase px-2 py-0.5 rounded-full">
-                            FREE
-                          </span>
-                        ) : (
-                          <span className="bg-slate-200 text-slate-600 text-[9px] font-black uppercase px-2 py-0.5 rounded-full">
-                            Tidak bertugas
-                          </span>
-                        )}
-                      </div>
-                      {internalDriverOnDuty ? (
-                        <p className="text-[10px] text-slate-500 font-semibold leading-relaxed">
-                          {queueCount} Antrean • Est. Penjemputan ~{estimatedPickupMinutes} Menit
-                        </p>
-                      ) : (
-                        <p className="text-[10px] text-rose-600 font-bold leading-relaxed">
-                          Driver internal cabang ini sedang tidak bertugas. Silakan pilih kurir instan/antar mandiri.
-                        </p>
-                      )}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setCourierType('THIRD_PARTY')}
-                      className={`p-3.5 rounded-2xl border text-left transition ${
-                        courierType === 'THIRD_PARTY' 
-                          ? 'bg-amber-50 border-amber-400 ring-2 ring-amber-100' 
-                          : 'bg-slate-50 border-slate-200'
-                      }`}
-                    >
-                      <span className="text-xs font-black text-slate-900 inline-flex items-center gap-1">
-                        <Package className="w-3.5 h-3.5" /> Instan (Gojek / Grab / Lalamove)
-                      </span>
-                      <p className="text-[10px] text-slate-500 font-semibold leading-relaxed mt-1">
-                        Ongkos mulai dari Rp 20.000 (Sudah Pickup & Delivery) • Waktu Tunggu 20–30 Menit • Dipesankan oleh CS
-                      </p>
-                    </button>
-                  </div>
-                </div>
-
-                <div className="bg-white border border-slate-200 p-4 rounded-2xl space-y-3">
                   <label className="flex items-start gap-2.5 cursor-pointer">
                     <input
                       type="checkbox"
                       checked={agreedNoValuables}
                       onChange={(e) => setAgreedNoValuables(e.target.checked)}
-                      className="mt-0.5 w-4 h-4 accent-blue-600 rounded shrink-0"
+                      className="mt-0.5 w-4 h-4 accent-brand-600 rounded shrink-0"
                     />
                     <span className="text-[11px] font-semibold text-slate-700 leading-relaxed">
                       Saya pastikan tidak ada barang berharga atau barang selain cucian pada saku atau tas cucian saya.
@@ -2787,7 +3069,7 @@ function CustomerDashboardPage() {
                       type="checkbox"
                       checked={agreedTerms}
                       onChange={(e) => setAgreedTerms(e.target.checked)}
-                      className="mt-0.5 w-4 h-4 accent-blue-600 rounded shrink-0"
+                      className="mt-0.5 w-4 h-4 accent-brand-600 rounded shrink-0"
                     />
                     <span className="text-[11px] font-semibold text-slate-700 leading-relaxed">
                       Dengan melanjutkan pesan sekarang, saya menyetujui{' '}
@@ -2798,7 +3080,7 @@ function CustomerDashboardPage() {
                           e.stopPropagation();
                           setShowTermsModal(true);
                         }}
-                        className="text-blue-600 font-extrabold underline underline-offset-2"
+                        className="text-brand-600 font-extrabold underline underline-offset-2"
                       >
                         S&amp;K
                       </button>
@@ -2807,13 +3089,53 @@ function CustomerDashboardPage() {
                   </label>
                 </div>
 
-                <button
-                  type="submit"
-                  disabled={isSubmitting || !agreedNoValuables || !agreedTerms}
-                  className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:hover:bg-blue-600 text-white font-extrabold py-4 rounded-2xl text-xs uppercase shadow-lg shadow-blue-200 transition inline-flex items-center justify-center gap-2"
-                >
-                  <Truck className="w-4 h-4" /> Pesan Sekarang
-                </button>
+                </>
+              )}
+              <div
+                className="fixed inset-x-0 z-40 max-w-md mx-auto px-3"
+                style={{ bottom: 'calc(4rem + env(safe-area-inset-bottom))' }}
+              >
+                <div className="bg-white/95 backdrop-blur-md border border-slate-200 rounded-2xl shadow-[0_-6px_24px_rgba(15,23,42,0.10)] p-2.5 space-y-2">
+                  {/* Pesan dihitung ulang dari isi form, sehingga hilang begitu masalahnya diperbaiki. */}
+                  {orderFormError && orderStepError(orderStep) && (
+                    <p className="text-[11px] font-bold text-rose-700 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2" role="alert">
+                      {orderStepError(orderStep)}
+                    </p>
+                  )}
+                  <div className="flex items-center gap-2">
+                    {orderStep > 1 ? (
+                      <button
+                        type="button"
+                        onClick={() => goOrderStep((orderStep - 1) as 1 | 2)}
+                        className="shrink-0 w-11 h-11 rounded-xl border border-slate-200 text-slate-600 flex items-center justify-center"
+                        aria-label="Kembali ke langkah sebelumnya"
+                      >
+                        <ArrowLeft className="w-4 h-4" />
+                      </button>
+                    ) : null}
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[9px] font-bold text-slate-500 uppercase leading-none">Estimasi total</p>
+                      <p className="text-sm font-black text-slate-900 leading-tight">Rp {grandTotalEstimate.toLocaleString('id-ID')}</p>
+                    </div>
+                    {orderStep < 3 ? (
+                      <button
+                        type="button"
+                        onClick={() => goOrderStep((orderStep + 1) as 2 | 3)}
+                        className="shrink-0 bg-brand-600 hover:bg-brand-700 text-white font-extrabold text-xs px-4 h-11 rounded-xl inline-flex items-center gap-1 shadow-md shadow-brand-600/20"
+                      >
+                        Lanjut <ChevronRight className="w-4 h-4" />
+                      </button>
+                    ) : (
+                      <button
+                        type="submit"
+                        disabled={isSubmitting}
+                        className="shrink-0 bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white font-extrabold text-xs px-4 h-11 rounded-xl inline-flex items-center gap-1.5 shadow-md shadow-brand-600/20"
+                      >
+                        <Truck className="w-4 h-4" /> {isSubmitting ? 'Memproses…' : 'Pesan Sekarang'}
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
             </form>
           )}
@@ -2866,7 +3188,7 @@ function CustomerDashboardPage() {
                 <button
                   type="button"
                   onClick={() => openCustomerChat('GENERAL_CS')}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-2xl text-xs shadow inline-flex items-center justify-center gap-2"
+                  className="w-full bg-brand-600 hover:bg-brand-700 text-white font-bold py-3 px-4 rounded-2xl text-xs shadow inline-flex items-center justify-center gap-2"
                 >
                   <Headphones className="w-4 h-4" />
                   <span>Bantuan Customer Service (Live Chat)</span>
@@ -2952,6 +3274,10 @@ function CustomerDashboardPage() {
                       </div>
                     )}
                     {ongoingOrders.map((order: any) => {
+                      const progress = customerProgressOf(order, workLogsByTx[String(order.id)]);
+                      const payment = customerPaymentOf(order);
+                      const price = priceBreakdownOf(order);
+                      const outletName = outletsList.find((o) => String(o.id) === String(order.outlet_id))?.name;
                       return (
                         <div
                           key={order.id}
@@ -2963,9 +3289,24 @@ function CustomerDashboardPage() {
                               <p className="text-[11px] font-black text-slate-800">
                                 ID Transaksi: {formatTrxId(order)}
                               </p>
+                              <p className="text-[11px] font-semibold text-slate-700 truncate">{serviceSummaryOf(order)}</p>
+                              <p className="text-[10px] text-slate-500 truncate">
+                                {outletName ? `${outletName} · ` : ''}
+                                {order.created_at
+                                  ? new Date(order.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })
+                                  : ''}
+                              </p>
                             </div>
-                            <StatusPill status={order.status || 'Menunggu Kurir'} />
+                            <PaymentBadge payment={payment} />
                           </div>
+
+                          <ProgressBar progress={progress} />
+                          <p className="text-[10px] text-slate-500 -mt-1">
+                            Estimasi selesai:{' '}
+                            <b className="text-slate-700">
+                              {isTransactionRow(order) ? formatEstSelesai(order) : 'dihitung setelah diterima outlet'}
+                            </b>
+                          </p>
 
                           <div className="flex justify-between items-center">
                             <div className="pr-2">
@@ -2982,10 +3323,17 @@ function CustomerDashboardPage() {
                               </button>
                             </div>
                             <div className="text-right whitespace-nowrap">
-                              <span className="text-[10px] text-slate-400 block font-normal">Total Estimasi</span>
-                              <span className="font-extrabold text-slate-900 text-sm">
-                                Rp {(order.amount || order.total_amount || order.estimated_price || 0).toLocaleString('id-ID')}
+                              <span className="text-[10px] text-slate-500 block font-normal">
+                                {price.isEstimate ? 'Estimasi total' : 'Total tagihan'}
                               </span>
+                              <span className="font-extrabold text-slate-900 text-sm">
+                                Rp {price.total.toLocaleString('id-ID')}
+                              </span>
+                              {price.discounts.length > 0 && (
+                                <span className="block text-[10px] text-emerald-700 font-bold">
+                                  Hemat Rp {price.discounts.reduce((a, d) => a + d.amount, 0).toLocaleString('id-ID')}
+                                </span>
+                              )}
                             </div>
                           </div>
 
@@ -3016,23 +3364,23 @@ function CustomerDashboardPage() {
 
                           {order.status === 'Driver Menuju Lokasi' && order.driver_lat && (
                             <div
-                              className="bg-blue-50/80 border border-blue-100 p-3 rounded-xl space-y-1.5 text-xs mt-1"
+                              className="bg-brand-50/80 border border-brand-100 p-3 rounded-xl space-y-1.5 text-xs mt-1"
                               onClick={(e) => e.stopPropagation()}
                             >
                               <div className="flex justify-between items-center">
-                                <span className="font-bold text-blue-900 flex items-center gap-1 text-[11px]">
+                                <span className="font-bold text-brand-900 flex items-center gap-1 text-[11px]">
                                   <MapPin className="w-3.5 h-3.5" /> Driver Sedang Menuju Lokasi
                                 </span>
                                 <a
                                   href={`https://maps.google.com/?q=${order.driver_lat},${order.driver_lon}`}
                                   target="_blank"
                                   rel="noreferrer"
-                                  className="bg-blue-600 text-white font-bold text-[10px] px-2.5 py-1 rounded-lg shadow-sm inline-flex items-center gap-1"
+                                  className="bg-brand-600 text-white font-bold text-[10px] px-2.5 py-1 rounded-lg shadow-sm inline-flex items-center gap-1"
                                 >
                                   Buka Peta Live <ChevronRight className="w-3 h-3" />
                                 </a>
                               </div>
-                              <p className="text-[10px] text-blue-600">Posisi driver diperbarui secara otomatis.</p>
+                              <p className="text-[10px] text-brand-600">Posisi driver diperbarui secara otomatis.</p>
                             </div>
                           )}
                         </div>
@@ -3165,7 +3513,7 @@ function CustomerDashboardPage() {
                           </div>
                           <div className="flex justify-between items-center pt-2 border-t border-slate-100 text-[10px]">
                             <span className="text-slate-400 font-medium">{new Date(item.date).toLocaleDateString('id-ID')}</span>
-                            <span className="font-black text-blue-600 text-xs">
+                            <span className="font-black text-brand-600 text-xs">
                               {item.receipt_number ? 'Total' : 'Ongkir'}: Rp {Number(item.price || item.amount || 0).toLocaleString('id-ID')}
                             </span>
                           </div>
@@ -3177,7 +3525,7 @@ function CustomerDashboardPage() {
                           <button
                             type="button"
                             onClick={() => setActiveTab('order')}
-                            className="bg-blue-50 text-blue-700 text-[10px] font-extrabold py-2 rounded-xl border border-blue-100"
+                            className="bg-brand-50 text-brand-700 text-[10px] font-extrabold py-2 rounded-xl border border-brand-100"
                           >
                             Pesan lagi
                           </button>
@@ -3223,8 +3571,17 @@ function CustomerDashboardPage() {
                 </div>
                 <div>
                   <span className="text-[10px] text-slate-400 uppercase font-extrabold block">Nomor WhatsApp</span>
-                  <p className="font-mono text-blue-600 font-extrabold mt-0.5">{customerPhone}</p>
+                  <p className="font-mono text-brand-600 font-extrabold mt-0.5">{customerPhone}</p>
                 </div>
+
+                <BackupEmailCard
+                  auth={authState}
+                  onLinked={() => {
+                    void fetchCustomerAuthState().then(setAuthState);
+                    toast('Email cadangan terverifikasi dan tertaut.', 'ok');
+                  }}
+                  onRelogin={goToLogin}
+                />
 
                 <div className="pt-2 border-t border-slate-100">
                   <AddressManager
@@ -3254,6 +3611,21 @@ function CustomerDashboardPage() {
 
       <PromoBannerDetailModal
         slide={selectedBanner}
+        eligibility={
+          selectedBanner?.kind === 'promo'
+            ? {
+                outletNames: (() => {
+                  const ids = selectedBanner.targetOutletIds || [];
+                  if (!ids.length || ids.some((id) => id.toUpperCase() === 'ALL')) return null;
+                  return ids.map((id) => outletsList.find((o) => String(o.id) === id)?.name).filter(Boolean) as string[];
+                })(),
+                voucher:
+                  findPromoByCode(availablePromos, selectedBanner.promoCode || '') ||
+                  availablePromos.find((p) => String(p.title || '').toLowerCase() === String(selectedBanner.title || '').toLowerCase()) ||
+                  null
+              }
+            : null
+        }
         claimed={
           !!claimedPromo &&
           selectedBanner?.kind === 'promo' &&
@@ -3303,7 +3675,7 @@ function CustomerDashboardPage() {
                 setAgreedTerms(true);
                 setShowTermsModal(false);
               }}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-3 rounded-2xl text-xs uppercase shadow-md transition"
+              className="w-full bg-brand-600 hover:bg-brand-700 text-white font-extrabold py-3 rounded-2xl text-xs uppercase shadow-md transition"
             >
               Saya Setuju
             </button>
@@ -3315,7 +3687,7 @@ function CustomerDashboardPage() {
       {showEstimateInfoModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[90] flex items-center justify-center p-4" onClick={() => setShowEstimateInfoModal(false)}>
           <div className="bg-white rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl text-center" onClick={(e) => e.stopPropagation()}>
-            <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
+            <div className="w-12 h-12 bg-brand-50 text-brand-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
               <Info className="w-6 h-6" />
             </div>
             <div>
@@ -3326,7 +3698,7 @@ function CustomerDashboardPage() {
             </div>
             <button
               onClick={() => setShowEstimateInfoModal(false)}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-3 rounded-2xl text-xs uppercase shadow-md transition"
+              className="w-full bg-brand-600 hover:bg-brand-700 text-white font-extrabold py-3 rounded-2xl text-xs uppercase shadow-md transition"
             >
               Saya Mengerti
             </button>
@@ -3674,15 +4046,20 @@ function CustomerDashboardPage() {
       <div className="p-4 overflow-y-auto space-y-4 text-xs text-slate-700">
         <div className="bg-indigo-50 p-3 rounded-xl border border-indigo-100 space-y-1.5">
           <p className="font-black text-slate-900 text-sm">ID Transaksi: {formatTrxId(detailOrder)}</p>
-          <p className="text-[11px] font-semibold text-indigo-800">Estimasi Selesai: {formatEstSelesai(detailOrder)}</p>
           <p className="text-[11px] font-semibold text-indigo-800">
-            Status Cucian: {displayStatusLabel(detailOrder.status, detailOrder) || 'Menunggu'}
-            {detailOrder.is_paid || ['paid', 'lunas'].includes(String(detailOrder.payment_status || '').toLowerCase())
-              ? ' · LUNAS'
-              : isPaymentLocked(detailOrder)
-                ? ' · Menunggu Pembayaran'
-                : ''}
+            Estimasi Selesai:{' '}
+            {isTransactionRow(detailOrder) ? formatEstSelesai(detailOrder) : 'dihitung setelah cucian diterima outlet'}
           </p>
+          {(() => {
+            const outletName = outletsList.find((o) => String(o.id) === String(detailOrder.outlet_id))?.name;
+            return outletName ? <p className="text-[11px] font-semibold text-indigo-800">Outlet: {outletName}</p> : null;
+          })()}
+          <div className="pt-1 space-y-1.5">
+            <ProgressBar progress={customerProgressOf(detailOrder, detailWorkLogs)} />
+            <p className="text-[11px] font-semibold text-slate-700 inline-flex items-center gap-1.5">
+              Pembayaran: <PaymentBadge payment={customerPaymentOf(detailOrder)} />
+            </p>
+          </div>
           {isPaymentLocked(detailOrder) ? (
             <div className="mt-2 space-y-2">
               <p className="text-[10px] text-amber-800 font-semibold">
@@ -3755,56 +4132,61 @@ function CustomerDashboardPage() {
             <Package className="w-3.5 h-3.5" /> Rincian Item & Harga
           </h4>
           {(() => {
-            const items = Array.isArray(detailOrder.items)
-              ? detailOrder.items
-              : safeParse(detailOrder.items, []);
-            if (Array.isArray(items) && items.length > 0) {
-              return (
-                <div className="space-y-1.5">
-                  {items.map((it: any, idx: number) => (
-                    <div key={idx} className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 flex justify-between items-center gap-2">
-                      <div>
-                        <span className="font-bold text-slate-800 block">{it.name || it.service_type || 'Item Cucian'}</span>
-                        <span className="text-[10px] text-slate-500">
-                          {it.weight ? `${it.weight} Kg` : ''} {it.qty ? `${it.qty} Pcs` : ''}
-                          {it.duration ? ` · ${it.duration}` : ''}
-                        </span>
+            const bd = priceBreakdownOf(detailOrder);
+            return (
+              <>
+                {bd.items.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {bd.items.map((it, idx) => (
+                      <div key={idx} className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 flex justify-between items-center gap-2">
+                        <div className="min-w-0">
+                          <span className="font-bold text-slate-800 block">{it.name}</span>
+                          {it.detail && <span className="text-[10px] text-slate-500">{it.detail}</span>}
+                        </div>
+                        <span className="font-black text-slate-900 shrink-0">Rp {it.amount.toLocaleString('id-ID')}</span>
                       </div>
-                      <div className="text-right">
-                        <span className="font-black text-slate-900 block">
-                          Rp {displayItemAmount(it).toLocaleString('id-ID')}
-                        </span>
-                        <span className="px-2 py-0.5 bg-slate-200 text-slate-700 font-bold text-[10px] rounded-md">
-                          {displayStatusLabel(it.status || detailOrder.status, detailOrder) || 'Proses'}
-                        </span>
-                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                    <p className="text-slate-600 font-medium">
+                      {detailOrder.notes || 'Detail item telah dicatat oleh kasir/driver.'}
+                    </p>
+                  </div>
+                )}
+                <div className="bg-white border border-slate-200 rounded-xl p-3 space-y-1.5">
+                  <div className="flex justify-between text-[11px] text-slate-600">
+                    <span>Subtotal layanan</span>
+                    <span>Rp {bd.subtotal.toLocaleString('id-ID')}</span>
+                  </div>
+                  {bd.discounts.map((d, i) => (
+                    <div key={i} className="flex justify-between text-[11px] font-bold text-emerald-700">
+                      <span>{d.label}</span>
+                      <span>- Rp {d.amount.toLocaleString('id-ID')}</span>
                     </div>
                   ))}
+                  {bd.deliveryFee > 0 && (
+                    <div className="flex justify-between text-[11px] text-slate-600">
+                      <span>Ongkir antar-jemput</span>
+                      <span>Rp {bd.deliveryFee.toLocaleString('id-ID')}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between font-black text-slate-900 border-t border-slate-100 pt-1.5">
+                    <span>{bd.isEstimate ? 'Estimasi total' : 'Total bayar'}</span>
+                    <span>Rp {bd.total.toLocaleString('id-ID')}</span>
+                  </div>
+                  {bd.promoNote && <p className="text-[10px] text-emerald-700 font-semibold">{bd.promoNote}</p>}
+                  {bd.isEstimate ? (
+                    <p className="text-[10px] text-slate-500">
+                      Estimasi dari form pesanan. Tagihan final dihitung kasir outlet setelah cucian ditimbang.
+                    </p>
+                  ) : bd.items.length > 0 && bd.itemsTotal !== bd.subtotal ? (
+                    <p className="text-[10px] text-slate-500">Subtotal mengikuti nota kasir (termasuk penyesuaian durasi/layanan).</p>
+                  ) : null}
                 </div>
-              );
-            }
-            return (
-              <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                <p className="text-slate-600 font-medium">
-                  {detailOrder.notes || 'Detail item telah dicatat oleh kasir/driver.'}
-                </p>
-              </div>
+              </>
             );
           })()}
-          <div className="bg-white border border-slate-100 rounded-xl p-2.5 space-y-1">
-            {Number(detailOrder.delivery_fee) > 0 && (
-              <div className="flex justify-between text-[10px] text-slate-500">
-                <span>Ongkir</span>
-                <span>Rp {Number(detailOrder.delivery_fee).toLocaleString('id-ID')}</span>
-              </div>
-            )}
-            <div className="flex justify-between font-black text-slate-900">
-              <span>Total</span>
-              <span>
-                Rp {Number(detailOrder.amount || detailOrder.price || detailOrder.estimated_price || 0).toLocaleString('id-ID')}
-              </span>
-            </div>
-          </div>
         </div>
 
         {(detailOrder.rack_location || detailOrder.rack_number || detailOrder.package_count || detailOrder.bag_count || detailOrder.rack_notes) && (
