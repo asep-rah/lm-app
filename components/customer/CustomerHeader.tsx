@@ -15,7 +15,7 @@ export default function CustomerHeader() {
           className="h-10 w-auto max-h-10 object-contain object-left shrink-0"
         />
         <div className="min-w-0">
-          <h1 className="text-base font-bold text-[#0084FF] tracking-tight leading-none">laundrivery</h1>
+          <h1 className="text-base font-bold text-brand-500 tracking-tight leading-none">laundrivery</h1>
         </div>
       </div>
     </header>

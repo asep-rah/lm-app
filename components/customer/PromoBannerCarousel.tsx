@@ -81,7 +81,7 @@ export default function PromoBannerCarousel({
       {imageSlides.length > 1 && (
         <div className="flex justify-center gap-1.5 mt-2">
           {imageSlides.map((s, i) => (
-            <span key={s.id} className={`h-1.5 rounded-full transition-all ${i === idx ? 'w-5 bg-blue-600' : 'w-1.5 bg-slate-300'}`} />
+            <span key={s.id} className={`h-1.5 rounded-full transition-all ${i === idx ? 'w-5 bg-brand-600' : 'w-1.5 bg-slate-300'}`} />
           ))}
         </div>
       )}

@@ -64,7 +64,7 @@ export default function OutletProfileDrawer({
               onClick={() => photos.length > 1 && setPhotoIdx((i) => (i + 1) % photos.length)}
             />
           ) : (
-            <div className="w-full h-full flex flex-col items-center justify-center gap-2 bg-gradient-to-br from-blue-500 to-indigo-700 text-white px-4">
+            <div className="w-full h-full flex flex-col items-center justify-center gap-2 bg-gradient-to-br from-brand-500 to-indigo-700 text-white px-4">
               <Store className="w-10 h-10 opacity-80" />
               {photos.length > 0 && (
                 <button
@@ -133,7 +133,7 @@ export default function OutletProfileDrawer({
               href={mapsUrl}
               target="_blank"
               rel="noreferrer"
-              className="flex items-center justify-center gap-2 w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs py-3.5 rounded-2xl"
+              className="flex items-center justify-center gap-2 w-full bg-brand-600 hover:bg-brand-700 text-white font-extrabold text-xs py-3.5 rounded-2xl"
             >
               <Navigation className="w-4 h-4" />
               Petunjuk Arah (Google Maps)
