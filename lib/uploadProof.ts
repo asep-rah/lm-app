@@ -42,6 +42,27 @@ const canvasToJpeg = (img: HTMLImageElement, edge: number, quality: number) => {
   return canvas.toDataURL('image/jpeg', quality);
 };
 
+/**
+ * Blob JPEG terkompresi untuk diunggah ke Supabase Storage (bukan data URL
+ * disematkan di baris DB). Dipakai foto item satuan yang wajib berhasil
+ * diunggah — lihat lib/satuanItemPhoto.ts. File non-gambar dikembalikan apa
+ * adanya (browser-only; di server mengembalikan file asli).
+ */
+export async function compressImageToBlob(file: File, opts?: { edge?: number; quality?: number }): Promise<Blob> {
+  if (typeof window === 'undefined') return file;
+  if (!file.type.startsWith('image/') || file.type.includes('gif') || file.type.includes('svg')) return file;
+  try {
+    const raw = await readAsDataUrl(file);
+    const img = await loadImage(raw);
+    const dataUrl = canvasToJpeg(img, opts?.edge ?? 1280, opts?.quality ?? 0.72);
+    if (!dataUrl) return file;
+    const res = await fetch(dataUrl);
+    return await res.blob();
+  } catch {
+    return file;
+  }
+}
+
 /** JPEG data URL cukup kecil untuk kolom Postgres text + payload PostgREST. */
 export async function fileToCompressedDataUrl(file: File): Promise<string> {
   if (typeof window === 'undefined') {

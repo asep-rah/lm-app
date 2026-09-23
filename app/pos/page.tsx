@@ -18,6 +18,8 @@ import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
 import { uploadProofFile } from '@/lib/uploadProof';
 import { cartLineAmount } from '@/lib/kiloanPrice';
 import { assertPosQtyReady } from '@/lib/posQtyGate';
+import { BAG_CATEGORY_LABELS, BAG_CATEGORY_ORDER, type BagCategoryKey } from '@/lib/kiloanBagWeights';
+import SatuanItemPhotoButton from '@/components/SatuanItemPhotoButton';
 import {
   findCustomerByPhone,
   maskPhone,
@@ -208,6 +210,10 @@ interface PickupItem {
   basePrice?: number | string;
   duration?: string;
   type?: 'kg' | 'pcs';
+  /** Rincian kiloan per kategori pakaian — diisi customer di form pemesanan online. */
+  bag_category_counts?: Record<string, string | number> | null;
+  /** Foto wajib per potong item satuan (path bucket privat, bukan URL publik). */
+  pieces?: Array<{ merk?: string; warna?: string; corak?: string; photo_path?: string | null }>;
 }
 
 export function POSContent() {
@@ -4426,6 +4432,54 @@ const handleStatusChange = async (
                       </span>
                     </div>
                   )}
+
+                  {/* Rincian per kategori (kiloan) & foto wajib (satuan) — hanya tampilan
+                      referensi untuk kasir; TIDAK dipakai untuk mengisi keranjang nota
+                      (kasir tetap menimbang & memasukkan item sendiri seperti biasa). */}
+                  {(() => {
+                    const rawItems = safeParse(customerOrder.items, []) as PickupItem[];
+                    const kiloanWithDetail = rawItems.filter((it) => it?.bag_category_counts);
+                    const satuanWithPieces = rawItems.filter((it) => Array.isArray(it?.pieces) && it.pieces.length > 0);
+                    if (!kiloanWithDetail.length && !satuanWithPieces.length) return null;
+                    return (
+                      <div className="space-y-2">
+                        {kiloanWithDetail.map((it, idx) => (
+                          <div key={`bag-${idx}`} className="bg-cyan-50 border border-cyan-200 rounded-lg p-2 text-[10px] text-cyan-900">
+                            <span className="font-extrabold block mb-1">
+                              🧺 Rincian Kantong — {it.name} {it.duration ? `(${it.duration})` : ''}
+                            </span>
+                            <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
+                              {BAG_CATEGORY_ORDER.map((key: BagCategoryKey) => (
+                                <span key={key}>
+                                  {BAG_CATEGORY_LABELS[key]}: <b>{it.bag_category_counts?.[key] ?? 0}</b>
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                        {satuanWithPieces.map((it, idx) => (
+                          <div key={`sat-${idx}`} className="bg-violet-50 border border-violet-200 rounded-lg p-2 text-[10px] text-violet-900">
+                            <span className="font-extrabold block mb-1">📸 Foto Item Satuan — {it.name}</span>
+                            <div className="flex flex-wrap gap-1.5">
+                              {it.pieces?.map((p, pIdx) =>
+                                p.photo_path ? (
+                                  <SatuanItemPhotoButton
+                                    key={pIdx}
+                                    path={p.photo_path}
+                                    label={it.pieces!.length > 1 ? `Pcs ${pIdx + 1}` : 'Lihat Foto'}
+                                  />
+                                ) : (
+                                  <span key={pIdx} className="text-[9px] font-bold text-rose-600">
+                                    Pcs {pIdx + 1}: foto tidak ada
+                                  </span>
+                                )
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
 

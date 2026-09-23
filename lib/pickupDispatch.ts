@@ -8,6 +8,41 @@ const schemaMissesColumn = (err: { message?: string } | null | undefined, column
   return msg.includes('schema cache') && msg.includes(column.toLowerCase());
 };
 
+/**
+ * Pesan ramah pelanggan untuk kegagalan membuat pesanan. Detail teknis (pesan
+ * error Postgres asli) TIDAK PERNAH ditampilkan ke pelanggan — kirim lewat
+ * reportPickupOrderError() supaya tetap bisa diperiksa di Diagnosa Sistem.
+ */
+export const friendlyPickupOrderError = (raw?: string | null): string => {
+  const msg = String(raw || '').toLowerCase();
+  if (msg.includes('not-null constraint') || msg.includes('null value')) {
+    return 'Ada data pesanan yang belum lengkap. Periksa kembali alamat, jadwal penjemputan, dan layanan, lalu coba kirim lagi.';
+  }
+  if (msg.includes('failed to fetch') || msg.includes('networkerror') || msg.includes('network request failed')) {
+    return 'Koneksi internet bermasalah. Periksa jaringan Anda, lalu coba lagi.';
+  }
+  if (msg.includes('duplicate') || msg.includes('unique constraint')) {
+    return 'Pesanan ini sepertinya sudah tersimpan. Cek tab Aktivitas sebelum memesan ulang.';
+  }
+  return 'Pesanan gagal disimpan. Coba lagi dalam beberapa saat, atau hubungi Live Chat bila terus terjadi.';
+};
+
+/**
+ * Kirim detail error teknis (pesan asli, payload ringkas) ke error_logs lewat
+ * API server-side — best-effort, tidak pernah melempar ke pemanggil.
+ */
+export async function reportPickupOrderError(message: string, context?: Record<string, unknown>): Promise<void> {
+  try {
+    await fetch('/api/customer/order/report-error', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stage: 'pickup_order_create', message, context })
+    });
+  } catch {
+    /* best-effort: kegagalan logging tidak boleh mengganggu alur pelanggan */
+  }
+}
+
 export async function findPickupIdByTransaction(txId: string): Promise<string | null> {
   if (!txId) return null;
   try {

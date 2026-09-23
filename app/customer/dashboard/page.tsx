@@ -10,7 +10,13 @@ import { findPromoByCode, mapDbPromo, mapSettingsPromo, promoDiscountRp, promoIs
 import { cashbackCopy, DEFAULT_CRM_SETTINGS, idr, type CrmProfile, type CrmSettings } from '@/lib/crm';
 import { loadFreshCrmProfile } from '@/lib/crm-automation';
 import { redeemLoyaltyPoints, redeemableAmounts } from '@/lib/loyaltyRedeem';
-import { createPickupRoleTasks, insertPickupOrder, requestDriverDelivery } from '@/lib/pickupDispatch';
+import {
+  createPickupRoleTasks,
+  friendlyPickupOrderError,
+  insertPickupOrder,
+  reportPickupOrderError,
+  requestDriverDelivery
+} from '@/lib/pickupDispatch';
 import { stageKeyOf, type WorkLogRow } from '@/lib/stageTimeline';
 import { laundryFallbackReply } from '@/lib/laundryFaq';
 import {
@@ -20,6 +26,19 @@ import {
 } from '@/lib/thirdPartyDelivery';
 import { fileToCompressedDataUrl, uploadChatAttachment, uploadProofFile } from '@/lib/uploadProof';
 import { kiloanLineTotal } from '@/lib/kiloanPrice';
+import {
+  bagCategoryCountsComplete,
+  bagCategoryCountsValid,
+  BAG_CATEGORY_LABELS,
+  BAG_CATEGORY_ORDER,
+  emptyBagCategoryCounts,
+  KILOAN_MIN_ORDER_KG,
+  kiloanOrderKgOf,
+  MAX_KILOAN_BAGS,
+  summarizeBagWeight,
+  type BagCategoryCounts
+} from '@/lib/kiloanBagWeights';
+import { satuanItemHasRequiredPhotos, uploadSatuanItemPhoto } from '@/lib/satuanItemPhoto';
 import { formatEstSelesai, formatTrxId } from '@/lib/posQueue';
 import { DEPOSIT_PACKAGES, depositBonusOf, depositPackageShort } from '@/lib/depositTopup';
 import { requestMayarInvoice, simulateMayarAutoPay } from '@/lib/mayar';
@@ -77,6 +96,7 @@ import {
   isOngoingOrder,
   isOrderFinished,
   isScheduledOrder,
+  localDateISO,
   parseActivityTab,
   scheduleAtOf,
   parsePickupSchedule,
@@ -108,6 +128,7 @@ import {
   ArrowLeft,
   Box,
   Calendar,
+  Camera,
   CheckCircle2,
   ChevronRight,
   ClipboardList,
@@ -118,6 +139,7 @@ import {
   History,
   Info,
   ListTodo,
+  Loader2,
   MapPin,
   Navigation,
   Package,
@@ -207,6 +229,27 @@ const calculateDistanceKm = (lat1: number, lon1: number, lat2: number, lon2: num
   return R * c;
 };
 
+/** Satu kantong kiloan: isian jumlah per kategori + layanan & durasi (dipakai per-kantong hanya saat mode "Pisah Perkantong"). */
+type KiloanBagForm = { categories: BagCategoryCounts; serviceName: string; duration: string };
+const emptyKiloanBagForm = (serviceName = '', duration = 'Reguler (3 Hari)'): KiloanBagForm => ({
+  categories: emptyBagCategoryCounts(),
+  serviceName,
+  duration
+});
+
+/** Form satu potong item satuan sedang diisi — termasuk progres unggah foto wajibnya. */
+type SatuanPieceForm = {
+  merk: string;
+  warna: string;
+  corak: string;
+  photoPath?: string;
+  photoPreviewUrl?: string;
+  photoUploading?: boolean;
+  photoError?: string;
+};
+/** Bentuk tersimpan (keranjang & payload) — hanya path foto, tanpa state progres UI. */
+type SatuanPieceRecord = { merk: string; warna: string; corak: string; photo_path?: string };
+
 const paymentMethod: any = "CASH";
 
 const ensureOutletInList = (list: any[], all: any[], id: string) => {
@@ -249,7 +292,7 @@ function CustomerDashboardPage() {
   const [pickupDate, setPickupDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + 1);
-    return d.toISOString().split('T')[0];
+    return localDateISO(d);
   });
   const [pickupTime, setPickupTime] = useState('09:00');
   const [scheduleBusyId, setScheduleBusyId] = useState<string | null>(null);
@@ -308,20 +351,27 @@ function CustomerDashboardPage() {
 
   const [isKiloanChecked, setIsKiloanChecked] = useState(false);
   const [selectedKiloanSvc, setSelectedKiloanSvc] = useState('');
-  const [kiloanEstKg, setKiloanEstKg] = useState('3');
-  const [kiloanQty, setKiloanQty] = useState('1');
   const [kiloanDuration, setKiloanDuration] = useState('Reguler (3 Hari)');
-  const [cartKiloan, setCartKiloan] = useState<Array<{ name: string; kg: number; qty: number; duration: string; price: number }>>([]);
+  const [cartKiloan, setCartKiloan] = useState<
+    Array<{ name: string; kg: number; qty: number; duration: string; price: number; bagDetail?: BagCategoryCounts }>
+  >([]);
+  // Kg & pcs kiloan SELALU dihitung otomatis dari isian per kategori pakaian
+  // (lihat lib/kiloanBagWeights.ts) — tidak ada lagi input kg/pcs manual.
+  const [kiloanBagForms, setKiloanBagForms] = useState<KiloanBagForm[]>([emptyKiloanBagForm()]);
+  const [kiloanFormError, setKiloanFormError] = useState('');
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
   const [isSatuanChecked, setIsSatuanChecked] = useState(false);
-  const [cartSatuan, setCartSatuan] = useState<Array<{ name: string; basePrice: number; price: number; qty: number; duration: string; pieces?: Array<{ merk: string; warna: string; corak: string }> }>>([]);
+  const [cartSatuan, setCartSatuan] = useState<
+    Array<{ name: string; basePrice: number; price: number; qty: number; duration: string; pieces?: SatuanPieceRecord[] }>
+  >([]);
   const [selectedSatuanSvc, setSelectedSatuanSvc] = useState('');
   const [inputSatuanQty, setInputSatuanQty] = useState('1');
   const [satuanInputDuration, setSatuanInputDuration] = useState('Reguler (3 Hari)');
-  const emptySatuanPiece = () => ({ merk: '', warna: '', corak: '' });
-  const [satuanPieceNotes, setSatuanPieceNotes] = useState<Array<{ merk: string; warna: string; corak: string }>>([{ merk: '', warna: '', corak: '' }]);
+  const emptySatuanPiece = (): SatuanPieceForm => ({ merk: '', warna: '', corak: '' });
+  const [satuanPieceNotes, setSatuanPieceNotes] = useState<SatuanPieceForm[]>([emptySatuanPiece()]);
   const [satuanNotesSame, setSatuanNotesSame] = useState(true);
+  const [satuanFormError, setSatuanFormError] = useState('');
   const [agreedNoValuables, setAgreedNoValuables] = useState(false);
   const [agreedTerms, setAgreedTerms] = useState(false);
   const [showTermsModal, setShowTermsModal] = useState(false);
@@ -395,8 +445,8 @@ function CustomerDashboardPage() {
       setIsSubmitting(false);
     }
   };
-  const [bagCount, setBagCount] = useState('');
-  const [washProcess, setWashProcess] = useState('');
+  const [bagCount, setBagCount] = useState('1');
+  const [washProcess, setWashProcess] = useState('Gabung Semua');
   const [hasFading, setHasFading] = useState('');
   const [thirdPartyVendor, setThirdPartyVendor] = useState('');
 
@@ -1595,16 +1645,119 @@ function CustomerDashboardPage() {
     return 7000;
   };
 
+  // Kiloan "dipisah" hanya berlaku bermakna kalau lebih dari 1 kantong —
+  // 1 kantong dipisah/dicampur sama saja (satu paket).
+  const isSplitKiloanBags = washProcess === 'Pisah Perkantong' && Number(bagCount) > 1;
+
+  // Jumlah & isi form per-kantong mengikuti bagCount/washProcess, meniru pola
+  // resize satuanPieceNotes di atas. Form yang sudah ada dipertahankan; form
+  // baru diisi awal dengan layanan/durasi kiloan yang sedang dipilih.
+  useEffect(() => {
+    const n = isSplitKiloanBags ? Math.max(1, Math.min(MAX_KILOAN_BAGS, Number(bagCount) || 1)) : 1;
+    setKiloanBagForms((prev) =>
+      Array.from({ length: n }, (_, i) => prev[i] || emptyKiloanBagForm(selectedKiloanSvc, kiloanDuration))
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bagCount, isSplitKiloanBags]);
+
+  const patchKiloanBagCategory = (bagIdx: number, key: (typeof BAG_CATEGORY_ORDER)[number], value: string) => {
+    setKiloanFormError('');
+    setKiloanBagForms((prev) =>
+      prev.map((f, i) => (i === bagIdx ? { ...f, categories: { ...f.categories, [key]: value } } : f))
+    );
+  };
+
+  const patchKiloanBagField = (bagIdx: number, field: 'serviceName' | 'duration', value: string) => {
+    setKiloanFormError('');
+    setKiloanBagForms((prev) => prev.map((f, i) => (i === bagIdx ? { ...f, [field]: value } : f)));
+  };
+
+  const kiloanUnitPriceFor = (svcName: string, duration: string) =>
+    Math.round(getServiceUnitPrice(svcName) * getDurationMultiplier(duration));
+
+  /** 5 isian jumlah per kategori pakaian (satu kantong). Dipakai mode gabung (bagIdx 0) & mode pisah (per kantong). */
+  const renderKiloanBagCategoryInputs = (bagIdx: number, categories: BagCategoryCounts) => (
+    <div className="grid grid-cols-2 gap-2">
+      {BAG_CATEGORY_ORDER.map((key) => (
+        <div key={key}>
+          <label className="block text-[9px] text-slate-500 font-bold mb-0.5">{BAG_CATEGORY_LABELS[key]}</label>
+          <input
+            type="number"
+            min="0"
+            inputMode="numeric"
+            placeholder="0"
+            aria-label={`${BAG_CATEGORY_LABELS[key]} Kantong ${bagIdx + 1}`}
+            value={categories[key]}
+            onChange={(e) => patchKiloanBagCategory(bagIdx, key, e.target.value.replace(/[^\d]/g, ''))}
+            className="w-full bg-white border border-brand-200 rounded-xl p-2 text-xs font-extrabold text-center"
+          />
+        </div>
+      ))}
+    </div>
+  );
+
+  /**
+   * Validasi & commit ke keranjang. Mode gabung: SATU form (kiloanBagForms[0])
+   * memakai layanan/durasi di atas (selectedKiloanSvc/kiloanDuration), berapa
+   * pun jumlah kantongnya — bukan berarti membuat 2 paket hanya karena
+   * bagCount=2. Mode pisah (>1 kantong): SEMUA kantong divalidasi dulu,
+   * lalu ditambahkan sekaligus, masing-masing dengan layanan/durasi sendiri.
+   */
   const handleAddKiloanToCart = () => {
-    if (!selectedKiloanSvc) return;
-    const kg = Math.max(3, Number(kiloanEstKg) || 3);
-    const qty = Math.max(1, Number(kiloanQty) || 1);
-    setCartKiloan((prev) => [
-      ...prev,
-      { name: selectedKiloanSvc, kg, qty, duration: kiloanDuration, price: kiloanActiveUnitPrice }
-    ]);
-    setKiloanEstKg('3');
-    setKiloanQty('1');
+    setKiloanFormError('');
+    if (isSplitKiloanBags) {
+      const n = Math.max(1, Math.min(MAX_KILOAN_BAGS, Number(bagCount) || 1));
+      const forms = kiloanBagForms.slice(0, n);
+      for (let i = 0; i < n; i++) {
+        const f = forms[i];
+        if (!f?.serviceName) {
+          setKiloanFormError(`Pilih jenis kiloan untuk Kantong ${i + 1}.`);
+          return;
+        }
+        if (!bagCategoryCountsComplete(f.categories)) {
+          setKiloanFormError(`Lengkapi semua isian jumlah di Kantong ${i + 1} (boleh 0, tidak boleh kosong).`);
+          return;
+        }
+        if (!bagCategoryCountsValid(f.categories)) {
+          setKiloanFormError(`Total isian Kantong ${i + 1} harus lebih dari 0.`);
+          return;
+        }
+      }
+      const newLines = forms.map((f) => {
+        const { pcs, kg } = summarizeBagWeight(f.categories);
+        return {
+          name: f.serviceName,
+          kg,
+          qty: pcs,
+          duration: f.duration,
+          price: kiloanUnitPriceFor(f.serviceName, f.duration),
+          bagDetail: { ...f.categories }
+        };
+      });
+      setCartKiloan((prev) => [...prev, ...newLines]);
+    } else {
+      if (!selectedKiloanSvc) {
+        setKiloanFormError('Pilih jenis kiloan dulu.');
+        return;
+      }
+      const f = kiloanBagForms[0] || emptyKiloanBagForm();
+      if (!bagCategoryCountsComplete(f.categories)) {
+        setKiloanFormError('Lengkapi semua isian jumlah (boleh 0, tidak boleh kosong).');
+        return;
+      }
+      if (!bagCategoryCountsValid(f.categories)) {
+        setKiloanFormError('Total isian harus lebih dari 0.');
+        return;
+      }
+      const { pcs, kg } = summarizeBagWeight(f.categories);
+      setCartKiloan((prev) => [
+        ...prev,
+        { name: selectedKiloanSvc, kg, qty: pcs, duration: kiloanDuration, price: kiloanActiveUnitPrice, bagDetail: { ...f.categories } }
+      ]);
+    }
+    setBagCount('1');
+    setWashProcess('Gabung Semua');
+    setKiloanBagForms([emptyKiloanBagForm(selectedKiloanSvc, kiloanDuration)]);
   };
 
   const handleRemoveKiloan = (idx: number) => {
@@ -1642,6 +1795,74 @@ function CustomerDashboardPage() {
     });
   };
 
+  // Foto wajib per potong. Mode "semua pcs sama": mengunggah/menghapus di
+  // slot 0 berlaku untuk semua potong (sama seperti merk/warna/corak di atas).
+  // Mode berbeda per pcs: setiap indeks independen.
+  const handleSatuanPiecePhotoSelect = async (idx: number, file: File | null) => {
+    if (!file) return;
+    setSatuanFormError('');
+    const applyPatch = (patch: Partial<SatuanPieceForm>) =>
+      setSatuanPieceNotes((prev) =>
+        satuanNotesSame ? prev.map((p) => ({ ...p, ...patch })) : prev.map((p, i) => (i === idx ? { ...p, ...patch } : p))
+      );
+    applyPatch({ photoUploading: true, photoError: undefined });
+    try {
+      const { path, previewUrl } = await uploadSatuanItemPhoto(file, `satuan_${cleanPhone(customerPhone) || 'anon'}_${idx}`);
+      // Cabut pratinjau lama sebelum diganti supaya tidak bocor memori.
+      setSatuanPieceNotes((prev) => {
+        prev.forEach((p, i) => {
+          if (p.photoPreviewUrl && (satuanNotesSame || i === idx)) {
+            try {
+              URL.revokeObjectURL(p.photoPreviewUrl);
+            } catch {
+              /* ignore */
+            }
+          }
+        });
+        return prev;
+      });
+      applyPatch({ photoPath: path, photoPreviewUrl: previewUrl, photoUploading: false, photoError: undefined });
+    } catch (err: any) {
+      applyPatch({ photoUploading: false, photoError: err?.message || 'Gagal mengunggah foto. Coba lagi.' });
+    }
+  };
+
+  const handleRemoveSatuanPiecePhoto = (idx: number) => {
+    setSatuanPieceNotes((prev) => {
+      const next = prev.map((p, i) => {
+        if (!(satuanNotesSame || i === idx)) return p;
+        if (p.photoPreviewUrl) {
+          try {
+            URL.revokeObjectURL(p.photoPreviewUrl);
+          } catch {
+            /* ignore */
+          }
+        }
+        return { ...p, photoPath: undefined, photoPreviewUrl: undefined, photoError: undefined };
+      });
+      return next;
+    });
+  };
+
+  /** Slot foto yang WAJIB terisi saat ini: 1 slot bila "semua pcs sama", N slot bila berbeda per pcs. */
+  const requiredSatuanPhotoSlots = () =>
+    satuanNotesSame ? satuanPieceNotes.slice(0, 1) : satuanPieceNotes.slice(0, Number(inputSatuanQty) || 1);
+
+  const resetSatuanPiecePhotos = () => {
+    setSatuanPieceNotes((prev) => {
+      prev.forEach((p) => {
+        if (p.photoPreviewUrl) {
+          try {
+            URL.revokeObjectURL(p.photoPreviewUrl);
+          } catch {
+            /* ignore */
+          }
+        }
+      });
+      return prev;
+    });
+  };
+
   useEffect(() => {
     const n = Math.max(1, Math.min(12, Number(inputSatuanQty) || 1));
     setSatuanPieceNotes((prev) => {
@@ -1655,24 +1876,46 @@ function CustomerDashboardPage() {
   }, [inputSatuanQty, satuanNotesSame]);
 
   const handleAddSatuanToCart = () => {
-    if (!selectedSatuanSvc) return;
-    const basePrice = getServiceUnitPrice(selectedSatuanSvc);
+    setSatuanFormError('');
+    if (!selectedSatuanSvc) {
+      setSatuanFormError('Pilih item satuan dulu.');
+      return;
+    }
     const qty = Number(inputSatuanQty) || 1;
+    // Wajib foto: minimal 1 slot (mode sama) atau N slot (mode beda per pcs)
+    // sudah punya foto yang BERHASIL diunggah — tidak sedang mengunggah, dan
+    // tidak gagal. Tidak pernah menganggap unggahan yang gagal/belum selesai
+    // sebagai cukup untuk lanjut.
+    const slots = requiredSatuanPhotoSlots();
+    const missingIdx = slots.findIndex((p) => !p.photoPath || p.photoUploading || p.photoError);
+    if (missingIdx !== -1) {
+      const slot = slots[missingIdx];
+      setSatuanFormError(
+        slot?.photoUploading
+          ? 'Tunggu sampai foto selesai diunggah sebelum menambahkan item.'
+          : slot?.photoError
+          ? `Foto ${satuanNotesSame ? '' : `Pcs ${missingIdx + 1} `}gagal diunggah: ${slot.photoError}`
+          : `Unggah foto ${satuanNotesSame ? 'item ini' : `untuk Pcs ${missingIdx + 1}`} dulu — wajib sebelum item bisa ditambahkan.`
+      );
+      return;
+    }
+    const basePrice = getServiceUnitPrice(selectedSatuanSvc);
     const mult = getDurationMultiplier(satuanInputDuration);
     const finalPrice = Math.round(basePrice * mult);
-    const pieces = (satuanNotesSame
+    const pieces: SatuanPieceRecord[] = (satuanNotesSame
       ? Array.from({ length: qty }, () => ({ ...(satuanPieceNotes[0] || emptySatuanPiece()) }))
       : satuanPieceNotes.slice(0, qty)
-    ).map((p) => ({ merk: p.merk.trim(), warna: p.warna.trim(), corak: p.corak.trim() }));
+    ).map((p) => ({ merk: p.merk.trim(), warna: p.warna.trim(), corak: p.corak.trim(), photo_path: p.photoPath }));
 
-    setCartSatuan([...cartSatuan, { 
-      name: selectedSatuanSvc, 
-      basePrice, 
-      price: finalPrice, 
-      qty, 
+    setCartSatuan([...cartSatuan, {
+      name: selectedSatuanSvc,
+      basePrice,
+      price: finalPrice,
+      qty,
       duration: satuanInputDuration,
       pieces
     }]);
+    resetSatuanPiecePhotos();
     setInputSatuanQty('1');
     setSatuanNotesSame(true);
     setSatuanPieceNotes([emptySatuanPiece()]);
@@ -1684,12 +1927,12 @@ function CustomerDashboardPage() {
 
   const kiloanBaseUnitPrice = getServiceUnitPrice(selectedKiloanSvc);
   const kiloanActiveUnitPrice = Math.round(kiloanBaseUnitPrice * getDurationMultiplier(kiloanDuration));
-  const kiloanLines = cartKiloan.length
-    ? cartKiloan
-    : isKiloanChecked
-    ? [{ name: selectedKiloanSvc, kg: Math.max(3, Number(kiloanEstKg) || 3), qty: Math.max(1, Number(kiloanQty) || 1), duration: kiloanDuration, price: kiloanActiveUnitPrice }]
-    : [];
+  // Kiloan HANYA masuk hitungan setelah ditekan "Tambah Paket Kiloan Ini" —
+  // tidak ada lagi fallback implisit dari form yang belum di-commit (form
+  // sekarang berisi rincian per kategori, bukan sekadar kg/pcs tunggal).
+  const kiloanLines = cartKiloan;
   const kiloanSubtotal = kiloanLines.reduce((sum, line) => sum + kiloanLineTotal(line.price, line.kg), 0);
+  const kiloanTotalKg = kiloanOrderKgOf(kiloanLines);
 
   let satuanSubtotal = 0;
   if (isSatuanChecked) {
@@ -1758,8 +2001,17 @@ function CustomerDashboardPage() {
       if (!isKiloanChecked && !kiloanLines.length && (!isSatuanChecked || cartSatuan.length === 0)) {
         return 'Pilih minimal 1 paket Kiloan atau Satuan!';
       }
+      if (isKiloanChecked && kiloanLines.length === 0) {
+        return 'Tekan "Tambah Paket Kiloan Ini" untuk memasukkan kiloan, atau hapus centang Paket Laundry Kiloan.';
+      }
+      if (kiloanLines.length > 0 && kiloanOrderKgOf(kiloanLines) < KILOAN_MIN_ORDER_KG) {
+        return `Total kiloan minimal ${KILOAN_MIN_ORDER_KG} kg (saat ini ~${kiloanOrderKgOf(kiloanLines)} kg). Tambah cucian kiloan lagi.`;
+      }
       if (isSatuanChecked && cartSatuan.length === 0) {
         return 'Tekan "Tambah Item Satuan Ini" untuk memasukkan item satuan, atau hapus centang Items Satuan.';
+      }
+      if (isSatuanChecked && cartSatuan.some((it) => !satuanItemHasRequiredPhotos(it))) {
+        return 'Setiap item satuan wajib punya foto. Lengkapi foto pada item yang belum sebelum lanjut.';
       }
       return '';
     }
@@ -1858,8 +2110,19 @@ function CustomerDashboardPage() {
     const isFuturePickup = !!schedule;
 
     const hasKiloanOrder = kiloanLines.length > 0;
+    // bagCount/washProcess di state hanya berlaku untuk kantong yang SEDANG
+    // diisi (di-reset tiap kali "Tambah Paket Kiloan Ini" ditekan). Nilai yang
+    // dikirim ke payload harus mencerminkan HASIL AKHIR keranjang kiloan:
+    // berapa paket kiloan terpisah yang benar-benar jadi, bukan status form
+    // yang sudah direset.
+    const finalKiloanBagCount = hasKiloanOrder ? kiloanLines.length : 1;
+    const finalKiloanWashProcess = hasKiloanOrder
+      ? kiloanLines.length > 1
+        ? 'Pisah Perkantong'
+        : 'Gabung Semua'
+      : '';
     const detailInfo = hasKiloanOrder
-      ? `[INFO CUCIAN] Kantong: ${bagCount || '-'} | Cuci: ${washProcess || '-'} | Luntur: ${hasFading || '-'}`
+      ? `[INFO CUCIAN] Kantong: ${finalKiloanBagCount} | Cuci: ${finalKiloanWashProcess || '-'} | Luntur: ${hasFading || '-'}`
       : '';
     const statementNote = '[PERNYATAAN] Tidak ada barang berharga / selain cucian pada saku atau tas';
     const termsNote = '[S&K] Disetujui';
@@ -1880,13 +2143,17 @@ function CustomerDashboardPage() {
           notes: formatSatuanPiecesNotes(i.pieces)
         }))
       : [];
+    // bag_category_counts dikirim terstruktur (per kategori pakaian) supaya
+    // POS/kasir bisa melihat rincian yang customer isi, bukan hanya kg total —
+    // lihat "Data Penjemputan Terisi Otomatis" di app/pos/page.tsx.
     const kiloanItems = kiloanLines.map((k) => ({
       name: k.name,
       qty: Number(k.qty) || 1,
-      weight: Number(k.kg) || 3,
+      weight: Number(k.kg) || 0,
       price: Number(k.price) || 0,
       duration: k.duration || 'Reguler (3 Hari)',
-      type: 'kg' as const
+      type: 'kg' as const,
+      bag_category_counts: k.bagDetail || null
     }));
     const itemsPayload = [...kiloanItems, ...satuanItems];
 
@@ -1907,14 +2174,18 @@ function CustomerDashboardPage() {
         return /^[0-9a-f-]{36}$/i.test(id) ? id : null;
       })(),
       duration: kiloanDuration || 'Reguler (3 Hari)',
-      bag_count: hasKiloanOrder ? (Number(bagCount) || 1) : 1,
-      wash_process: hasKiloanOrder ? (washProcess || 'Pisah') : '',
+      bag_count: finalKiloanBagCount,
+      wash_process: finalKiloanWashProcess,
       has_fading: hasKiloanOrder && hasFading === 'Ya',
       has_valuables: false,
       items: itemsPayload,
       delivery_fee: Number(finalOngkir) || 0,
       notes: finalNotes,
-      pickup_date: isFuturePickup && schedule ? schedule.date : null,
+      // "Jemput sekarang": pickup_date wajib diisi (kolom NOT NULL) — pakai
+      // tanggal hari ini di zona waktu lokal pelanggan, tanpa pickup_time
+      // eksplisit, supaya order tetap terklasifikasi "Berlangsung" (bukan
+      // "Terjadwal") — lihat isScheduledOrder di lib/customerActivity.ts.
+      pickup_date: isFuturePickup && schedule ? schedule.date : localDateISO(),
       pickup_time: isFuturePickup && schedule ? schedule.time : null,
       scheduled_at: isFuturePickup && schedule ? schedule.iso : null,
       pickup_at: isFuturePickup && schedule ? schedule.iso : null,
@@ -1986,15 +2257,16 @@ function CustomerDashboardPage() {
       setNotes('');
       setClaimedPromo(null);
       setLoyaltyRedeem(0);
-      setKiloanEstKg('3');
-      setKiloanQty('1');
       setKiloanDuration('Reguler (3 Hari)');
+      setKiloanBagForms([emptyKiloanBagForm()]);
+      setKiloanFormError('');
       setIsKiloanChecked(false);
       setIsSatuanChecked(false);
       setSatuanNotesSame(true);
       setSatuanPieceNotes([{ merk: '', warna: '', corak: '' }]);
-      setBagCount('');
-      setWashProcess('');
+      resetSatuanPiecePhotos();
+      setBagCount('1');
+      setWashProcess('Gabung Semua');
       setHasFading('');
       setAgreedNoValuables(false);
       setAgreedTerms(false);
@@ -2005,7 +2277,14 @@ function CustomerDashboardPage() {
       goActivity(isFuturePickup ? 'terjadwal' : 'berlangsung');
       fetchCustomerProfile(normPhone);
     } else {
-      alert('Gagal membuat pesanan: ' + (error?.message || 'Koneksi bermasalah'));
+      // Jangan tampilkan pesan error database mentah ke pelanggan — tampilkan
+      // pesan yang bisa dipahami, dan kirim detail teknisnya untuk diperiksa
+      // lewat Diagnosa Sistem (Owner).
+      toast(friendlyPickupOrderError(error?.message), 'err');
+      void reportPickupOrderError(error?.message || 'Gagal insert pickup_orders tanpa pesan error', {
+        payload,
+        isFuturePickup
+      });
     }
     setIsSubmitting(false);
   };
@@ -2460,7 +2739,7 @@ function CustomerDashboardPage() {
                       <label className="block text-[10px] font-bold text-slate-500 mb-1">Tanggal</label>
                       <input
                         type="date"
-                        min={new Date().toISOString().split('T')[0]}
+                        min={localDateISO()}
                         value={pickupDate}
                         onChange={(e) => setPickupDate(e.target.value)}
                         className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-2 text-sm font-bold text-slate-800"
@@ -2571,75 +2850,6 @@ function CustomerDashboardPage() {
 
                   {isKiloanChecked && (
                     <div className="space-y-2.5 pt-2 border-t border-brand-100">
-                      <div>
-                        <label className="block text-[10px] text-slate-500 font-bold mb-1">Pilih Jenis Kiloan</label>
-                        <select
-                          value={selectedKiloanSvc}
-                          onChange={(e) => setSelectedKiloanSvc(e.target.value)}
-                          className="w-full bg-white border border-brand-200 rounded-xl p-2.5 text-xs font-bold text-slate-800"
-                        >
-                          {kiloanServicesList.map((svc, i) => (
-                            <option key={i} value={svc.name}>{svc.name}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <label className="text-[10px] text-slate-500 font-bold mb-1 inline-flex items-center gap-1">
-                            Durasi Kiloan <SlaBadge duration={kiloanDuration} />
-                          </label>
-                          <select
-                            value={kiloanDuration}
-                            onChange={(e) => setKiloanDuration(e.target.value)}
-                            className="w-full bg-amber-50 border border-amber-300 rounded-xl p-2 text-xs font-extrabold text-amber-800"
-                          >
-                            <option value="Reguler (3 Hari)">Reguler 3 Hari</option>
-                            <option value="Oneday">Oneday 24jam</option>
-                            <option value="Express">Express 6 Jam</option>
-                            <option value="Quick">Quick 3 Jam</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label className="block text-[10px] text-slate-500 font-bold mb-1">Estimasi (Kg)</label>
-                          <div className="flex items-center gap-1">
-                            <StepperBtn
-                              variant="minus"
-                              disabled={Number(kiloanEstKg) <= 3}
-                              onClick={() => setKiloanEstKg(String(Math.max(3, (Number(kiloanEstKg) || 3) - 1)))}
-                            />
-                            <input
-                              type="number"
-                              min="3"
-                              value={kiloanEstKg}
-                              onChange={(e) => setKiloanEstKg(String(Math.max(3, Number(e.target.value) || 3)))}
-                              className="w-full bg-white border border-brand-200 rounded-xl p-2 text-xs font-extrabold text-brand-700 text-center"
-                            />
-                            <StepperBtn
-                              variant="plus"
-                              onClick={() => setKiloanEstKg(String((Number(kiloanEstKg) || 3) + 1))}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                      <div>
-                        <label className="block text-[10px] text-slate-500 font-bold mb-1">Jumlah Pcs</label>
-                        <div className="flex items-center gap-1">
-                          <StepperBtn variant="minus" disabled={Number(kiloanQty) <= 1} onClick={() => setKiloanQty(String(Math.max(1, (Number(kiloanQty) || 1) - 1)))} />
-                          <input type="number" min="1" value={kiloanQty} onChange={(e) => setKiloanQty(String(Math.max(1, Number(e.target.value) || 1)))} className="w-full bg-white border border-brand-200 rounded-xl p-2 text-xs font-extrabold text-center" />
-                          <StepperBtn variant="plus" onClick={() => setKiloanQty(String((Number(kiloanQty) || 1) + 1))} />
-                        </div>
-                      </div>
-                      <p className="text-[10px] text-slate-400 font-medium">
-                        Jumlah Pcs hanya catatan kasir (contoh: 4 Kg berisi 10 Pcs), tidak mengubah harga.
-                      </p>
-                      <p className="text-[10px] bg-brand-50 border border-brand-100 text-brand-800 rounded-xl px-2.5 py-1.5 font-semibold">
-                        Info: Minimal 3kg per order (1 Mesin Cuci = 1 Customer, pakaian tidak dicampur)
-                      </p>
-                      <p className="text-[10px] text-brand-600 font-bold text-right">
-                        Harga: Rp {kiloanActiveUnitPrice.toLocaleString('id-ID')}/Kg · Total Rp {kiloanLineTotal(kiloanActiveUnitPrice, Math.max(3, Number(kiloanEstKg) || 3)).toLocaleString('id-ID')}
-                      </p>
-
                       <div className="bg-slate-800/80 border border-slate-700/80 p-3.5 rounded-2xl space-y-3">
                         <h3 className="text-[10px] font-black tracking-wider uppercase text-cyan-400 flex items-center gap-2">
                           <ClipboardList className="w-3.5 h-3.5" /> Informasi Detail Cucian Kiloan
@@ -2647,35 +2857,50 @@ function CustomerDashboardPage() {
 
                         <div className="space-y-3 text-xs text-slate-200">
                           <div className="flex justify-between items-center">
-                            <span className="font-semibold text-slate-300">1. Jumlah Kantong:</span>
-                            <select
-                              value={bagCount}
-                              onChange={(e) => setBagCount(e.target.value)}
-                              className="bg-slate-900 border border-slate-700 text-cyan-400 font-extrabold rounded-xl px-3 py-1.5 focus:outline-none"
-                            >
-                              <option value="">-- Pilih Jumlah Kantong --</option>
-                              <option value="1 Kantong">1 Kantong</option>
-                              <option value="2 Kantong">2 Kantong</option>
-                              <option value="3 Kantong">3 Kantong</option>
-                              <option value="4+ Kantong">4+ Kantong</option>
-                            </select>
+                            <span className="font-semibold text-slate-300">Jumlah Kantong</span>
+                            <div className="flex items-center gap-1">
+                              <StepperBtn
+                                variant="minus"
+                                disabled={Number(bagCount) <= 1}
+                                onClick={() => setBagCount(String(Math.max(1, (Number(bagCount) || 1) - 1)))}
+                              />
+                              <span className="w-8 text-center font-extrabold text-cyan-400">{bagCount}</span>
+                              <StepperBtn
+                                variant="plus"
+                                disabled={Number(bagCount) >= MAX_KILOAN_BAGS}
+                                onClick={() => setBagCount(String(Math.min(MAX_KILOAN_BAGS, (Number(bagCount) || 1) + 1)))}
+                              />
+                            </div>
                           </div>
 
                           <div className="flex justify-between items-center">
-                            <span className="font-semibold text-slate-300">2. Proses Cuci:</span>
-                            <select
-                              value={washProcess}
-                              onChange={(e) => setWashProcess(e.target.value)}
-                              className="bg-slate-900 border border-slate-700 text-cyan-400 font-extrabold rounded-xl px-3 py-1.5 focus:outline-none"
-                            >
-                              <option value="">-- Pilih Proses Cuci --</option>
-                              <option value="Gabung Semua">Gabung Semua</option>
-                              <option value="Pisah Perkantong">Pisah Perkantong</option>
-                            </select>
+                            <span className="font-semibold text-slate-300">Proses Cuci</span>
+                            <div className="flex gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setWashProcess('Gabung Semua')}
+                                className={`px-3 py-1 rounded-xl font-extrabold text-xs transition ${washProcess === 'Gabung Semua' ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
+                              >
+                                Dicampur
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setWashProcess('Pisah Perkantong')}
+                                disabled={Number(bagCount) <= 1}
+                                className={`px-3 py-1 rounded-xl font-extrabold text-xs transition disabled:opacity-40 ${washProcess === 'Pisah Perkantong' ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
+                              >
+                                Dipisah
+                              </button>
+                            </div>
                           </div>
+                          {isSplitKiloanBags && (
+                            <p className="text-[10px] text-cyan-300 font-medium">
+                              {bagCount} kantong dipisah — isi layanan, durasi, dan rincian jumlah untuk setiap kantong di bawah.
+                            </p>
+                          )}
 
                           <div className="flex justify-between items-center">
-                            <span className="font-semibold text-slate-300">3. Ada Pakaian Luntur?</span>
+                            <span className="font-semibold text-slate-300">Ada Pakaian Luntur?</span>
                             <div className="flex gap-2">
                               <button
                                 type="button"
@@ -2696,19 +2921,135 @@ function CustomerDashboardPage() {
                         </div>
                       </div>
 
+                      {!isSplitKiloanBags ? (
+                        <div className="space-y-2.5">
+                          <div>
+                            <label className="block text-[10px] text-slate-500 font-bold mb-1">Pilih Jenis Kiloan</label>
+                            <select
+                              value={selectedKiloanSvc}
+                              onChange={(e) => setSelectedKiloanSvc(e.target.value)}
+                              className="w-full bg-white border border-brand-200 rounded-xl p-2.5 text-xs font-bold text-slate-800"
+                            >
+                              {kiloanServicesList.map((svc, i) => (
+                                <option key={i} value={svc.name}>{svc.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-slate-500 font-bold mb-1 inline-flex items-center gap-1">
+                              Durasi Kiloan <SlaBadge duration={kiloanDuration} />
+                            </label>
+                            <select
+                              value={kiloanDuration}
+                              onChange={(e) => setKiloanDuration(e.target.value)}
+                              className="w-full bg-amber-50 border border-amber-300 rounded-xl p-2 text-xs font-extrabold text-amber-800"
+                            >
+                              <option value="Reguler (3 Hari)">Reguler 3 Hari</option>
+                              <option value="Oneday">Oneday 24jam</option>
+                              <option value="Express">Express 6 Jam</option>
+                              <option value="Quick">Quick 3 Jam</option>
+                            </select>
+                          </div>
+                          <p className="text-[10px] text-slate-500 font-bold uppercase">Jumlah per kategori pakaian</p>
+                          {renderKiloanBagCategoryInputs(0, kiloanBagForms[0]?.categories || emptyBagCategoryCounts())}
+                          {(() => {
+                            const { pcs, kg } = summarizeBagWeight(kiloanBagForms[0]?.categories || emptyBagCategoryCounts());
+                            return (
+                              <p className="text-[10px] text-brand-700 font-bold bg-brand-50 border border-brand-100 rounded-xl px-2.5 py-1.5">
+                                Estimasi: {pcs} pcs · ~{kg} Kg · Rp {kiloanUnitPriceFor(selectedKiloanSvc, kiloanDuration).toLocaleString('id-ID')}/Kg
+                              </p>
+                            );
+                          })()}
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {kiloanBagForms.map((form, bagIdx) => {
+                            const { pcs, kg } = summarizeBagWeight(form.categories);
+                            return (
+                              <div key={bagIdx} className="bg-white border border-brand-200 rounded-2xl p-3 space-y-2.5">
+                                <p className="text-[11px] font-black text-brand-800">Kantong {bagIdx + 1}</p>
+                                <div>
+                                  <label className="block text-[10px] text-slate-500 font-bold mb-1">Jenis Kiloan</label>
+                                  <select
+                                    value={form.serviceName}
+                                    onChange={(e) => patchKiloanBagField(bagIdx, 'serviceName', e.target.value)}
+                                    className="w-full bg-slate-50 border border-brand-200 rounded-xl p-2 text-xs font-bold text-slate-800"
+                                  >
+                                    <option value="">-- Pilih --</option>
+                                    {kiloanServicesList.map((svc, i) => (
+                                      <option key={i} value={svc.name}>{svc.name}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="text-[10px] text-slate-500 font-bold mb-1 inline-flex items-center gap-1">
+                                    Durasi <SlaBadge duration={form.duration} />
+                                  </label>
+                                  <select
+                                    value={form.duration}
+                                    onChange={(e) => patchKiloanBagField(bagIdx, 'duration', e.target.value)}
+                                    className="w-full bg-amber-50 border border-amber-300 rounded-xl p-2 text-xs font-extrabold text-amber-800"
+                                  >
+                                    <option value="Reguler (3 Hari)">Reguler 3 Hari</option>
+                                    <option value="Oneday">Oneday 24jam</option>
+                                    <option value="Express">Express 6 Jam</option>
+                                    <option value="Quick">Quick 3 Jam</option>
+                                  </select>
+                                </div>
+                                <p className="text-[10px] text-slate-500 font-bold uppercase">Jumlah per kategori pakaian</p>
+                                {renderKiloanBagCategoryInputs(bagIdx, form.categories)}
+                                <p className="text-[10px] text-brand-700 font-bold bg-brand-50 border border-brand-100 rounded-xl px-2.5 py-1.5">
+                                  Estimasi Kantong {bagIdx + 1}: {pcs} pcs · ~{kg} Kg
+                                  {form.serviceName ? ` · Rp ${kiloanUnitPriceFor(form.serviceName, form.duration).toLocaleString('id-ID')}/Kg` : ''}
+                                </p>
+                              </div>
+                            );
+                          })}
+                          <p className="text-[10px] text-brand-800 font-black text-right">
+                            Total semua kantong: ~
+                            {kiloanBagForms.reduce((s, f) => s + summarizeBagWeight(f.categories).kg, 0).toFixed(2)} Kg
+                          </p>
+                        </div>
+                      )}
+
+                      <p className="text-[10px] text-slate-400 font-medium">
+                        Jumlah pcs & estimasi kg dihitung otomatis dari isian di atas — tidak perlu diisi ulang.
+                      </p>
+                      <p className="text-[10px] bg-brand-50 border border-brand-100 text-brand-800 rounded-xl px-2.5 py-1.5 font-semibold">
+                        Berat & harga di atas adalah ESTIMASI. Kasir akan menimbang ulang cucian di outlet dan mengonfirmasi tagihan final.
+                      </p>
+                      <p className="text-[10px] bg-amber-50 border border-amber-100 text-amber-800 rounded-xl px-2.5 py-1.5 font-semibold">
+                        Info: Total kiloan minimal {KILOAN_MIN_ORDER_KG} kg per order (1 Mesin Cuci = 1 Customer, pakaian tidak dicampur dengan pelanggan lain).
+                      </p>
+
+                      {kiloanFormError && (
+                        <p className="text-[11px] font-bold text-rose-700 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2" role="alert">
+                          {kiloanFormError}
+                        </p>
+                      )}
                       <button type="button" onClick={handleAddKiloanToCart} className="w-full bg-brand-600 hover:bg-brand-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-sm inline-flex items-center justify-center gap-1.5">
                         Tambah Paket Kiloan Ini
                       </button>
                       {cartKiloan.length > 0 && (
                         <div className="space-y-1.5">
+                          {kiloanTotalKg < KILOAN_MIN_ORDER_KG && (
+                            <p className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-100 rounded-xl px-2.5 py-1.5">
+                              Total kiloan saat ini ~{kiloanTotalKg} Kg, masih di bawah minimal {KILOAN_MIN_ORDER_KG} Kg. Tambah kantong/paket lagi.
+                            </p>
+                          )}
                           {cartKiloan.map((item, idx) => (
                             <div key={idx} className="bg-white p-2.5 rounded-xl flex justify-between items-center text-xs border border-brand-100">
-                              <div>
-                                <span className="font-bold text-slate-800 block">{item.name} · {item.kg} Kg</span>
-                                <span className="text-[9px] text-slate-500 font-semibold">{item.qty} Pcs (catatan)</span>
+                              <div className="min-w-0">
+                                <span className="font-bold text-slate-800 block">{item.name} · ~{item.kg} Kg</span>
+                                <span className="text-[9px] text-slate-500 font-semibold">{item.qty} Pcs (estimasi)</span>
                                 <span className="text-[9px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-bold ml-1">{item.duration}</span>
+                                {item.bagDetail && (
+                                  <span className="block text-[9px] text-slate-400 mt-0.5">
+                                    {BAG_CATEGORY_ORDER.map((k) => `${BAG_CATEGORY_LABELS[k].split(' ')[0]} ${item.bagDetail?.[k] || 0}`).join(' · ')}
+                                  </span>
+                                )}
                               </div>
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 shrink-0">
                                 <span className="font-extrabold text-brand-600">Rp {kiloanLineTotal(item.price, item.kg).toLocaleString('id-ID')}</span>
                                 <button type="button" onClick={() => handleRemoveKiloan(idx)} className="text-rose-500 p-1 rounded-full hover:bg-rose-50" aria-label="Hapus">
                                   <X className="w-4 h-4" />
@@ -2835,13 +3176,88 @@ function CustomerDashboardPage() {
                               />
                             </div>
                           </div>
+                          <div>
+                            <label className="block text-[10px] text-slate-500 font-bold mb-1">
+                              Foto {satuanNotesSame ? 'Item' : `Pcs ${idx + 1}`} <span className="text-rose-600">*wajib</span>
+                            </label>
+                            {piece?.photoPreviewUrl ? (
+                              <div className="relative w-24 h-24">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={piece.photoPreviewUrl}
+                                  alt={`Foto ${satuanNotesSame ? 'item satuan' : `pcs ${idx + 1}`}`}
+                                  className="w-24 h-24 object-cover rounded-xl border border-slate-200"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveSatuanPiecePhoto(idx)}
+                                  aria-label="Hapus foto"
+                                  className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-rose-600 text-white rounded-full flex items-center justify-center shadow"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                                <label className="absolute bottom-0 inset-x-0 bg-black/50 text-white text-[9px] font-bold text-center py-0.5 rounded-b-xl cursor-pointer">
+                                  Ganti
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    capture="environment"
+                                    className="hidden"
+                                    aria-label={`Ganti foto ${satuanNotesSame ? 'item satuan' : `pcs ${idx + 1}`}`}
+                                    onChange={(e) => {
+                                      const file = e.target.files?.[0] || null;
+                                      e.target.value = '';
+                                      void handleSatuanPiecePhotoSelect(idx, file);
+                                    }}
+                                  />
+                                </label>
+                              </div>
+                            ) : (
+                              <label
+                                className={`flex flex-col items-center justify-center w-24 h-24 rounded-xl border-2 border-dashed cursor-pointer text-slate-400 ${
+                                  piece?.photoError ? 'border-rose-300 bg-rose-50' : 'border-slate-300 bg-slate-50'
+                                }`}
+                              >
+                                {piece?.photoUploading ? (
+                                  <Loader2 className="w-5 h-5 animate-spin text-brand-600" />
+                                ) : (
+                                  <Camera className="w-5 h-5" />
+                                )}
+                                <span className="text-[9px] font-bold mt-1 text-center px-1">
+                                  {piece?.photoUploading ? 'Mengunggah…' : 'Ambil / Unggah'}
+                                </span>
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  capture="environment"
+                                  className="hidden"
+                                  disabled={piece?.photoUploading}
+                                  aria-label={`Unggah foto ${satuanNotesSame ? 'item satuan' : `pcs ${idx + 1}`}`}
+                                  onChange={(e) => {
+                                    const file = e.target.files?.[0] || null;
+                                    e.target.value = '';
+                                    void handleSatuanPiecePhotoSelect(idx, file);
+                                  }}
+                                />
+                              </label>
+                            )}
+                            {piece?.photoError && (
+                              <p className="text-[10px] text-rose-600 font-semibold mt-1" role="alert">{piece.photoError}</p>
+                            )}
+                          </div>
                         </div>
                       ))}
 
+                      {satuanFormError && (
+                        <p className="text-[11px] font-bold text-rose-700 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2" role="alert">
+                          {satuanFormError}
+                        </p>
+                      )}
                       <button
                         type="button"
                         onClick={handleAddSatuanToCart}
-                        className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-sm"
+                        disabled={requiredSatuanPhotoSlots().some((p) => p.photoUploading)}
+                        className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-bold py-2.5 rounded-xl text-xs shadow-sm"
                       >
                         Tambah Item Satuan Ini
                       </button>
@@ -3424,7 +3840,7 @@ function CustomerDashboardPage() {
                             <div className="grid grid-cols-2 gap-2 bg-slate-50 border border-slate-100 rounded-xl p-2.5">
                               <input
                                 type="date"
-                                min={new Date().toISOString().split('T')[0]}
+                                min={localDateISO()}
                                 value={editScheduleDate}
                                 onChange={(e) => setEditScheduleDate(e.target.value)}
                                 className="bg-white border border-slate-300 rounded-lg px-2 py-1.5 text-[11px] font-bold"
