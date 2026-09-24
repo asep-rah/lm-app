@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --import tsx --test lib/financeRecognition.test.ts lib/financeStatements.test.ts lib/customerAuth/core.test.ts lib/customerOrderView.test.ts lib/outletShowcase.test.ts lib/customerAddressLabels.test.ts lib/customerActivity.test.ts lib/pickupDispatch.test.ts lib/kiloanBagWeights.test.ts lib/satuanItemPhoto.test.ts lib/satuanPhotoAccess.test.ts lib/staffAuth/core.test.ts lib/orderErrorReport.test.ts lib/requestGuards.test.ts lib/pickupItemsView.test.ts",
+    "test": "node --import tsx --test lib/financeRecognition.test.ts lib/financeStatements.test.ts lib/customerAuth/core.test.ts lib/customerOrderView.test.ts lib/outletShowcase.test.ts lib/customerAddressLabels.test.ts lib/customerActivity.test.ts lib/pickupDispatch.test.ts lib/kiloanBagWeights.test.ts lib/satuanItemPhoto.test.ts lib/satuanPhotoAccess.test.ts lib/staffAuth/core.test.ts lib/orderErrorReport.test.ts lib/requestGuards.test.ts lib/pickupItemsView.test.ts lib/supabaseTarget.test.ts",
     "finance:paid-at-dry-run": "tsx scripts/paidAtBackfillDryRun.ts"
   },
   "dependencies": {

@@ -1,12 +1,18 @@
 import { createClient } from '@supabase/supabase-js';
-import { DEFAULT_SUPABASE_URL, isSupabaseApiUrl } from '@/lib/supabaseEnv';
+import { normalizeDeployEnv, resolveSupabaseTarget } from '@/lib/supabaseTarget';
 
-const rawUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const SUPABASE_URL = isSupabaseApiUrl(rawUrl) ? rawUrl.replace(/\/+$/, '') : DEFAULT_SUPABASE_URL;
+// NEXT_PUBLIC_* values are inlined at build time; NEXT_PUBLIC_LM_DEPLOY_ENV is
+// injected by next.config from VERCEL_ENV (see lib/supabaseTarget.ts).
+export const supabaseTarget = resolveSupabaseTarget({
+  deployEnv: normalizeDeployEnv(process.env.NEXT_PUBLIC_LM_DEPLOY_ENV),
+  url: process.env.NEXT_PUBLIC_SUPABASE_URL,
+  anonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+});
 
-const SUPABASE_ANON_KEY =
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs';
+if (!supabaseTarget.ok) {
+  console.error(`[supabase] Akses database diblokir: ${supabaseTarget.reason}`);
+}
 
-export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+export const supabase = createClient(supabaseTarget.url, supabaseTarget.anonKey);
 
 export default supabase;

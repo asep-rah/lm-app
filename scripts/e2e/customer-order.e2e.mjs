@@ -1,4 +1,6 @@
-// Run after `npm run build`:
+// Build against a NON-production mock project (preview/dev builds refuse the
+// production database, see lib/supabaseTarget.ts), then run:
+//   NEXT_PUBLIC_SUPABASE_URL=https://e2emockproject.supabase.co NEXT_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_e2e_mock npm run build
 //   npm i --no-save playwright-core && CHROMIUM_PATH=/path/to/chrome node scripts/e2e/customer-order.e2e.mjs
 // UI E2E (mobile viewport) of the customer dashboard: Bandung outlet, 3-step
 // order form, state kept across steps, single order on double tap, the
@@ -51,6 +53,7 @@ const baseTables = () => ({
 });
 
 const results = [];
+const productionDbHits = [];
 const step = async (name, fn) => {
   try { await fn(); results.push(['PASS', name]); } catch (e) { results.push(['FAIL', name, e.message.split('\n')[0]]); }
 };
@@ -106,6 +109,11 @@ async function newScenario(opts = {}) {
       return route.continue();
     }
     outbound.push(url.hostname);
+    if (url.hostname.startsWith('qlgbjvzabnfqmfnjdkmo.')) {
+      outbound.push('UNEXPECTED production database request');
+      productionDbHits.push(`${req.method()} ${url.pathname}`);
+      return route.abort();
+    }
     if (!url.hostname.endsWith('supabase.co')) return route.fulfill({ status: 204, body: '' });
 
     // Storage upload (satuan item photos) — mocked success/failure, never a
@@ -658,6 +666,10 @@ await step('Login page shows the official logo (legacy mode while WA not configu
   await p2.getByRole('button', { name: /Masuk dengan WhatsApp/ }).waitFor();
   await p2.screenshot({ path: `${OUT}/08-login.png`, fullPage: true });
   await s.close();
+});
+
+await step('No scenario ever reached the production database host', async () => {
+  assert.deepEqual(productionDbHits, []);
 });
 
 await browser.close();

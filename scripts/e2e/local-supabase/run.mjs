@@ -114,6 +114,19 @@ const victimPath = `${ownerFolder(OTHER_CUSTOMER)}/2026-09/0b0c0d0e-0000-4000-80
   assert.ifError(error);
 }
 
+await step('db-target: this deployment is proven non-production before any test', async () => {
+  const r = await (await fetch(APP + '/api/health/db-target')).json();
+  assert.equal(r.safeForTesting, true, JSON.stringify(r));
+  assert.equal(r.browser.isProductionDb, false);
+  assert.equal(r.server.projectRef, r.browser.projectRef);
+  assert.match(r.browser.projectRef, /^local:/);
+});
+if (results.at(-1)?.[0] !== 'PASS') {
+  console.error('Database target not proven non-production — aborting before any test.', results.at(-1));
+  app.kill();
+  process.exit(2);
+}
+
 // ---------------------------------------------------------------------------
 // 1. Storage lock-down: the browser (anon) key has no access to the bucket.
 // ---------------------------------------------------------------------------

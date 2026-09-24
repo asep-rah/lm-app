@@ -1,10 +1,17 @@
 import type { NextConfig } from "next";
+import { PHASE_DEVELOPMENT_SERVER, PHASE_PRODUCTION_BUILD } from "next/constants";
+import { buildDeployEnvOf, resolveSupabaseTarget } from "./lib/supabaseTarget";
 
 const longCache = [
   { key: "Cache-Control", value: "public, max-age=31536000, immutable" },
 ];
 
-const nextConfig: NextConfig = {
+const deployEnv = buildDeployEnvOf(process.env);
+
+const baseConfig: NextConfig = {
+  // Baked into client & server bundles so runtime code knows which
+  // deployment it is (lib/supabaseTarget.ts decides the allowed database).
+  env: { NEXT_PUBLIC_LM_DEPLOY_ENV: deployEnv },
   images: {
     formats: ["image/avif", "image/webp"],
     remotePatterns: [
@@ -37,4 +44,24 @@ const nextConfig: NextConfig = {
   ],
 };
 
-export default nextConfig;
+/**
+ * Fail closed: a preview/dev build whose Supabase env is empty, invalid or
+ * points at the production project does not build at all.
+ */
+export default function nextConfig(phase: string): NextConfig {
+  if (phase === PHASE_PRODUCTION_BUILD || phase === PHASE_DEVELOPMENT_SERVER) {
+    const target = resolveSupabaseTarget({
+      deployEnv,
+      url: process.env.NEXT_PUBLIC_SUPABASE_URL,
+      anonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    });
+    if (!target.ok) {
+      throw new Error(
+        `[supabase] Build ${deployEnv} dihentikan: ${target.reason} ` +
+          "Isi NEXT_PUBLIC_SUPABASE_URL & NEXT_PUBLIC_SUPABASE_ANON_KEY dengan proyek staging/lokal (bukan produksi)."
+      );
+    }
+    console.log(`[supabase] ${deployEnv} build → project ${target.projectRef}${target.isProductionDb ? " (PRODUKSI)" : ""}`);
+  }
+  return baseConfig;
+}

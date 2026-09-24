@@ -68,7 +68,7 @@ create table system_tasks (
 );
 
 create table transactions (
-  id uuid primary key, receipt_number text, customer_phone text, outlet_id uuid references outlets(id),
+  id uuid primary key, receipt_number text, customer_phone text, outlet_id uuid references outlets(id), pickup_id text,
   status text, is_paid boolean, payment_status text, amount numeric,
   discount_type text, discount_value numeric, discount_amount numeric, delivery_fee numeric,
   duration text, service_type text, items jsonb, created_at timestamptz default now()

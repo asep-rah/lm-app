@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js';
+import { serverSupabase } from '@/lib/supabaseServer';
 import { laundryFallbackReply } from '@/lib/laundryFaq';
 import { ingestCustomerMessageIfThreadClosed } from '@/lib/csChat';
 
@@ -38,8 +38,6 @@ export async function POST(req: Request) {
     const { message, messages, customerPhone, brandName } = body || {};
 
     const apiKey = (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
-    const supabaseUrl = process.env.SUPABASE_URL || 'https://qlgbjvzabnfqmfnjdkmo.supabase.co';
-    const supabaseKey = process.env.SUPABASE_ANON_KEY || 'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs';
 
     // Riwayat penuh dipakai supaya AI mengingat konteks; fallback ke `message`
     // tunggal agar pemanggil lama tetap berfungsi.
@@ -67,7 +65,7 @@ export async function POST(req: Request) {
       return Response.json({ reply: laundryFallbackReply(lastUserText) });
     }
 
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    const supabase = serverSupabase({ anonOnly: true });
     const activePhone = customerPhone || '';
     const activeBrand = brandName || 'Chingu Laundry / Laundrivery';
 

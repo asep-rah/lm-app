@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js';
+import { serverSupabase } from '@/lib/supabaseServer';
 
 export const dynamic = 'force-dynamic';
 
@@ -7,14 +7,12 @@ export async function POST(req: Request) {
     const { mode, userQuery } = await req.json();
 
     const apiKey = (process.env.GEMINI_API_KEY || '').trim();
-    const supabaseUrl = process.env.SUPABASE_URL || 'https://qlgbjvzabnfqmfnjdkmo.supabase.co';
-    const supabaseKey = process.env.SUPABASE_ANON_KEY || 'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs';
 
     if (!apiKey) {
       return Response.json({ reply: '⚠️ GEMINI_API_KEY belum terpasang di Vercel.' }, { status: 200 });
     }
 
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    const supabase = serverSupabase({ anonOnly: true });
 
     // Ambil data transaksi beserta Nama Outlet asli dari database Supabase
     const [{ data: transactions }, { data: pickups }, { data: outlets }] = await Promise.all([

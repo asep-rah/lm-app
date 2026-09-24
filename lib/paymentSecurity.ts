@@ -1,24 +1,22 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import { diagnosisHintOf } from '@/lib/errorDiagnosis';
-import { DEFAULT_SUPABASE_URL, resolveSupabaseUrl } from '@/lib/supabaseEnv';
+import { serverDeployEnv, serverServiceKey, serverSupabaseTarget } from '@/lib/supabaseServer';
 
 export type GatewayName = 'mayar' | 'xendit' | 'manual' | 'cron' | 'check-status';
 
-const DEV_ANON_FALLBACK = 'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs';
-
 const serviceClient = () => {
-  const url = resolveSupabaseUrl({ allowFallback: true }) || DEFAULT_SUPABASE_URL;
-  const key = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  const target = serverSupabaseTarget();
+  if (!target.ok) throw new Error(`Akses database diblokir: ${target.reason}`);
+  const key = serverServiceKey();
   if (key) {
-    return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+    return createClient(target.url, key, { auth: { persistSession: false, autoRefreshToken: false } });
   }
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('SUPABASE_SERVICE_ROLE_KEY wajib di production untuk operasi pembayaran');
+  if (serverDeployEnv() === 'production' || process.env.NODE_ENV === 'production') {
+    throw new Error('SUPABASE_SERVICE_ROLE_KEY wajib untuk operasi server ini');
   }
-  // Dev: samakan fallback dengan supabaseClient / mayar create agar simulasi & cek status tidak 404.
-  const anon = String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '').trim() || DEV_ANON_FALLBACK;
-  return createClient(url, anon, {
+  // Dev lokal tanpa service role: anon key milik target yang sama (bukan produksi).
+  return createClient(target.url, target.anonKey, {
     auth: { persistSession: false, autoRefreshToken: false }
   });
 };

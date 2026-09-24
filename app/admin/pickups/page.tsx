@@ -1,17 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabaseClient';
 import Link from 'next/link';
 import DeferredProofPhoto from '@/components/DeferredProofPhoto';
 import { getStaffSession, isCsRole, isOutletLockedRole } from '@/lib/staffSession';
 import { updateWithFallback } from '@/lib/safeWrite';
 import { isPickupConvertedToPos } from '@/lib/pickupUpdates';
 
-const supabase = createClient(
-  'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
-  'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs'
-);
 
 export default function AdminPickupsPage() {
   const [pickups, setPickups] = useState<any[]>([]);

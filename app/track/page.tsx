@@ -1,14 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabaseClient';
 import StageTimeline from '@/components/StageTimeline';
 import { displayStatusLabel, stageKeyOf } from '@/lib/stageTimeline';
 
-const supabase = createClient(
-  'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
-  'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs'
-);
 
 export default function TrackingPage() {
   const [receiptNumber, setReceiptNumber] = useState('');

@@ -1,14 +1,9 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { serverSupabase } from '@/lib/supabaseServer';
 
 export const dynamic = 'force-dynamic';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || 'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-    'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs'
-);
+const supabase = serverSupabase();
 
 const authorized = (req: Request) => {
   const expected = process.env.CRON_SECRET || process.env.CLEANUP_CRON_SECRET || '';

@@ -7,7 +7,8 @@ Dokumen ini wajib dibaca Owner / Admin Ops sebelum production.
 | Variable | Fungsi |
 |----------|--------|
 | `SUPABASE_SERVICE_ROLE_KEY` | Hanya server. **Jangan** di `NEXT_PUBLIC_*`. |
-| `NEXT_PUBLIC_SUPABASE_URL` / `ANON_KEY` | Client. RLS harus ketat. |
+| `NEXT_PUBLIC_SUPABASE_URL` / `ANON_KEY` | Client. RLS harus ketat. **Wajib** di Preview/dev dan harus proyek non-produksi (lihat §1b). |
+| `LM_DEPLOY_ENV` | Hanya untuk hosting **selain Vercel**: `production` menandai deployment produksi. Di Vercel diabaikan; yang dipakai `VERCEL_ENV`. |
 | `CRON_SECRET` | Auth Vercel Cron + ops. |
 | `PAYMENT_OPS_SECRET` | Auth tandai lunas / resync / diagnosis / mutasi deposit. |
 | `NEXT_PUBLIC_PAYMENT_OPS_SECRET` | **Sama nilai** dengan `PAYMENT_OPS_SECRET` (UI staf). Rotasi berkala. |
@@ -21,6 +22,17 @@ Dokumen ini wajib dibaca Owner / Admin Ops sebelum production.
 | `CUSTOMER_LEGACY_LOGIN_ENABLED` | Default `true`. Set `false` setelah login WA terverifikasi diuji → login lama (tanpa verifikasi) dimatikan. |
 | `STAFF_SESSION_SECRET` | Tanda tangan cookie sesi staf HttpOnly (≥ 32 karakter, server-only), diterbitkan `/api/auth/staff-login`. Wajib untuk fitur yang butuh identitas staf terverifikasi (lihat foto item satuan). |
 | `SATUAN_ITEM_PHOTO_ENABLED` | Default mati. `true` hanya setelah migrasi `20260924_satuan_item_photos.sql`, `CUSTOMER_AUTH_SECRET`, `STAFF_SESSION_SECRET`, dan service role terpasang. Selama mati, foto item satuan tidak diminta. |
+
+### 1b. Preview & development tidak pernah memakai database produksi
+
+`lib/supabaseTarget.ts` menentukan database yang boleh dipakai (browser, API/server, dan build):
+
+- **Produksi** (`VERCEL_ENV=production`): env, atau proyek produksi bila env kosong (perilaku lama).
+- **Preview / development / tes**: `NEXT_PUBLIC_SUPABASE_URL` + `NEXT_PUBLIC_SUPABASE_ANON_KEY` wajib, valid, dan **bukan** proyek produksi (URL, publishable key, atau JWT ber-`ref` produksi ditolak; service role JWT produksi juga ditolak). Bila tidak memenuhi:
+  - `next build` / `next dev` **gagal** dengan pesan `[supabase] Build … dihentikan`;
+  - di runtime, client diarahkan ke host `.invalid` sehingga semua baca/tulis gagal, dan layar menampilkan banner merah "Database diblokir".
+- Sebelum menguji sebuah Preview: buka `/api/health/db-target` dan pastikan `safeForTesting: true` serta `projectRef` = proyek staging. Deployment non-produksi juga menampilkan label kecil `NON-PRODUKSI · DB <ref>`.
+- Deploy produksi selalu dari build produksi (jangan mempromosikan build Preview; nilai env Preview sudah tertanam di bundle).
 
 Tanpa `PAYMENT_OPS_SECRET`/`CRON_SECRET` di production, endpoint mark-manual / resync / diagnosis / deposit **menolak** request.
 
@@ -48,6 +60,17 @@ Cek cepat:
 ### Reset data (opsional, sekali jalan)
 
 Setelah **backup/snapshot**: jalankan [`docs/sql/reset_keep_sorcha_dago.sql`](sql/reset_keep_sorcha_dago.sql) sebagai postgres/service role (bukan anon). Checklist verifikasi: [`docs/sql/VERIFY_AFTER_RESET.md`](sql/VERIFY_AFTER_RESET.md).
+
+## 2b. Audit data uji Preview di produksi (PR #5)
+
+Sampai commit `7f7ca19`, dashboard customer/POS/CS/driver dan beberapa API memakai URL produksi yang di-hardcode, sehingga Preview membaca/menulis database produksi. Jalankan [`docs/sql/audit_preview_test_data.sql`](sql/audit_preview_test_data.sql) di SQL Editor produksi — seluruhnya transaksi **read-only** yang diakhiri `ROLLBACK`. Hasilnya: pesanan dengan field khas PR #5, pesanan instan yang mustahil dibuat kode `main`, ringkasan per nomor HP, tugas driver/CS terkait, transaksi yang sudah terbentuk, `error_logs` berisi payload pribadi, dan artefak migrasi PR #5.
+
+Tindak lanjut (butuh persetujuan pemilik; **jangan hapus**):
+
+1. Cocokkan kandidat dengan nomor penguji; pesanan pelanggan sungguhan tidak disentuh.
+2. Pesanan uji yang dikonfirmasi: batalkan lewat alur yang ada (status `Batal` + catatan `[UJI PREVIEW]`), tutup tugas driver/CS terkait.
+3. Bila sudah jadi transaksi: pakai soft-void yang ada (bukan delete) agar laporan keuangan tetap konsisten.
+4. `error_logs` dengan `has_payload = true` berisi nama/HP/alamat: putuskan redaksi `context->'payload'` (log ini hanya terbaca service role).
 
 ## 3. Praktik aman harian
 

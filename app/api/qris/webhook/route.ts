@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { serverSupabase } from '@/lib/supabaseServer';
 import { markGatewayPaid } from '@/lib/paymentVerify';
 import {
   amountsMatch,
@@ -20,9 +20,7 @@ export async function POST(req: Request) {
     body = {};
   }
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-  const supabase = createClient(supabaseUrl, supabaseKey);
+  const supabase = serverSupabase();
 
   const token = req.headers.get('x-callback-token');
   const expected = process.env.XENDIT_WEBHOOK_VERIFICATION_TOKEN || process.env.PAYMENT_GATEWAY_SERVER_KEY || '';

@@ -1,16 +1,11 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { serverSupabase } from '@/lib/supabaseServer';
 import { createMayarPayment, isMayarKeyValid } from '@/lib/mayar';
 import { DEPOSIT_PACKAGES, depositIncomeTitle, depositReceiptOf, insertPendingDepositTopup, normalizeCustomerPhone } from '@/lib/depositTopup';
 
 export const dynamic = 'force-dynamic';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || 'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-    'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs'
-);
+const supabase = serverSupabase();
 
 export async function POST(req: Request) {
   try {

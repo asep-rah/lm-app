@@ -2,15 +2,12 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { createClient } from '@supabase/supabase-js';
+import { supabase, supabaseTarget } from '@/lib/supabaseClient';
 import { homePathForRole } from '@/lib/staffSession';
 
 /** Fallback login lama: hanya dipakai jika API staff-login belum deploy / service role belum siap. */
 function anonClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-  if (!url || !key) return null;
-  return createClient(url, key);
+  return supabaseTarget.ok ? supabase : null;
 }
 
 async function loginViaApi(username: string, password: string) {
