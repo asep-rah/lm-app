@@ -2,10 +2,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   isImageFileLike,
-  safeSatuanPhotoPrefix,
   satuanItemHasRequiredPhotos,
-  SATUAN_ITEM_PHOTO_BUCKET,
-  SATUAN_ITEM_PHOTO_SIGNED_URL_TTL_SEC
+  SATUAN_ITEM_PHOTO_BUCKET
 } from './satuanItemPhoto';
 
 describe('isImageFileLike — guard before attempting an upload', () => {
@@ -21,22 +19,6 @@ describe('isImageFileLike — guard before attempting an upload', () => {
     assert.equal(isImageFileLike({}), false);
     assert.equal(isImageFileLike(null), false);
     assert.equal(isImageFileLike(undefined), false);
-  });
-});
-
-describe('safeSatuanPhotoPrefix — storage path safety', () => {
-  it('strips unsafe characters, keeping only alphanumerics/underscore/dash', () => {
-    assert.equal(safeSatuanPhotoPrefix('satuan_+62 812/../../etc'), 'satuan_62812etc');
-    assert.match(safeSatuanPhotoPrefix('satuan_+62 812/../../etc'), /^[a-zA-Z0-9_-]+$/);
-  });
-
-  it('truncates very long prefixes to 60 chars', () => {
-    assert.equal(safeSatuanPhotoPrefix('a'.repeat(200)).length, 60);
-  });
-
-  it('falls back to "item" for an empty/entirely-unsafe prefix', () => {
-    assert.equal(safeSatuanPhotoPrefix(''), 'item');
-    assert.equal(safeSatuanPhotoPrefix('///'), 'item');
   });
 });
 
@@ -63,9 +45,8 @@ describe('satuanItemHasRequiredPhotos — every piece on the line must have a ph
   });
 });
 
-describe('bucket is private, not a public-URL bucket', () => {
-  it('exposes the bucket name and a sane signed-URL TTL', () => {
+describe('bucket name', () => {
+  it('matches the private bucket created by the migration', () => {
     assert.equal(SATUAN_ITEM_PHOTO_BUCKET, 'satuan-item-photos');
-    assert.ok(SATUAN_ITEM_PHOTO_SIGNED_URL_TTL_SEC > 0 && SATUAN_ITEM_PHOTO_SIGNED_URL_TTL_SEC <= 24 * 3600);
   });
 });

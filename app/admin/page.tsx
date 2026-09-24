@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import { localDateISO } from '@/lib/customerActivity';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://qlgbjvzabnfqmfnjdkmo.supabase.co';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs';
@@ -111,6 +112,7 @@ export default function OnlineOrderForm() {
         estimated_completion: maxEstimateDays,
         estimated_subtotal: totalEstimasiLayanan,
         status: 'PENDING_ONLINE_POS',
+        pickup_date: localDateISO(),
         created_at: new Date().toISOString()
       };
 

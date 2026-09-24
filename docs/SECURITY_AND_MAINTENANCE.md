@@ -19,6 +19,8 @@ Dokumen ini wajib dibaca Owner / Admin Ops sebelum production.
 | `EVOLUTION_API_URL` / `EVOLUTION_API_KEY` | Opsional: balasan WA "berhasil masuk". |
 | `CUSTOMER_EMAIL_LOGIN_ENABLED` / `RESEND_API_KEY` / `CUSTOMER_AUTH_EMAIL_FROM` | Login email cadangan. |
 | `CUSTOMER_LEGACY_LOGIN_ENABLED` | Default `true`. Set `false` setelah login WA terverifikasi diuji → login lama (tanpa verifikasi) dimatikan. |
+| `STAFF_SESSION_SECRET` | Tanda tangan cookie sesi staf HttpOnly (≥ 32 karakter, server-only), diterbitkan `/api/auth/staff-login`. Wajib untuk fitur yang butuh identitas staf terverifikasi (lihat foto item satuan). |
+| `SATUAN_ITEM_PHOTO_ENABLED` | Default mati. `true` hanya setelah migrasi `20260924_satuan_item_photos.sql`, `CUSTOMER_AUTH_SECRET`, `STAFF_SESSION_SECRET`, dan service role terpasang. Selama mati, foto item satuan tidak diminta. |
 
 Tanpa `PAYMENT_OPS_SECRET`/`CRON_SECRET` di production, endpoint mark-manual / resync / diagnosis / deposit **menolak** request.
 
@@ -33,11 +35,15 @@ Urutan di SQL Editor:
 5. **`20260910_employees_password_rls.sql`** — kolom `password` tidak readable/writable oleh anon.
 6. `20260908_outlet_books.sql`, loyalty window, dll.
 7. `20260923_customer_verified_login.sql` — tabel login customer (service-role only), sebelum mengaktifkan login WA/email terverifikasi.
+8. `20260924_satuan_item_photos.sql` — bucket privat `satuan-item-photos` tanpa policy anon (unggah lewat signed upload URL dari server, lihat lewat API staf). Jalankan sebelum `SATUAN_ITEM_PHOTO_ENABLED=true`.
+
+`pickup_orders.pickup_date` tetap **NOT NULL** di produksi; aplikasi mengisi tanggal lokal hari ini untuk order tanpa jadwal (jemput sekarang, request antar). Tidak ada migrasi yang melonggarkan constraint itu.
 
 Cek cepat:
 
 - Table Editor → RLS on: `error_logs`, `webhook_logs`, `audit_logs`, `deposit_payment_credits`.
 - Coba dari browser console dengan anon key: `delete` transaksi harus gagal; `rpc('credit_customer_deposit')` harus gagal.
+- Dengan anon key: `storage.from('satuan-item-photos').list()` kosong, `download`/`createSignedUrl` gagal.
 
 ### Reset data (opsional, sekali jalan)
 

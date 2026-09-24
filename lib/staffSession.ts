@@ -114,3 +114,13 @@ export const kpiKeysVisibleForRole = (role: string): string[] | null => {
   if (r === 'owner_relation') return ['owner_relation'];
   return ['kasir'];
 };
+
+/** Hapus cookie sesi staf di server (best-effort; localStorage dihapus pemanggil). */
+export const clearStaffServerSession = () => {
+  if (typeof window === 'undefined') return;
+  try {
+    void fetch('/api/auth/staff-logout', { method: 'POST', keepalive: true }).catch(() => undefined);
+  } catch {
+    /* ignore */
+  }
+};

@@ -66,19 +66,43 @@ async function newScenario(opts = {}) {
   const inserts = [];
   const outbound = [];
   let uploadShouldFail = Boolean(opts.uploadShouldFail);
+  let insertFailMessage = opts.insertFailMessage || '';
+  const photoConfig = opts.photoConfig || { enabled: true, canUpload: true };
+  const reports = [];
+  const uploadUrlRequests = [];
 
   const ctx = await browser.newContext({
     viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true,
     geolocation: { latitude: -6.886, longitude: 107.613 }, permissions: ['geolocation'], locale: 'id-ID'
   });
   await ctx.addInitScript(() => localStorage.setItem('laundry_customer_phone', '085172141494'));
-  ctx.on('page', (p) => p.on('dialog', (d) => d.accept()));
+  const dialogs = [];
+  let acceptDialogs = true;
+  ctx.on('page', (p) =>
+    p.on('dialog', (d) => {
+      dialogs.push(d.message());
+      return acceptDialogs ? d.accept() : d.dismiss();
+    })
+  );
 
   await ctx.route('**/*', async (route) => {
     const req = route.request();
     const url = new URL(req.url());
     if (url.hostname === 'localhost') {
       if (url.pathname.startsWith('/api/road-distance')) return route.fulfill({ json: { km: 2.5 } });
+      // Server-side photo routes need a verified session + service role; the
+      // real routes are covered by scripts/e2e/local-supabase. Here they are
+      // stubbed so the UI rules can be exercised per scenario.
+      if (url.pathname === '/api/customer/satuan-photo/config') return route.fulfill({ json: photoConfig });
+      if (url.pathname === '/api/customer/satuan-photo/upload-url') {
+        uploadUrlRequests.push(req.postData());
+        const n = String(uploadUrlRequests.length).padStart(12, '0');
+        return route.fulfill({ json: { path: `${'a'.repeat(32)}/2026-09/123e4567-e89b-42d3-a456-${n}.jpg`, token: 'signed-upload-token' } });
+      }
+      if (url.pathname === '/api/customer/order/report-error') {
+        reports.push(req.postData() || '');
+        return route.fulfill({ json: { ok: true } });
+      }
       return route.continue();
     }
     outbound.push(url.hostname);
@@ -87,8 +111,14 @@ async function newScenario(opts = {}) {
     // Storage upload (satuan item photos) — mocked success/failure, never a
     // real network call, and never returns a public URL (matches the
     // private-bucket design: only a storage path is returned).
-    const storageMatch = url.pathname.match(/^\/storage\/v1\/object\/([a-z-]+)\/(.+)$/);
-    if (storageMatch && req.method() === 'POST') {
+    const storageMatch = url.pathname.match(/^\/storage\/v1\/object\/upload\/sign\/([a-z-]+)\/(.+)$/);
+    if (url.pathname.startsWith('/storage/v1/') && !storageMatch) {
+      // Anything else against Storage (direct upload, list, sign) must not happen from the browser.
+      outbound.push(`UNEXPECTED ${req.method()} ${url.pathname}`);
+      return route.fulfill({ status: 403, json: { message: 'blocked by test' } });
+    }
+    if (storageMatch && req.method() === 'PUT') {
+      assert.equal(url.searchParams.get('token'), 'signed-upload-token');
       if (uploadShouldFail) {
         return route.fulfill({ status: 400, json: { message: 'Bucket not found', statusCode: '404' } });
       }
@@ -106,6 +136,9 @@ async function newScenario(opts = {}) {
       // report ("null value in column pickup_date ... violates not-null
       // constraint"). If this regresses, the scenario fails with the exact
       // error the customer saw, not just a shallow field check.
+      if (table === 'pickup_orders' && insertFailMessage) {
+        return route.fulfill({ status: 400, json: { message: insertFailMessage, code: '23514' } });
+      }
       if (table === 'pickup_orders' && rows.some((r) => r.pickup_date == null)) {
         return route.fulfill({
           status: 400,
@@ -134,7 +167,10 @@ async function newScenario(opts = {}) {
 
   const page = await ctx.newPage();
   return {
-    ctx, page, tables, inserts, outbound,
+    ctx, page, tables, inserts, outbound, reports, uploadUrlRequests,
+    dialogs,
+    setInsertFailMessage: (v) => { insertFailMessage = v; },
+    setAcceptDialogs: (v) => { acceptDialogs = v; },
     setUploadShouldFail: (v) => { uploadShouldFail = v; },
     close: () => ctx.close()
   };
@@ -371,6 +407,8 @@ const TEST_PHOTO = {
     assert.equal(satuanItems[0].pieces.length, 1);
     assert.ok(satuanItems[0].pieces[0].photo_path, 'satuan piece must carry a photo_path');
     assert.ok(!String(satuanItems[0].pieces[0].photo_path).startsWith('http'), 'stored as a path, not a public URL');
+    assert.match(satuanItems[0].pieces[0].photo_path, /^a{32}\/2026-09\/[0-9a-f-]{36}\.jpg$/, 'server-issued path');
+    assert.deepEqual(s.outbound.filter((x) => x.startsWith('UNEXPECTED')), [], 'browser never touches the bucket directly');
     const tasks = s.inserts.filter((i) => i.table === 'system_tasks');
     assert.ok(tasks.length >= 2, 'driver + cs tasks created');
     await page.screenshot({ path: `${OUT}/07-after-order.png`, fullPage: true });
@@ -402,6 +440,16 @@ const TEST_PHOTO = {
     await page.getByRole('button', { name: 'Dipisah' }).click();
     await page.getByText('Kantong 1', { exact: true }).waitFor();
     await page.getByText('Kantong 2', { exact: true }).waitFor();
+  });
+  await step('Split bags: dropping a filled kantong asks first; cancel keeps its data', async () => {
+    await page.getByLabel('Bra Kantong 2').fill('4');
+    s.setAcceptDialogs(false);
+    await page.getByRole('button', { name: 'Dicampur' }).click();
+    await page.waitForTimeout(200);
+    assert.match(s.dialogs.at(-1) || '', /Kantong 2.*akan dihapus/);
+    await page.getByText('Kantong 2', { exact: true }).waitFor();
+    assert.equal(await page.getByLabel('Bra Kantong 2').inputValue(), '4');
+    s.setAcceptDialogs(true);
   });
   await step('Split bags: choosing "Dicampur" with 2 kantong does NOT create two packages', async () => {
     await page.getByRole('button', { name: 'Dicampur' }).click();
@@ -492,6 +540,109 @@ const TEST_PHOTO = {
     assert.equal(o.status, 'Terjadwal');
   });
 
+  await s.close();
+}
+
+// Shared: open the order form and go to step 2 with the Dago address.
+const gotoStep2 = async (page) => {
+  await page.goto(APP + '/customer/dashboard', { waitUntil: 'networkidle' });
+  await page.waitForTimeout(1200);
+  await page.locator('nav').getByRole('button', { name: 'Order' }).click();
+  await page.getByRole('button', { name: /Rumah · Jl Ir Juanda Dago/ }).click();
+  await page.getByLabel('Pilih outlet').waitFor();
+  await page.getByRole('button', { name: /Lanjut/ }).click();
+  await page.getByRole('tab', { name: /Layanan/, selected: true }).waitFor();
+};
+const checkAllAgreements = async (page) => {
+  const checks = page.locator('form input[type=checkbox]');
+  const n = await checks.count();
+  for (let i = 0; i < n; i++) if (!(await checks.nth(i).isChecked())) await checks.nth(i).check();
+};
+
+// ---------------------------------------------------------------------------
+// Scenario 4: photo feature OFF on the server (default until staff/customer
+// verified sessions are configured) — no photo UI, satuan not blocked.
+// ---------------------------------------------------------------------------
+{
+  const s = await newScenario({ photoConfig: { enabled: false, canUpload: false } });
+  const { page } = s;
+  await gotoStep2(page);
+  await step('Photo feature off: no upload control and satuan items are not blocked', async () => {
+    await page.getByText('Items Satuan', { exact: false }).click();
+    await page.getByText('Merk', { exact: false }).first().waitFor();
+    assert.equal(await page.getByLabel('Unggah foto item satuan').count(), 0);
+    await page.getByRole('button', { name: 'Tambah Item Satuan Ini' }).click();
+    assert.equal(await page.getByRole('alert').filter({ hasText: 'foto' }).count(), 0);
+    await page.getByRole('button', { name: /Lanjut/ }).click();
+    await page.getByRole('tab', { name: /Periksa & Pesan/, selected: true }).waitFor();
+    assert.equal(s.uploadUrlRequests.length, 0);
+  });
+  await s.close();
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 5: feature ON but this customer has no verified session (legacy
+// login) — satuan requires a photo, upload is not offered, clear message.
+// ---------------------------------------------------------------------------
+{
+  const s = await newScenario({ photoConfig: { enabled: true, canUpload: false } });
+  const { page } = s;
+  await gotoStep2(page);
+  await step('Photo required but session unverified: upload hidden, satuan blocked with a clear message', async () => {
+    await page.getByText('Items Satuan', { exact: false }).click();
+    await page.getByText('verifikasi WhatsApp/email', { exact: false }).first().waitFor();
+    assert.equal(await page.getByLabel('Unggah foto item satuan').count(), 0);
+    await page.getByRole('button', { name: 'Tambah Item Satuan Ini' }).click();
+    await page.getByRole('alert').filter({ hasText: 'verifikasi WhatsApp/email' }).waitFor();
+    assert.equal(s.uploadUrlRequests.length, 0);
+  });
+  await s.close();
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 6: a failed save shows a friendly message, reports NO personal
+// data, and retrying creates exactly one order and one set of tasks.
+// ---------------------------------------------------------------------------
+{
+  const s = await newScenario({
+    insertFailMessage:
+      'new row violates check constraint "pickup_orders_check". Failing row contains (Asep Rahmat, 085172141494, jl ir juanda dago no.378 bandung).'
+  });
+  const { page } = s;
+  await gotoStep2(page);
+  await page.getByText('Paket Laundry Kiloan').click();
+  await fillKiloanBag(page, 0, asLabeled({ bajuRingan: 15, celanaBiasa: 0, celanaJeans: 0, cd: 0, bra: 0 }));
+  await page.getByRole('button', { name: 'Tambah Paket Kiloan Ini' }).click();
+  await page.getByRole('button', { name: /Lanjut/ }).click();
+  await page.getByRole('tab', { name: /Periksa & Pesan/, selected: true }).waitFor();
+  await page.getByPlaceholder('Nama Anda').fill('Asep Rahmat');
+  await checkAllAgreements(page);
+
+  await step('Failed save: friendly message, raw DB text never shown', async () => {
+    await page.getByRole('button', { name: /Pesan Sekarang/ }).click();
+    await page.getByText('Pesanan gagal disimpan', { exact: false }).first().waitFor();
+    assert.equal(await page.getByText('Failing row', { exact: false }).count(), 0);
+    assert.equal(s.inserts.filter((i) => i.table === 'pickup_orders').length, 0);
+  });
+  await step('Failed save: error report carries no payload or personal data', async () => {
+    await page.waitForTimeout(500);
+    assert.equal(s.reports.length, 1);
+    const body = s.reports[0];
+    for (const leaked of ['085172141494', 'juanda', 'Asep', 'Titip', 'latitude', 'payload']) {
+      assert.ok(!body.includes(leaked), `report leaked "${leaked}": ${body}`);
+    }
+    const r = JSON.parse(body);
+    assert.deepEqual(Object.keys(r).sort(), ['category', 'column', 'context', 'message', 'stage']);
+    assert.deepEqual(r.context, { isFuturePickup: false, kiloanLines: 1, satuanLines: 0 });
+  });
+  await step('Retry after error: exactly one order and one set of driver/CS tasks', async () => {
+    s.setInsertFailMessage('');
+    await page.getByRole('button', { name: /Pesan Sekarang/ }).click();
+    await page.waitForTimeout(2000);
+    assert.equal(s.inserts.filter((i) => i.table === 'pickup_orders').length, 1);
+    const taskRows = s.inserts.filter((i) => i.table === 'system_tasks').flatMap((i) => i.rows);
+    assert.equal(taskRows.length, 2, `system_tasks rows: ${taskRows.length}`);
+  });
   await s.close();
 }
 

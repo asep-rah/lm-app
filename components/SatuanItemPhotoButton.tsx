@@ -2,42 +2,48 @@
 
 import { useState } from 'react';
 import { ImageIcon, Loader2 } from 'lucide-react';
-import { signedSatuanItemPhotoUrl } from '@/lib/satuanItemPhoto';
+import { staffSatuanPhotoUrl } from '@/lib/satuanItemPhoto';
 
 /**
- * Tombol "Lihat foto" untuk foto item satuan (bucket privat, path tersimpan
- * di items[].pieces[].photo_path — bukan URL publik). URL bertanda tangan
- * diminta HANYA saat tombol ditekan (deferred load, bukan auto-load semua
- * foto) — lihat docs/SECURITY_AND_MAINTENANCE.md §4.
+ * Tombol "Lihat foto" item satuan untuk staf. URL bertanda tangan (5 menit)
+ * diminta ke server HANYA saat tombol ditekan; server memverifikasi sesi staf,
+ * peran/outlet, dan bahwa foto memang milik pesanan ini.
  */
 export default function SatuanItemPhotoButton({
+  pickupOrderId,
   path,
-  label = 'Lihat Foto',
-  onOpenPhoto
+  label = 'Lihat Foto'
 }: {
+  pickupOrderId?: string | null;
   path?: string | null;
   label?: string;
-  onOpenPhoto?: (url: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  if (!path) return null;
+  if (!path || !pickupOrderId) return null;
 
   const open = async () => {
     setBusy(true);
     setError('');
-    const url = await signedSatuanItemPhotoUrl(path);
+    // Buka tab lebih dulu (dalam gesture klik) supaya tidak diblok popup blocker.
+    const win = window.open('', '_blank');
+    const res = await staffSatuanPhotoUrl(pickupOrderId, path);
     setBusy(false);
-    if (!url) {
-      setError('Gagal memuat foto.');
+    if ('error' in res) {
+      win?.close();
+      setError(res.error);
       return;
     }
-    if (onOpenPhoto) onOpenPhoto(url);
-    else window.open(url, '_blank', 'noopener,noreferrer');
+    if (win) {
+      win.opener = null;
+      win.location.href = res.url;
+    } else {
+      window.open(res.url, '_blank', 'noopener,noreferrer');
+    }
   };
 
   return (
-    <span className="inline-flex items-center gap-1.5">
+    <span className="inline-flex flex-wrap items-center gap-1.5">
       <button
         type="button"
         onClick={open}

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabaseClient';
 import { getStaffSession } from '@/lib/staffSession';
 import { insertChatMessage, sessionLooksClosed, threadKeyOf } from '@/lib/csChat';
 import { isPaymentLocked } from '@/lib/paymentVerify';
@@ -14,11 +14,8 @@ import { dispatchThirdPartyDelivery, isThirdPartyDelivery } from '@/lib/thirdPar
 import GoogleMapsNavButton from '@/components/GoogleMapsNavButton';
 import DeferredProofPhoto from '@/components/DeferredProofPhoto';
 import { listAllOnDuty, type DriverAttendance } from '@/lib/driverAttendance';
+import PickupItemsDetail from '@/components/PickupItemsDetail';
 
-const supabase = createClient(
-  'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
-  'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs'
-);
 
 export default function CSDashboard() {
   const [activeTab, setActiveTab] = useState<'confirmations' | 'pickups'>('pickups');
@@ -475,8 +472,10 @@ export default function CSDashboard() {
                     <div className="bg-slate-50 p-2.5 rounded-xl text-[10px] space-y-1 text-slate-700">
                       <p>Layanan: <b>{p.service_type}</b></p>
                       <p>Estimasi: <b>{p.estimated_weight} Kg</b> ({p.bag_count} Kantong)</p>
+                      {p.wash_process && <p>Proses: <b>{p.wash_process}</b></p>}
                       <p>Ongkir PP: <b>Rp {Number(p.delivery_fee || 0).toLocaleString('id-ID')}</b></p>
                     </div>
+                    <PickupItemsDetail items={p.items} pickupOrderId={p.id} showCategories={false} />
 {/* DOKUMENTASI FOTO REAL-TIME DRIVER UNTUK CS */}
 <div className="p-2.5 bg-slate-100/80 rounded-xl border border-slate-200 mt-2 space-y-2">
   <p className="text-[10px] font-extrabold text-slate-700 flex items-center gap-1">

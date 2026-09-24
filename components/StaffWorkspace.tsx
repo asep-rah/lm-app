@@ -9,7 +9,8 @@ import {
   canAccessFinanceRecon,
   getStaffSession,
   isCsRole,
-  isHeadManagementRole
+  isHeadManagementRole,
+  clearStaffServerSession
 } from '@/lib/staffSession';
 import { inboxRolesFor, isTaskCompleted, isTaskInProgress, isTaskOverdueOpen } from '@/lib/taskRoles';
 import { roleLabelOf } from '@/lib/staffRoles';
@@ -221,6 +222,7 @@ export default function StaffWorkspace() {
   };
 
   const handleLogout = () => {
+    clearStaffServerSession();
     localStorage.removeItem('laundry_user');
     localStorage.removeItem('laundry_owner_user');
     window.location.href = '/login';

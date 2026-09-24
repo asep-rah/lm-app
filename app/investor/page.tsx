@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabaseClient';
 import { insertChatMessage, isStaffOnlyMessage } from '@/lib/csChat';
 import { isVoidTransaction } from '@/lib/voidTx';
 import { toast } from '@/lib/toast';
+import { clearStaffServerSession } from '@/lib/staffSession';
 
 type LedgerRow = {
   date: string;
@@ -244,6 +245,7 @@ export default function InvestorDashboard() {
   };
 
   const handleLogout = () => {
+    clearStaffServerSession();
     localStorage.removeItem('laundry_user');
     localStorage.removeItem('laundry_owner_user');
     localStorage.removeItem('laundry_investor_user');

@@ -1,41 +1,62 @@
+import { createHash } from 'crypto';
 import { NextResponse, type NextRequest } from 'next/server';
-import { clientIp, insertErrorLog } from '@/lib/paymentSecurity';
+import { clientIp, insertErrorLog, paymentServiceDb } from '@/lib/paymentSecurity';
+import { normalizeOrderErrorReport } from '@/lib/orderErrorReport';
+import { createMemoryRateLimiter, isSameOriginRequest } from '@/lib/requestGuards';
 
 export const dynamic = 'force-dynamic';
 
-const ALLOWED_STAGES = new Set(['pickup_order_create']);
+const MAX_BODY_BYTES = 2048;
+const perIp = createMemoryRateLimiter({ max: 5, windowMs: 10 * 60 * 1000 });
+const GLOBAL_WINDOW_MS = 10 * 60 * 1000;
+const GLOBAL_MAX = 100;
+
+const ok = () => NextResponse.json({ ok: true });
 
 /**
- * Best-effort technical-error sink for the customer order form. The browser
- * never shows a raw database error to the customer (see submitValidatedOrder
- * in app/customer/dashboard/page.tsx); it POSTs the technical detail here
- * instead, so Owner/Admin Ops can still investigate it via Diagnosa Sistem
- * (app/api/owner/system-health reads the same error_logs table).
+ * Catatan error teknis dari form pesanan customer ke error_logs (Diagnosa
+ * Sistem). Hanya menerima kategori, nama kolom, pesan tersanitasi, dan hitungan
+ * baris — tidak ada payload pesanan, nama, nomor HP, atau alamat. IP disimpan
+ * sebagai hash pendek (untuk menandai penyalahgunaan), bukan IP mentah.
  *
- * No secrets involved: this route only writes to error_logs through the
- * existing service-role-gated insertErrorLog() helper. Unauthenticated by
- * design (the customer isn't logged in as staff) — same trust level as the
- * public Mayar/Xendit webhook routes that already log into this table.
+ * Pembatas: same-origin, body ≤ 2 KB, 5 laporan/10 menit per IP per instance,
+ * dan maksimal 100 laporan/10 menit secara global (dicek di DB).
  */
 export async function POST(req: NextRequest) {
+  if (!isSameOriginRequest(req.headers)) return NextResponse.json({ ok: false }, { status: 403 });
+  const declared = Number(req.headers.get('content-length') || 0);
+  if (declared > MAX_BODY_BYTES) return NextResponse.json({ ok: false }, { status: 413 });
+
+  const ip = clientIp(req) || 'unknown';
+  if (!perIp(ip)) return NextResponse.json({ ok: false }, { status: 429 });
+
   try {
-    const body = await req.json().catch(() => ({}));
-    const stage = ALLOWED_STAGES.has(String(body?.stage || '')) ? String(body.stage) : 'pickup_order_create';
-    const message = String(body?.message || '').trim().slice(0, 500);
-    if (!message) return NextResponse.json({ ok: false }, { status: 400 });
-    const context = body?.context && typeof body.context === 'object' ? { ...body.context, ip: clientIp(req) } : { ip: clientIp(req) };
+    const text = await req.text();
+    if (text.length > MAX_BODY_BYTES) return NextResponse.json({ ok: false }, { status: 413 });
+    const report = normalizeOrderErrorReport(JSON.parse(text || '{}'));
+    if (!report) return NextResponse.json({ ok: false }, { status: 400 });
+
+    const db = paymentServiceDb();
+    const since = new Date(Date.now() - GLOBAL_WINDOW_MS).toISOString();
+    const { count, error } = await db
+      .from('error_logs')
+      .select('id', { count: 'exact', head: true })
+      .eq('source', 'customer_order_form')
+      .gte('created_at', since);
+    if (error || (count || 0) >= GLOBAL_MAX) return ok();
+
+    const salt = String(process.env.CUSTOMER_AUTH_SECRET || process.env.CRON_SECRET || '');
+    const ipHash = salt ? createHash('sha256').update(`${salt}\u0000${ip}`).digest('hex').slice(0, 16) : null;
 
     await insertErrorLog({
       source: 'customer_order_form',
-      code: stage,
-      message,
-      context,
-      hint: 'Gagal membuat pesanan online dari /customer/dashboard. Cek payload di context.'
+      code: `${report.stage}:${report.category}`,
+      message: report.message || report.category,
+      context: { ...report.context, column: report.column, ipHash },
+      hint: 'Gagal membuat pesanan online dari /customer/dashboard.'
     });
   } catch {
-    /* best-effort: never block the customer on a logging failure */
+    /* best-effort: logging tidak boleh mengganggu customer */
   }
-  // Always 200 — this is a fire-and-forget diagnostic call, not part of the
-  // order flow itself.
-  return NextResponse.json({ ok: true });
+  return ok();
 }

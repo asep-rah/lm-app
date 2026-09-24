@@ -1,80 +1,107 @@
 /**
- * Foto wajib item satuan (customer order form). Berbeda sengaja dari
- * lib/uploadProof.ts's uploadProofFile(): fungsi itu SELALU "berhasil" (jatuh
- * ke data URL tersemat bila Storage gagal) dan memakai bucket PUBLIK — cocok
- * untuk bukti operasional yang toleran terhadap Storage belum terkonfigurasi,
- * tapi TIDAK cocok untuk syarat "wajib foto, jangan anggap gagal sebagai
- * berhasil, jangan jadi tautan publik" di form pemesanan customer. Lihat
- * migrasi supabase/migrations/20260924_satuan_item_photos.sql untuk bucket +
- * kebijakan RLS-nya, termasuk batasan yang didokumentasikan di sana.
+ * Foto wajib item satuan — sisi browser.
+ *
+ * Browser TIDAK punya akses langsung ke bucket (tanpa policy anon):
+ * - unggah: minta signed upload URL ke /api/customer/satuan-photo/upload-url
+ *   (butuh sesi customer terverifikasi), lalu kirim file ke URL itu;
+ * - lihat (staf): /api/staff/satuan-photo/view (butuh sesi staf terverifikasi).
+ * Kegagalan di langkah mana pun dilempar sebagai error — tidak pernah
+ * dianggap berhasil. Lihat supabase/migrations/20260924_satuan_item_photos.sql.
  */
 import { compressImageToBlob } from '@/lib/uploadProof';
 
 export const SATUAN_ITEM_PHOTO_BUCKET = 'satuan-item-photos';
-export const SATUAN_ITEM_PHOTO_SIGNED_URL_TTL_SEC = 3600;
 
 export type SatuanPhotoUploadResult = { path: string; previewUrl: string };
-
-const randomSuffix = () =>
-  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID().slice(0, 8)
-    : Math.random().toString(36).slice(2, 10);
+export type SatuanPhotoConfig = { enabled: boolean; canUpload: boolean };
 
 /** Pure guard — testable tanpa DOM/File API asli. */
 export const isImageFileLike = (file: { type?: string } | null | undefined): boolean =>
   Boolean(file && String(file.type || '').startsWith('image/'));
 
-/** Nama file storage aman — huruf/angka/underscore/dash saja, dipakai juga untuk tes. */
-export const safeSatuanPhotoPrefix = (raw: string): string =>
-  String(raw || 'item').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 60) || 'item';
+/**
+ * Status fitur dari server. Bila server tidak bisa dihubungi, anggap foto
+ * wajib tetapi belum bisa diunggah (fail-closed) — customer diminta memuat
+ * ulang, bukan dilewatkan tanpa foto.
+ */
+export async function fetchSatuanPhotoConfig(): Promise<SatuanPhotoConfig> {
+  try {
+    const res = await fetch('/api/customer/satuan-photo/config', { credentials: 'same-origin', cache: 'no-store' });
+    if (!res.ok) throw new Error(String(res.status));
+    const j = await res.json();
+    return { enabled: Boolean(j?.enabled), canUpload: Boolean(j?.canUpload) };
+  } catch {
+    return { enabled: true, canUpload: false };
+  }
+}
+
+const serverError = async (res: Response, fallback: string) => {
+  try {
+    const j = await res.json();
+    return typeof j?.error === 'string' && j.error ? j.error : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const UPLOAD_FAILED = 'Gagal mengunggah foto. Periksa koneksi internet Anda dan coba lagi.';
 
 /**
- * Mengunggah satu foto item satuan ke bucket privat. MELEMPAR error bila
- * gagal — pemanggil wajib menangani reject sebagai kegagalan sungguhan
- * (jangan disimpan sebagai "berhasil" bila fungsi ini reject).
+ * Mengunggah satu foto item satuan. MELEMPAR error bila gagal — pemanggil
+ * wajib menanganinya sebagai kegagalan sungguhan.
  */
-export async function uploadSatuanItemPhoto(file: File, prefix: string): Promise<SatuanPhotoUploadResult> {
+export async function uploadSatuanItemPhoto(file: File): Promise<SatuanPhotoUploadResult> {
   if (!isImageFileLike(file)) {
     throw new Error('File harus berupa foto (JPG/PNG).');
   }
-  const { supabase } = await import('@/lib/supabaseClient');
+  let res: Response;
+  try {
+    res = await fetch('/api/customer/satuan-photo/upload-url', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}'
+    });
+  } catch {
+    throw new Error(UPLOAD_FAILED);
+  }
+  if (!res.ok) throw new Error(await serverError(res, UPLOAD_FAILED));
+  const { path, token } = (await res.json().catch(() => ({}))) as { path?: string; token?: string };
+  if (!path || !token) throw new Error(UPLOAD_FAILED);
+
   const blob = await compressImageToBlob(file, { edge: 1280, quality: 0.72 });
-  const path = `${safeSatuanPhotoPrefix(prefix)}_${Date.now()}_${randomSuffix()}.jpg`;
+  const { supabase } = await import('@/lib/supabaseClient');
   const { error } = await supabase.storage
     .from(SATUAN_ITEM_PHOTO_BUCKET)
-    .upload(path, blob, { contentType: 'image/jpeg', upsert: false });
-  if (error) {
-    throw new Error('Gagal mengunggah foto. Periksa koneksi internet Anda dan coba lagi.');
-  }
-  // Pratinjau lokal instan (tidak butuh round-trip) — dicabut oleh pemanggil
-  // (URL.revokeObjectURL) saat foto diganti/dihapus.
+    .uploadToSignedUrl(path, token, blob, { contentType: 'image/jpeg' });
+  if (error) throw new Error(UPLOAD_FAILED);
+  // Pratinjau lokal — dicabut pemanggil (URL.revokeObjectURL) saat diganti/dihapus.
   return { path, previewUrl: URL.createObjectURL(file) };
 }
 
 /**
  * Aturan wajib foto: item satuan (satu baris keranjang) hanya lolos bila
- * SETIAP potong pada baris itu punya photo_path. Satu baris = satu atau lebih
- * "pieces"; qty > 1 tanpa pieces terisi (data lama/rusak) juga gagal.
+ * SETIAP potong pada baris itu punya photo_path.
  */
 export const satuanItemHasRequiredPhotos = (item: { pieces?: Array<{ photo_path?: string | null }> | null }): boolean =>
   Array.isArray(item?.pieces) && item.pieces.length > 0 && item.pieces.every((p) => Boolean(p?.photo_path));
 
-/**
- * URL sementara (kedaluwarsa, ~1 jam) untuk menampilkan foto ke staf —
- * BUKAN tautan publik permanen. Mengembalikan null bila gagal (pemanggil
- * menampilkan pesan "gagal memuat foto", bukan gambar kosong dianggap oke).
- */
-export async function signedSatuanItemPhotoUrl(
-  path: string,
-  ttlSeconds: number = SATUAN_ITEM_PHOTO_SIGNED_URL_TTL_SEC
-): Promise<string | null> {
-  if (!path) return null;
+/** URL sementara (5 menit) untuk staf — atau pesan error yang bisa ditampilkan. */
+export async function staffSatuanPhotoUrl(
+  pickupOrderId: string,
+  path: string
+): Promise<{ url: string } | { error: string }> {
   try {
-    const { supabase } = await import('@/lib/supabaseClient');
-    const { data, error } = await supabase.storage.from(SATUAN_ITEM_PHOTO_BUCKET).createSignedUrl(path, ttlSeconds);
-    if (error || !data?.signedUrl) return null;
-    return data.signedUrl;
+    const res = await fetch('/api/staff/satuan-photo/view', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pickupOrderId, path })
+    });
+    if (!res.ok) return { error: await serverError(res, 'Gagal memuat foto.') };
+    const j = await res.json();
+    return typeof j?.url === 'string' ? { url: j.url } : { error: 'Gagal memuat foto.' };
   } catch {
-    return null;
+    return { error: 'Gagal memuat foto. Periksa koneksi.' };
   }
 }

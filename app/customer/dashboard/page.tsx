@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic';
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabaseClient';
 import { fetchThreadMessages, insertChatMessage, isStaffOnlyMessage, phoneVariants, threadKeyOf } from '@/lib/csChat';
 import { parseChatInvoice } from '@/lib/chatInvoice';
 import { findPromoByCode, mapDbPromo, mapSettingsPromo, promoDiscountRp, promoIsClaimable, type CatalogPromo } from '@/lib/promoCatalog';
@@ -38,7 +38,12 @@ import {
   summarizeBagWeight,
   type BagCategoryCounts
 } from '@/lib/kiloanBagWeights';
-import { satuanItemHasRequiredPhotos, uploadSatuanItemPhoto } from '@/lib/satuanItemPhoto';
+import {
+  fetchSatuanPhotoConfig,
+  satuanItemHasRequiredPhotos,
+  uploadSatuanItemPhoto,
+  type SatuanPhotoConfig
+} from '@/lib/satuanItemPhoto';
 import { formatEstSelesai, formatTrxId } from '@/lib/posQueue';
 import { DEPOSIT_PACKAGES, depositBonusOf, depositPackageShort } from '@/lib/depositTopup';
 import { requestMayarInvoice, simulateMayarAutoPay } from '@/lib/mayar';
@@ -169,10 +174,6 @@ const BackupEmailCard = dynamic(() => import('@/components/customer/BackupEmailC
 const AddressManager = dynamic(() => import('@/components/customer/AddressManager'), { ssr: false });
 const PickupLocationPicker = dynamic(() => import('@/components/customer/PickupLocationPicker'), { ssr: false });
 
-const supabase = createClient(
-  'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
-  'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs'
-);
 
 const safeParse = (data: any, fallback: any) => {
   if (!data) return fallback;
@@ -247,6 +248,9 @@ type SatuanPieceForm = {
   photoUploading?: boolean;
   photoError?: string;
 };
+const SATUAN_PHOTO_NEEDS_VERIFIED_LOGIN =
+  'Item satuan wajib disertai foto. Keluar lalu masuk lagi dengan verifikasi WhatsApp/email agar foto bisa diunggah dengan aman.';
+
 /** Bentuk tersimpan (keranjang & payload) — hanya path foto, tanpa state progres UI. */
 type SatuanPieceRecord = { merk: string; warna: string; corak: string; photo_path?: string };
 
@@ -372,6 +376,18 @@ function CustomerDashboardPage() {
   const [satuanPieceNotes, setSatuanPieceNotes] = useState<SatuanPieceForm[]>([emptySatuanPiece()]);
   const [satuanNotesSame, setSatuanNotesSame] = useState(true);
   const [satuanFormError, setSatuanFormError] = useState('');
+  // null = masih dimuat (diperlakukan wajib foto sampai server menjawab).
+  const [satuanPhoto, setSatuanPhoto] = useState<SatuanPhotoConfig | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void fetchSatuanPhotoConfig().then((cfg) => {
+      if (alive) setSatuanPhoto(cfg);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const satuanPhotoRequired = satuanPhoto?.enabled !== false;
   const [agreedNoValuables, setAgreedNoValuables] = useState(false);
   const [agreedTerms, setAgreedTerms] = useState(false);
   const [showTermsModal, setShowTermsModal] = useState(false);
@@ -1649,16 +1665,29 @@ function CustomerDashboardPage() {
   // 1 kantong dipisah/dicampur sama saja (satu paket).
   const isSplitKiloanBags = washProcess === 'Pisah Perkantong' && Number(bagCount) > 1;
 
-  // Jumlah & isi form per-kantong mengikuti bagCount/washProcess, meniru pola
-  // resize satuanPieceNotes di atas. Form yang sudah ada dipertahankan; form
-  // baru diisi awal dengan layanan/durasi kiloan yang sedang dipilih.
-  useEffect(() => {
-    const n = isSplitKiloanBags ? Math.max(1, Math.min(MAX_KILOAN_BAGS, Number(bagCount) || 1)) : 1;
+  // Jumlah form per-kantong diatur saat customer mengubah jumlah kantong atau
+  // pilihan campur/pisah. Form yang sudah ada dipertahankan; form yang akan
+  // dibuang karena sudah berisi rincian harus dikonfirmasi dulu.
+  const applyKiloanBagLayout = (nextBagCount: number, nextWashProcess: string) => {
+    const count = Math.max(1, Math.min(MAX_KILOAN_BAGS, nextBagCount || 1));
+    const split = nextWashProcess === 'Pisah Perkantong' && count > 1;
+    const n = split ? count : 1;
+    const dropped = kiloanBagForms.slice(n);
+    const droppedFilled = dropped
+      .map((f, i) => ({ f, bag: n + i + 1 }))
+      .filter(({ f }) => BAG_CATEGORY_ORDER.some((k) => String(f.categories[k] ?? '').trim() !== ''));
+    if (droppedFilled.length > 0) {
+      const names = droppedFilled.map(({ bag }) => `Kantong ${bag}`).join(', ');
+      const ok = window.confirm(`Rincian ${names} yang sudah diisi akan dihapus. Lanjutkan?`);
+      if (!ok) return;
+    }
+    setBagCount(String(count));
+    setWashProcess(count > 1 ? nextWashProcess : 'Gabung Semua');
+    setKiloanFormError('');
     setKiloanBagForms((prev) =>
       Array.from({ length: n }, (_, i) => prev[i] || emptyKiloanBagForm(selectedKiloanSvc, kiloanDuration))
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bagCount, isSplitKiloanBags]);
+  };
 
   const patchKiloanBagCategory = (bagIdx: number, key: (typeof BAG_CATEGORY_ORDER)[number], value: string) => {
     setKiloanFormError('');
@@ -1807,7 +1836,7 @@ function CustomerDashboardPage() {
       );
     applyPatch({ photoUploading: true, photoError: undefined });
     try {
-      const { path, previewUrl } = await uploadSatuanItemPhoto(file, `satuan_${cleanPhone(customerPhone) || 'anon'}_${idx}`);
+      const { path, previewUrl } = await uploadSatuanItemPhoto(file);
       // Cabut pratinjau lama sebelum diganti supaya tidak bocor memori.
       setSatuanPieceNotes((prev) => {
         prev.forEach((p, i) => {
@@ -1822,8 +1851,9 @@ function CustomerDashboardPage() {
         return prev;
       });
       applyPatch({ photoPath: path, photoPreviewUrl: previewUrl, photoUploading: false, photoError: undefined });
-    } catch (err: any) {
-      applyPatch({ photoUploading: false, photoError: err?.message || 'Gagal mengunggah foto. Coba lagi.' });
+    } catch (err: unknown) {
+      const message = err instanceof Error && err.message ? err.message : 'Gagal mengunggah foto. Coba lagi.';
+      applyPatch({ photoUploading: false, photoError: message });
     }
   };
 
@@ -1882,11 +1912,19 @@ function CustomerDashboardPage() {
       return;
     }
     const qty = Number(inputSatuanQty) || 1;
+    if (satuanPhotoRequired && !satuanPhoto) {
+      setSatuanFormError('Memuat pengaturan foto. Coba lagi sebentar.');
+      return;
+    }
+    if (satuanPhotoRequired && !satuanPhoto?.canUpload) {
+      setSatuanFormError(SATUAN_PHOTO_NEEDS_VERIFIED_LOGIN);
+      return;
+    }
     // Wajib foto: minimal 1 slot (mode sama) atau N slot (mode beda per pcs)
     // sudah punya foto yang BERHASIL diunggah — tidak sedang mengunggah, dan
     // tidak gagal. Tidak pernah menganggap unggahan yang gagal/belum selesai
     // sebagai cukup untuk lanjut.
-    const slots = requiredSatuanPhotoSlots();
+    const slots = satuanPhotoRequired ? requiredSatuanPhotoSlots() : [];
     const missingIdx = slots.findIndex((p) => !p.photoPath || p.photoUploading || p.photoError);
     if (missingIdx !== -1) {
       const slot = slots[missingIdx];
@@ -1905,7 +1943,12 @@ function CustomerDashboardPage() {
     const pieces: SatuanPieceRecord[] = (satuanNotesSame
       ? Array.from({ length: qty }, () => ({ ...(satuanPieceNotes[0] || emptySatuanPiece()) }))
       : satuanPieceNotes.slice(0, qty)
-    ).map((p) => ({ merk: p.merk.trim(), warna: p.warna.trim(), corak: p.corak.trim(), photo_path: p.photoPath }));
+    ).map((p) => ({
+      merk: p.merk.trim(),
+      warna: p.warna.trim(),
+      corak: p.corak.trim(),
+      photo_path: satuanPhotoRequired ? p.photoPath : undefined
+    }));
 
     setCartSatuan([...cartSatuan, {
       name: selectedSatuanSvc,
@@ -2010,7 +2053,7 @@ function CustomerDashboardPage() {
       if (isSatuanChecked && cartSatuan.length === 0) {
         return 'Tekan "Tambah Item Satuan Ini" untuk memasukkan item satuan, atau hapus centang Items Satuan.';
       }
-      if (isSatuanChecked && cartSatuan.some((it) => !satuanItemHasRequiredPhotos(it))) {
+      if (satuanPhotoRequired && isSatuanChecked && cartSatuan.some((it) => !satuanItemHasRequiredPhotos(it))) {
         return 'Setiap item satuan wajib punya foto. Lengkapi foto pada item yang belum sebelum lanjut.';
       }
       return '';
@@ -2281,9 +2324,10 @@ function CustomerDashboardPage() {
       // pesan yang bisa dipahami, dan kirim detail teknisnya untuk diperiksa
       // lewat Diagnosa Sistem (Owner).
       toast(friendlyPickupOrderError(error?.message), 'err');
-      void reportPickupOrderError(error?.message || 'Gagal insert pickup_orders tanpa pesan error', {
-        payload,
-        isFuturePickup
+      void reportPickupOrderError(error?.message, {
+        isFuturePickup,
+        kiloanLines: kiloanLines.length,
+        satuanLines: cartSatuan.length
       });
     }
     setIsSubmitting(false);
@@ -2862,13 +2906,13 @@ function CustomerDashboardPage() {
                               <StepperBtn
                                 variant="minus"
                                 disabled={Number(bagCount) <= 1}
-                                onClick={() => setBagCount(String(Math.max(1, (Number(bagCount) || 1) - 1)))}
+                                onClick={() => applyKiloanBagLayout((Number(bagCount) || 1) - 1, washProcess)}
                               />
                               <span className="w-8 text-center font-extrabold text-cyan-400">{bagCount}</span>
                               <StepperBtn
                                 variant="plus"
                                 disabled={Number(bagCount) >= MAX_KILOAN_BAGS}
-                                onClick={() => setBagCount(String(Math.min(MAX_KILOAN_BAGS, (Number(bagCount) || 1) + 1)))}
+                                onClick={() => applyKiloanBagLayout((Number(bagCount) || 1) + 1, washProcess)}
                               />
                             </div>
                           </div>
@@ -2878,14 +2922,14 @@ function CustomerDashboardPage() {
                             <div className="flex gap-2">
                               <button
                                 type="button"
-                                onClick={() => setWashProcess('Gabung Semua')}
+                                onClick={() => applyKiloanBagLayout(Number(bagCount) || 1, 'Gabung Semua')}
                                 className={`px-3 py-1 rounded-xl font-extrabold text-xs transition ${washProcess === 'Gabung Semua' ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
                               >
                                 Dicampur
                               </button>
                               <button
                                 type="button"
-                                onClick={() => setWashProcess('Pisah Perkantong')}
+                                onClick={() => applyKiloanBagLayout(Number(bagCount) || 1, 'Pisah Perkantong')}
                                 disabled={Number(bagCount) <= 1}
                                 className={`px-3 py-1 rounded-xl font-extrabold text-xs transition disabled:opacity-40 ${washProcess === 'Pisah Perkantong' ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
                               >
@@ -3176,11 +3220,16 @@ function CustomerDashboardPage() {
                               />
                             </div>
                           </div>
+                          {satuanPhotoRequired && (
                           <div>
                             <label className="block text-[10px] text-slate-500 font-bold mb-1">
                               Foto {satuanNotesSame ? 'Item' : `Pcs ${idx + 1}`} <span className="text-rose-600">*wajib</span>
                             </label>
-                            {piece?.photoPreviewUrl ? (
+                            {satuanPhoto && !satuanPhoto.canUpload ? (
+                              <p className="text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-2 py-1.5 font-semibold">
+                                {SATUAN_PHOTO_NEEDS_VERIFIED_LOGIN}
+                              </p>
+                            ) : piece?.photoPreviewUrl ? (
                               <div className="relative w-24 h-24">
                                 {/* eslint-disable-next-line @next/next/no-img-element */}
                                 <img
@@ -3245,6 +3294,7 @@ function CustomerDashboardPage() {
                               <p className="text-[10px] text-rose-600 font-semibold mt-1" role="alert">{piece.photoError}</p>
                             )}
                           </div>
+                          )}
                         </div>
                       ))}
 

@@ -2,6 +2,8 @@ import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
 import { supabase } from '@/lib/supabaseClient';
 import { updatePickupOrder } from '@/lib/pickupUpdates';
 import { notifyStaffNewOrder } from '@/lib/notifications';
+import { localDateISO } from '@/lib/customerActivity';
+import { buildOrderErrorReport, classifyOrderError } from '@/lib/orderErrorReport';
 
 const schemaMissesColumn = (err: { message?: string } | null | undefined, column: string) => {
   const msg = String(err?.message || '').toLowerCase();
@@ -14,29 +16,32 @@ const schemaMissesColumn = (err: { message?: string } | null | undefined, column
  * reportPickupOrderError() supaya tetap bisa diperiksa di Diagnosa Sistem.
  */
 export const friendlyPickupOrderError = (raw?: string | null): string => {
-  const msg = String(raw || '').toLowerCase();
-  if (msg.includes('not-null constraint') || msg.includes('null value')) {
-    return 'Ada data pesanan yang belum lengkap. Periksa kembali alamat, jadwal penjemputan, dan layanan, lalu coba kirim lagi.';
+  switch (classifyOrderError(raw)) {
+    case 'not_null':
+      return 'Ada data pesanan yang belum lengkap. Periksa kembali alamat, jadwal penjemputan, dan layanan, lalu coba kirim lagi.';
+    case 'network':
+      return 'Koneksi internet bermasalah. Periksa jaringan Anda, lalu coba lagi.';
+    case 'duplicate':
+      return 'Pesanan ini sepertinya sudah tersimpan. Cek tab Aktivitas sebelum memesan ulang.';
+    default:
+      return 'Pesanan gagal disimpan. Coba lagi dalam beberapa saat, atau hubungi Live Chat bila terus terjadi.';
   }
-  if (msg.includes('failed to fetch') || msg.includes('networkerror') || msg.includes('network request failed')) {
-    return 'Koneksi internet bermasalah. Periksa jaringan Anda, lalu coba lagi.';
-  }
-  if (msg.includes('duplicate') || msg.includes('unique constraint')) {
-    return 'Pesanan ini sepertinya sudah tersimpan. Cek tab Aktivitas sebelum memesan ulang.';
-  }
-  return 'Pesanan gagal disimpan. Coba lagi dalam beberapa saat, atau hubungi Live Chat bila terus terjadi.';
 };
 
 /**
- * Kirim detail error teknis (pesan asli, payload ringkas) ke error_logs lewat
- * API server-side — best-effort, tidak pernah melempar ke pemanggil.
+ * Kirim ringkasan error teknis (kategori, nama kolom, pesan tanpa data
+ * pribadi, jumlah baris) ke error_logs lewat API — best-effort, tidak pernah
+ * melempar. Payload pesanan TIDAK dikirim.
  */
-export async function reportPickupOrderError(message: string, context?: Record<string, unknown>): Promise<void> {
+export async function reportPickupOrderError(
+  rawMessage: string | null | undefined,
+  ctx: { isFuturePickup?: boolean; kiloanLines?: number; satuanLines?: number } = {}
+): Promise<void> {
   try {
     await fetch('/api/customer/order/report-error', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ stage: 'pickup_order_create', message, context })
+      body: JSON.stringify(buildOrderErrorReport(rawMessage, ctx))
     });
   } catch {
     /* best-effort: kegagalan logging tidak boleh mengganggu alur pelanggan */
@@ -74,6 +79,9 @@ export async function insertPickupOrder(
   const generatedOrderNum =
     (payload.order_number as string) ||
     `ORD-${Date.now().toString().slice(-8)}-${Math.floor(1000 + Math.random() * 9000)}`;
+  // pickup_orders.pickup_date NOT NULL di produksi: order tanpa jadwal (jemput
+  // sekarang, request antar) memakai tanggal lokal hari ini.
+  const pickupDate = (payload.pickup_date as string) || localDateISO();
   const core = {
     order_number: generatedOrderNum,
     outlet_id: payload.outlet_id || null,
@@ -83,7 +91,8 @@ export async function insertPickupOrder(
     address: payload.address || payload.pickup_address || '',
     notes: payload.notes || null,
     status: payload.status || 'Menunggu Kurir',
-    transaction_id: payload.transaction_id || null
+    transaction_id: payload.transaction_id || null,
+    pickup_date: pickupDate
   };
   const coreNoTx = {
     order_number: generatedOrderNum,
@@ -96,7 +105,7 @@ export async function insertPickupOrder(
     status: core.status
   };
   const scheduled = {
-    pickup_date: payload.pickup_date || null,
+    pickup_date: pickupDate,
     pickup_time: payload.pickup_time || null,
     scheduled_at: payload.scheduled_at || payload.pickup_at || null
   };
@@ -104,9 +113,9 @@ export async function insertPickupOrder(
   const result = await insertWithFallback<{ id: string }>(
     'pickup_orders',
     [
-      payload,
-      omit(payload, ['created_at', 'address_id', 'driver_id', 'accepted_at', 'courier_type']),
-      omit(payload, [
+      { ...payload, pickup_date: pickupDate },
+      omit({ ...payload, pickup_date: pickupDate }, ['created_at', 'address_id', 'driver_id', 'accepted_at', 'courier_type']),
+      omit({ ...payload, pickup_date: pickupDate }, [
         'created_at',
         'address_id',
         'driver_id',

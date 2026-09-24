@@ -4,11 +4,13 @@ import Link from 'next/link';
 import CsWorkspaceNav from '@/components/cs/CsWorkspaceNav';
 import { useCsPortal } from '@/components/cs/CsPortalProvider';
 import { roleLabelOf } from '@/lib/staffRoles';
+import { clearStaffServerSession } from '@/lib/staffSession';
 
 export default function CsPortalHeader() {
   const { agent, unlockAudio } = useCsPortal();
 
   const handleLogout = () => {
+    clearStaffServerSession();
     localStorage.removeItem('laundry_user');
     localStorage.removeItem('laundry_owner_user');
     window.location.href = '/login';
