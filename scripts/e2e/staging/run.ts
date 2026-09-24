@@ -23,7 +23,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { chromium, type BrowserContext, type Page } from 'playwright-core';
 import { hashStaffPassword } from '../../../lib/staffPassword';
 import { PRODUCTION_SUPABASE_REF } from '../../../lib/supabaseTarget';
@@ -57,13 +57,33 @@ const loadEnv = (): StagingEnv => {
   return { ref: 'local', url, anonKey: String(process.env.LOCAL_SB_ANON || ''), serviceKey: String(process.env.LOCAL_SB_SERVICE || ''), dbUrl: '' };
 };
 
+/**
+ * Insert one synthetic row to learn why an app write failed (the app helpers
+ * ignore insert errors), then delete it again. Returns the PostgREST error
+ * code + message, or "ok".
+ */
+async function probeInsert(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  client: SupabaseClient<any, any, any>,
+  table: string, row: Record<string, unknown>): Promise<string> {
+  const { data, error } = await client.from(table).insert(row).select('id');
+  if (error) return `${error.code ?? ''} ${error.message}`.trim();
+  const ids = (data || []).map((r: { id: unknown }) => r.id);
+  if (ids.length) await client.from(table).delete().in('id', ids);
+  return 'ok (row inserted and removed)';
+}
+
 const results: Array<[string, string, string?]> = [];
 const step = async (name: string, fn: () => Promise<void>) => {
   try {
     await fn();
     results.push(['PASS', name]);
   } catch (e) {
-    results.push(['FAIL', name, String((e as Error)?.message || e).split('\n')[0]]);
+    // Assertion values here are synthetic staging data (roles, ids, flags) — safe to print.
+    const err = e as Error & { actual?: unknown; expected?: unknown; code?: string };
+    const brief = (v: unknown) => JSON.stringify(v)?.slice(0, 240);
+    const detail = err?.code === 'ERR_ASSERTION' && 'actual' in err ? ` | actual=${brief(err.actual)} expected=${brief(err.expected)}` : '';
+    results.push(['FAIL', name, String(err?.message || e).split('\n')[0] + detail]);
   }
   const last = results[results.length - 1];
   console.log(`${last[0]} | ${last[1]}${last[2] ? ` | ${last[2]}` : ''}`);
@@ -342,7 +362,18 @@ async function main() {
     });
     await step('Exactly one driver task and one CS task for the order', async () => {
       const { data } = await service.from('system_tasks').select('assigned_to_role').eq('source_id', String(instant?.id));
-      assert.deepEqual((data || []).map((t) => t.assigned_to_role).sort(), ['cs', 'driver']);
+      const roles = (data || []).map((t) => t.assigned_to_role).sort();
+      if (roles.join() !== 'cs,driver') {
+        // Why: the app inserts the full task with the ANON client and silently falls back to
+        // smaller payloads (without source_id). Replay the full payload the same way.
+        const probe = await probeInsert(anon, 'system_tasks', {
+          title: 'Pickup online — [STAGING] probe', description: '[STAGING] probe', assigned_to_role: 'cs', sla_hours: 2,
+          due_date: new Date().toISOString(), kpi_penalty_points: 5, status: 'pending', source_type: 'PICKUP', source_id: instant?.id
+        });
+        const unlinked = await service.from('system_tasks').select('*').ilike('title', '%[STAGING] Pelanggan Uji%').limit(5);
+        const shape = (unlinked.data || []).map((r) => `${r.assigned_to_role}:source_id=${r.source_id ?? 'null'}`).join(',') || unlinked.error?.message || 'none';
+        assert.fail(`tasks linked to order ${instant?.id}: [${roles}]; full-payload insert (anon): ${probe}; tasks by title: ${shape}`);
+      }
     });
     await ctx.close();
   }
@@ -393,7 +424,15 @@ async function main() {
   await step('Staff view is written to audit_logs', async () => {
     const { data } = await service.from('audit_logs').select('action, entity_id, user_id').eq('user_id', staffId.kasirA).order('created_at', { ascending: false }).limit(1);
     const row = data?.[0];
-    assert.deepEqual(row && { ...row, user_id: String(row.user_id) }, { action: 'view_satuan_item_photo', entity_id: String(instant?.id), user_id: staffId.kasirA });
+    if (!row) {
+      // insertAuditLog ignores insert errors: replay its exact row shape with the service role.
+      const probe = await probeInsert(service, 'audit_logs', {
+        user_id: staffId.kasirA, user_name: '[STAGING] Kasir A', role: 'kasir', action: 'view_satuan_item_photo',
+        entity_type: 'pickup_orders', entity_id: String(instant?.id), amount: null, meta: { path: '[STAGING] probe' }, ip_address: '127.0.0.1'
+      });
+      assert.fail(`no audit row for user_id ${staffId.kasirA}; same row via service role: ${probe}`);
+    }
+    assert.deepEqual({ ...row, user_id: String(row.user_id) }, { action: 'view_satuan_item_photo', entity_id: String(instant?.id), user_id: staffId.kasirA });
   });
   await step('Staff view: other-outlet kasir 403, driver 403, CS 200', async () => {
     assert.equal((await view(await login('kasirB'), body())).status, 403);
@@ -403,7 +442,9 @@ async function main() {
   await step('Staff view: photo not on the order / smuggled other-customer photo → 404', async () => {
     const kasir = await login('kasirA');
     assert.equal((await view(kasir, { pickupOrderId: String(instant?.id), path: victimPath })).status, 404);
-    const { data, error } = await service
+    // Inserted with the ANON client, the same way the customer app creates orders
+    // (production grants the pickup_order_seq sequence to anon/authenticated).
+    const { data, error } = await anon
       .from('pickup_orders')
       .insert({ outlet_id: SYN.outletA, customer_phone: SYN.customer, customer_name: '[STAGING] smuggle', pickup_date: jakartaToday(), status: 'Menunggu Kurir', items: [{ name: 'Jas', pieces: [{ photo_path: victimPath }] }] })
       .select('id')
@@ -478,7 +519,14 @@ async function main() {
     assert.equal(r.status, 200);
     const { data } = await service.from('error_logs').select('*').eq('source', 'customer_order_form').gte('created_at', runStart).order('created_at', { ascending: false }).limit(1);
     const row = JSON.stringify(data?.[0] || {});
-    assert.ok(data?.[0], 'row written');
+    if (!data?.[0]) {
+      // insertErrorLog ignores insert errors: replay its exact row shape with the service role.
+      const probe = await probeInsert(service, 'error_logs', {
+        source: 'customer_order_form', code: 'pickup_order_create:not_null', message: '[STAGING] probe', hint: '[STAGING] probe',
+        severity: 'ERROR', context: { column: 'pickup_date' }, transaction_id: null
+      });
+      assert.fail(`no error_logs row; same row via service role: ${probe}`);
+    }
     for (const leaked of [SYN.customer, 'jl uji', 'Pelanggan Uji']) assert.ok(!row.includes(leaked), `leaked ${leaked}`);
   });
 

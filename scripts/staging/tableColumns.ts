@@ -11,7 +11,28 @@
 import { ALTER_TABLE, IDENT, maskLiterals, maskParens, qualify, TABLE_NAME, tableElements, unquote } from './columnNotNull';
 import { splitSqlStatements, type SqlStatement } from './sqlLexer';
 
-export type Column = { name: string; type: string; notNull: boolean; hasDefault: boolean; generatedAlways: boolean; identity: boolean };
+export type Column = {
+  name: string;
+  type: string;
+  notNull: boolean;
+  hasDefault: boolean;
+  generatedAlways: boolean;
+  identity: boolean;
+  /** Kind of default, never its literal value: nextval(<sequence>), <function>(), literal or expression. */
+  defaultKind?: string;
+};
+
+/** Classify a DEFAULT expression without exposing literal values. */
+export const defaultKindOf = (expr: string): string => {
+  const e = expr.trim();
+  const seq = /^nextval\s*\(\s*'([^']+)'/i.exec(e);
+  if (seq) return `nextval(${seq[1]})`;
+  if (/^('(?:[^']|'')*'|-?\d[\d.]*|true|false|null)(\s*::\s*[\w .\[\]"]+)?$/i.test(e)) return 'literal';
+  const fn = /^([\w.]+)\s*\(\s*\)(\s*::\s*[\w .]+)?$/.exec(e);
+  if (fn) return `${fn[1].replace(/^pg_catalog\./, '')}()`;
+  return 'expression';
+};
+const DEFAULT_EXPR = /\bDEFAULT\s+([\s\S]+?)(?=\s+(?:NOT\s+NULL|NULL|CONSTRAINT|CHECK|REFERENCES|UNIQUE|PRIMARY|GENERATED|COLLATE)\b|\s*$)/i;
 export type TableModel = Map<string, Map<string, Column>>;
 
 const CONSTRAINT_START = /^(CONSTRAINT|PRIMARY|UNIQUE|CHECK|FOREIGN|EXCLUDE|NOT\s+NULL|LIKE)\b/i;
@@ -34,6 +55,7 @@ export function parseColumnDef(def: string): Column | null {
     type: rest.split(TYPE_END)[0].trim() || '?',
     notNull: /\bNOT\s+NULL\b/i.test(flat) || /\bPRIMARY\s+KEY\b/i.test(flat),
     hasDefault: /\bDEFAULT\b/i.test(flat),
+    defaultKind: /\bDEFAULT\b/i.test(flat) ? defaultKindOf(DEFAULT_EXPR.exec(def.trim().slice(IDENT.exec(def.trim())![1].length))?.[1] ?? '') : undefined,
     identity: /\bGENERATED\s+(ALWAYS|BY\s+DEFAULT)\s+AS\s+IDENTITY\b/i.test(flat),
     generatedAlways: /\bGENERATED\s+ALWAYS\s+AS\b/i.test(flat)
   };
@@ -122,8 +144,13 @@ export function applyToModel(model: TableModel, stmts: SqlStatement[]): TableMod
         const col = cols.get(unquote(m[1]));
         if (!col) continue;
         const what = maskLiterals(m[2]).trim();
-        if (/^SET\s+DEFAULT\b/i.test(what)) col.hasDefault = true;
-        else if (/^DROP\s+DEFAULT\b/i.test(what)) col.hasDefault = false;
+        if (/^SET\s+DEFAULT\b/i.test(what)) {
+          col.hasDefault = true;
+          col.defaultKind = defaultKindOf(m[2].trim().replace(/^SET\s+DEFAULT\s+/i, ''));
+        } else if (/^DROP\s+DEFAULT\b/i.test(what)) {
+          col.hasDefault = false;
+          col.defaultKind = undefined;
+        }
         else if (/^SET\s+NOT\s+NULL\b/i.test(what)) col.notNull = true;
         else if (/^DROP\s+NOT\s+NULL\b/i.test(what)) col.notNull = false;
         else if (/^ADD\s+GENERATED\s+(ALWAYS|BY\s+DEFAULT)\s+AS\s+IDENTITY\b/i.test(what)) col.identity = true;
@@ -239,4 +266,4 @@ export function checkSeed(model: TableModel, inserts: SeedInsert[]): SeedIssue[]
 }
 
 export const describeColumns = (cols: Map<string, Column>) =>
-  [...cols.values()].map((c) => `${c.name} ${c.type}${c.notNull ? ' NOT NULL' : ''}${c.hasDefault ? ' DEFAULT' : ''}${c.identity ? ' IDENTITY' : ''}${c.generatedAlways && !c.identity ? ' GENERATED' : ''}`);
+  [...cols.values()].map((c) => `${c.name} ${c.type}${c.notNull ? ' NOT NULL' : ''}${c.hasDefault ? ` DEFAULT ${c.defaultKind ?? ''}`.trimEnd() : ''}${c.identity ? ' IDENTITY' : ''}${c.generatedAlways && !c.identity ? ' GENERATED' : ''}`);
