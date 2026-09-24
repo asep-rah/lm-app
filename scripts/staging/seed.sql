@@ -2,7 +2,7 @@
 -- Run by scripts/staging/prepare.ts (after its guard) inside one transaction.
 -- Nothing here comes from production. Markers: names start with "[STAGING]",
 -- phones 0800000000xx (toll-free prefix, never a real mobile number),
--- usernames stg_*, ids e5e50000-….
+-- usernames stg_*, outlet ids e5e50000-….
 -- Passwords are NOT set here: the staging runner sets random ones per run.
 -- Idempotent: only inserts rows that are missing.
 
@@ -34,12 +34,16 @@ insert into customer_addresses (customer_phone, label_name, full_address, is_pri
 select '080000000001', 'Rumah', '[STAGING] jl uji coblong no.1 bandung', true, -6.886, 107.613
 where not exists (select 1 from customer_addresses a where a.customer_phone = '080000000001');
 
-insert into employees (id, name, role, outlet_id, username, password)
-select v.id::uuid, v.name, v.role, v.outlet::uuid, v.username, '!disabled-' || gen_random_uuid()
+-- employees.id is bigint in production (not uuid): let the database assign
+-- it and identify the synthetic staff by username (stg_*). outlet_id comes
+-- from the synthetic outlet row itself, so it has the outlets.id type.
+insert into employees (name, role, outlet_id, username, password)
+select v.name, v.role, o.id, v.username, '!disabled-' || gen_random_uuid()
 from (values
-  ('e5e50000-0000-4000-8000-0000000000e1', '[STAGING] Kasir A', 'kasir', 'e5e50000-0000-4000-8000-00000000000a', 'stg_kasir_a'),
-  ('e5e50000-0000-4000-8000-0000000000e2', '[STAGING] Kasir B', 'kasir', 'e5e50000-0000-4000-8000-00000000000b', 'stg_kasir_b'),
-  ('e5e50000-0000-4000-8000-0000000000e3', '[STAGING] CS', 'cs', null, 'stg_cs'),
-  ('e5e50000-0000-4000-8000-0000000000e4', '[STAGING] Driver A', 'driver', 'e5e50000-0000-4000-8000-00000000000a', 'stg_driver_a')
-) as v(id, name, role, outlet, username)
-where not exists (select 1 from employees e where e.id = v.id::uuid);
+  ('[STAGING] Kasir A', 'kasir', 'e5e50000-0000-4000-8000-00000000000a', 'stg_kasir_a'),
+  ('[STAGING] Kasir B', 'kasir', 'e5e50000-0000-4000-8000-00000000000b', 'stg_kasir_b'),
+  ('[STAGING] CS', 'cs', null, 'stg_cs'),
+  ('[STAGING] Driver A', 'driver', 'e5e50000-0000-4000-8000-00000000000a', 'stg_driver_a')
+) as v(name, role, outlet, username)
+left join outlets o on o.id::text = v.outlet
+where not exists (select 1 from employees e where e.username = v.username);

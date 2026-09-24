@@ -38,14 +38,17 @@ const SYN = {
   customer: '080000000001',
   otherCustomer: '080000000002',
   outletA: 'e5e50000-0000-4000-8000-00000000000a',
+  /** Synthetic staff by username; ids are assigned by the database (employees.id is bigint in production). */
   staff: {
-    kasirA: { id: 'e5e50000-0000-4000-8000-0000000000e1', username: 'stg_kasir_a' },
-    kasirB: { id: 'e5e50000-0000-4000-8000-0000000000e2', username: 'stg_kasir_b' },
-    cs: { id: 'e5e50000-0000-4000-8000-0000000000e3', username: 'stg_cs' },
-    driverA: { id: 'e5e50000-0000-4000-8000-0000000000e4', username: 'stg_driver_a' }
+    kasirA: { username: 'stg_kasir_a' },
+    kasirB: { username: 'stg_kasir_b' },
+    cs: { username: 'stg_cs' },
+    driverA: { username: 'stg_driver_a' }
   }
 } as const;
 type StaffKey = keyof typeof SYN.staff;
+/** employees.id of each synthetic staff member, as text; filled from the database before the tests. */
+const staffId = {} as Record<StaffKey, string>;
 
 const loadEnv = (): StagingEnv => {
   if (!selftest) return loadStagingEnv({ needDb: false });
@@ -156,17 +159,23 @@ async function main() {
   // Random per-run staff passwords (hashed in DB, kept only in memory).
   const passwords = {} as Record<StaffKey, string>;
   for (const key of Object.keys(SYN.staff) as StaffKey[]) {
+    const found = await service.from('employees').select('id').eq('username', SYN.staff[key].username);
+    if (found.error || found.data?.length !== 1) {
+      console.error(`ABORT | synthetic staff ${SYN.staff[key].username} not found exactly once (${found.error?.message ?? `${found.data?.length ?? 0} rows`}). Run scripts/staging/prepare.ts first.`);
+      stop(2);
+    }
+    staffId[key] = String(found.data![0].id);
     passwords[key] = randomBytes(18).toString('base64url');
-    const { error } = await service.from('employees').update({ password: hashStaffPassword(passwords[key]) }).eq('id', SYN.staff[key].id);
+    const { error } = await service.from('employees').update({ password: hashStaffPassword(passwords[key]) }).eq('id', staffId[key]);
     if (error) {
       console.error(`ABORT | cannot set synthetic staff credentials (${error.message}). Run scripts/staging/prepare.ts first.`);
       stop(2);
     }
   }
   // Driver A on duty at outlet A so the driver queue shows its pickups.
-  await service.from('driver_attendance').delete().eq('driver_id', SYN.staff.driverA.id);
+  await service.from('driver_attendance').delete().eq('driver_id', staffId.driverA);
   await service.from('driver_attendance').insert({
-    driver_id: SYN.staff.driverA.id,
+    driver_id: staffId.driverA,
     driver_name: '[STAGING] Driver A',
     active_outlet_id: SYN.outletA,
     clock_in_at: new Date().toISOString(),
@@ -382,8 +391,9 @@ async function main() {
     assert.equal((await fetch(url)).status, 200);
   });
   await step('Staff view is written to audit_logs', async () => {
-    const { data } = await service.from('audit_logs').select('action, entity_id, user_id').eq('user_id', SYN.staff.kasirA.id).order('created_at', { ascending: false }).limit(1);
-    assert.deepEqual(data?.[0], { action: 'view_satuan_item_photo', entity_id: String(instant?.id), user_id: SYN.staff.kasirA.id });
+    const { data } = await service.from('audit_logs').select('action, entity_id, user_id').eq('user_id', staffId.kasirA).order('created_at', { ascending: false }).limit(1);
+    const row = data?.[0];
+    assert.deepEqual(row && { ...row, user_id: String(row.user_id) }, { action: 'view_satuan_item_photo', entity_id: String(instant?.id), user_id: staffId.kasirA });
   });
   await step('Staff view: other-outlet kasir 403, driver 403, CS 200', async () => {
     assert.equal((await view(await login('kasirB'), body())).status, 403);
@@ -408,11 +418,11 @@ async function main() {
     const escalated = Buffer.from(JSON.stringify({ ...p, role: 'owner' })).toString('base64url');
     assert.equal((await view(`ldrv_staff_session=${escalated}.${sig}`, body())).status, 401);
     assert.equal((await view(kasir, body(), 'https://evil.example')).status, 403);
-    await service.from('employees').update({ role: 'driver' }).eq('id', SYN.staff.kasirA.id);
+    await service.from('employees').update({ role: 'driver' }).eq('id', staffId.kasirA);
     try {
       assert.equal((await view(kasir, body())).status, 403);
     } finally {
-      await service.from('employees').update({ role: 'kasir' }).eq('id', SYN.staff.kasirA.id);
+      await service.from('employees').update({ role: 'kasir' }).eq('id', staffId.kasirA);
     }
   });
 

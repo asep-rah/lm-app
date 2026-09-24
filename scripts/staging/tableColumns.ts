@@ -155,14 +155,53 @@ export const modelFromCatalog = (rows: string[]): TableModel => {
 export const CATALOG_QUERY = (tables: string[]) =>
   `select table_schema || '.' || table_name, column_name, data_type, is_nullable, (column_default is not null)::text::char, is_identity, is_generated from information_schema.columns where table_schema || '.' || table_name in (${tables.map((t) => `'${t.replace(/'/g, "''")}'`).join(',')}) order by 1, ordinal_position`;
 
-export type SeedInsert = { line: number; table: string; columns: string[] | null };
+/** casts[i] = explicit ::type of the i-th SELECT value (INSERT … SELECT), or null. */
+export type SeedInsert = { line: number; table: string; columns: string[] | null; casts: Array<string | null> };
+
+/** Top-level SELECT list of "INSERT INTO t (…) SELECT a, b::uuid, … FROM …". */
+const selectList = (text: string): string[] => {
+  const masked = maskLiterals(text);
+  const sel = /\)\s*SELECT\s/i.exec(masked);
+  if (!sel) return [];
+  const out: string[] = [];
+  let depth = 0;
+  let from = sel.index + sel[0].length;
+  for (let i = from; i < masked.length; i++) {
+    const c = masked[i];
+    if (c === '(') depth++;
+    else if (c === ')') depth--;
+    else if (depth === 0 && (c === ',' || /^\s(FROM|WHERE)\s/i.test(masked.slice(i, i + 7)) || c === ';')) {
+      out.push(masked.slice(from, i).trim());
+      if (c !== ',') return out;
+      from = i + 1;
+    }
+  }
+  out.push(masked.slice(from).trim());
+  return out;
+};
+
+const TYPE_FAMILY: Array<[RegExp, string]> = [
+  [/^uuid$/, 'uuid'],
+  [/^(smallint|integer|int|int[248]|bigint|serial|bigserial|smallserial)$/, 'integer'],
+  [/^(numeric|decimal|real|double precision|float[48]?)(\(.*\))?$/, 'number'],
+  [/^(boolean|bool)$/, 'boolean'],
+  [/^(jsonb?)$/, 'json'],
+  [/^(date)$/, 'date'],
+  [/^(timestamp|timestamptz|timestamp with(out)? time zone)(\(.*\))?$/, 'timestamp'],
+  [/^(text|varchar|character varying|char|character|bpchar|name|citext)(\(.*\))?$/, 'text']
+];
+export const typeFamily = (t: string): string | null => {
+  const n = t.toLowerCase().replace(/^(public|pg_catalog)\./, '').replace(/"/g, '').trim();
+  return TYPE_FAMILY.find(([re]) => re.test(n))?.[1] ?? null;
+};
 
 export const seedInserts = (sql: string): SeedInsert[] =>
   splitSqlStatements(sql)
     .filter((s) => s.kind === 'sql' && /^INSERT\s+INTO\b/i.test(s.text))
     .map((s) => {
       const m = /^INSERT\s+INTO\s+([\w."$]+)(?:\s+AS\s+\w+)?\s*(\(([^)]*)\))?/i.exec(s.text)!;
-      return { line: s.line, table: qualify(m[1]), columns: m[2] ? m[3].split(',').map((c) => identName(c)) : null };
+      const casts = selectList(s.text).map((e) => /::\s*([\w. ]+?)(\[\])?\s*$/.exec(e)?.[1] ?? null);
+      return { line: s.line, table: qualify(m[1]), columns: m[2] ? m[3].split(',').map((c) => identName(c)) : null, casts };
     });
 
 export type SeedIssue = { line: number; table: string; problem: string };
@@ -180,10 +219,16 @@ export function checkSeed(model: TableModel, inserts: SeedInsert[]): SeedIssue[]
       add('INSERT without a column list (cannot be verified)');
       continue;
     }
-    for (const c of ins.columns) {
-      if (!cols.has(c)) add(`column "${c}" does not exist`);
-      else if (cols.get(c)!.generatedAlways) add(`column "${c}" is GENERATED ALWAYS (cannot be inserted)`);
-    }
+    ins.columns.forEach((c, i) => {
+      const col = cols.get(c);
+      if (!col) return add(`column "${c}" does not exist`);
+      if (col.generatedAlways) return add(`column "${c}" is GENERATED ALWAYS (cannot be inserted)`);
+      // An explicit cast must land in the same type family (text columns accept any value).
+      const cast = ins.casts[i];
+      const from = cast ? typeFamily(cast) : null;
+      const to = typeFamily(col.type);
+      if (from && to && from !== to && to !== 'text') add(`column "${c}" is ${col.type} but the seed value is cast to ${cast}`);
+    });
     for (const col of cols.values()) {
       if (col.notNull && !col.hasDefault && !col.identity && !col.generatedAlways && !ins.columns.includes(col.name)) {
         add(`required column "${col.name}" (${col.type}, NOT NULL, no default) is not supplied`);

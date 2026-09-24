@@ -17,7 +17,9 @@ const all = args.includes('--all');
 const selftest = args.includes('--selftest-local');
 
 const PHONES = "('080000000001','080000000002')";
-const STAFF = "('e5e50000-0000-4000-8000-0000000000e1','e5e50000-0000-4000-8000-0000000000e2','e5e50000-0000-4000-8000-0000000000e3','e5e50000-0000-4000-8000-0000000000e4')";
+const USERNAMES = "('stg_kasir_a','stg_kasir_b','stg_cs','stg_driver_a')";
+/** Synthetic staff ids as text (employees.id is bigint in production). */
+const STAFF = `(select id::text from employees where username in ${USERNAMES})`;
 const ORDERS = `select id::text from pickup_orders where customer_phone in ${PHONES}`;
 
 async function main() {
@@ -68,7 +70,7 @@ async function main() {
     delete from audit_logs where user_id::text in ${STAFF};
     delete from error_logs where source = 'customer_order_form';
     ${all ? `delete from driver_attendance where driver_id::text in ${STAFF};
-    delete from employees where id::text in ${STAFF};
+    delete from employees where username in ${USERNAMES};
     delete from customer_addresses where customer_phone in ${PHONES};
     delete from customers where phone in ${PHONES};
     delete from outlets where id in ('e5e50000-0000-4000-8000-00000000000a','e5e50000-0000-4000-8000-00000000000b');` : ''}
