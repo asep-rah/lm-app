@@ -26,7 +26,7 @@ import { join } from 'node:path';
 import { createClient } from '@supabase/supabase-js';
 import { PRODUCTION_SUPABASE_REF } from '../../lib/supabaseTarget';
 import { log, loadStagingEnv, verifyStagingKeys, type StagingEnv } from './guard';
-import { inspectSchemaDump } from './schemaDump';
+import { inspectSchemaDump, needsReview } from './schemaDump';
 
 const ROOT = join(__dirname, '..', '..');
 const args = process.argv.slice(2);
@@ -150,10 +150,12 @@ async function main() {
       log(false, `5. dump contains ${report.dataStatements.length} data statement(s) — refusing (schema only). First: ${report.dataStatements[0]}`);
       process.exit(2);
     }
-    if ((report.outboundHttp.length || report.productionRefs.length) && !flag('--outbound-http-reviewed')) {
-      log(false, `5. dump contains outbound HTTP / production references that would run from staging:`);
-      [...report.outboundHttp, ...report.productionRefs].slice(0, 20).forEach((l) => console.log(`     ${l}`));
-      console.log('   Review/neutralise them, then re-run with --outbound-http-reviewed.');
+    report.notes.slice(0, 20).forEach((l) => log(null, `5. note ${l}`));
+    const reviewed = flag('--dump-reviewed') || flag('--outbound-http-reviewed');
+    if (needsReview(report) && !reviewed) {
+      log(false, '5. dump contains items that would run from staging or look like secrets:');
+      [...report.outboundHttp, ...report.productionRefs, ...report.secretLike].slice(0, 30).forEach((l) => console.log(`     ${l}`));
+      console.log('   Review/neutralise them in a cleaned copy, then re-run with --dump-reviewed.');
       process.exit(2);
     }
     log(true, `5. dump validated: schema only (${dumpSql.split('\n').length} lines, no data statements)`);

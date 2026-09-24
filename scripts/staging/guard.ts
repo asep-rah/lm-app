@@ -5,7 +5,9 @@
  * prints key or password values.
  *
  * Env: STAGING_REF, STAGING_SUPABASE_URL, STAGING_SUPABASE_ANON_KEY,
- *      STAGING_SUPABASE_SERVICE_ROLE_KEY, STAGING_DB_URL (DB steps only)
+ *      STAGING_SUPABASE_SERVICE_ROLE_KEY, and for DB steps either
+ *      STAGING_DB_HOST + STAGING_DB_PASSWORD (Session pooler, port 5432,
+ *      user postgres.<STAGING_REF> derived here) or STAGING_DB_URL.
  */
 import {
   isProductionKey,
@@ -44,6 +46,29 @@ export const dbUrlMatchesRef = (dbUrl: string, ref: string): boolean => {
   }
 };
 
+/** Session pooler connection built from parts: user and port are not user input. */
+export const sessionPoolerUrl = (ref: string, host: string, password: string): string => {
+  const h = String(host || '').trim().toLowerCase();
+  if (!/^[a-z0-9-]+\.pooler\.supabase\.com$/.test(h)) refuse('STAGING_DB_HOST must be the Session pooler host (…pooler.supabase.com).');
+  if (!password) refuse('STAGING_DB_PASSWORD is empty.');
+  return `postgresql://postgres.${ref}:${encodeURIComponent(password)}@${h}:5432/postgres`;
+};
+
+/** Ref + URL + anon key only (read-only API checks from a session without secrets). */
+export const validateStagingApiEnv = (e: { ref?: string; url?: string; anonKey?: string }) => {
+  const ref = String(e.ref || '');
+  if (!/^[a-z0-9]{15,40}$/.test(ref)) refuse('STAGING_REF must be the staging project ref (lowercase letters/digits).');
+  if (ref === PRODUCTION_SUPABASE_REF) refuse('STAGING_REF is the PRODUCTION project.');
+  const url = String(e.url || '').replace(/\/+$/, '');
+  if (url !== `https://${ref}.supabase.co`) refuse('STAGING_SUPABASE_URL must be exactly https://<STAGING_REF>.supabase.co.');
+  const anonKey = String(e.anonKey || '');
+  if (!anonKey) refuse('STAGING_SUPABASE_ANON_KEY is required.');
+  if (isProductionKey(anonKey)) refuse('the anon key belongs to PRODUCTION.');
+  const keyRef = supabaseRefOfKey(anonKey);
+  if (keyRef && keyRef !== ref) refuse('the anon key belongs to another project.');
+  return { ref, url, anonKey };
+};
+
 export const validateStagingEnv = (e: Partial<StagingEnv>, opts: { needDb: boolean }): StagingEnv => {
   const ref = String(e.ref || '');
   if (!/^[a-z0-9]{15,40}$/.test(ref)) refuse('STAGING_REF must be the staging project ref (lowercase letters/digits).');
@@ -76,7 +101,10 @@ export const loadStagingEnv = (opts: { needDb: boolean }): StagingEnv =>
       url: env('STAGING_SUPABASE_URL'),
       anonKey: env('STAGING_SUPABASE_ANON_KEY'),
       serviceKey: env('STAGING_SUPABASE_SERVICE_ROLE_KEY'),
-      dbUrl: env('STAGING_DB_URL')
+      dbUrl:
+        opts.needDb && env('STAGING_DB_HOST')
+          ? sessionPoolerUrl(env('STAGING_REF'), env('STAGING_DB_HOST'), String(process.env.STAGING_DB_PASSWORD || ''))
+          : env('STAGING_DB_URL')
     },
     opts
   );
