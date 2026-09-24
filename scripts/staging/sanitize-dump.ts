@@ -7,24 +7,31 @@
  *   non-allowlisted statement.
  * - Removes Database Webhook triggers (supabase_functions.http_request) and
  *   their ENABLE/DISABLE/COMMENT statements.
+ * - Removes ALTER DEFAULT PRIVILEGES FOR ROLE <other than postgres> (e.g.
+ *   supabase_admin): the non-superuser staging apply role cannot run them
+ *   ("permission denied to change default privileges"), and the staging
+ *   project keeps its own platform defaults for those roles. Default
+ *   privileges FOR ROLE postgres, and all GRANT/REVOKE on objects, are kept.
  * - Rewrites every http(s) URL host to staging-disabled.invalid (pg_net /
  *   http calls from functions cannot reach any real endpoint), redacts
  *   JWTs, sb_secret_/sk_ keys, Bearer tokens and key/token/password values,
  *   and replaces the production project ref.
  * - Re-inspects the result and deletes it unless it is clean.
  * Output: mode 600, never overwrites, outside the repo, first line
- * "-- lm-staging-sanitized v1" (required by prepare.ts). Prints counts,
+ * "-- lm-staging-sanitized v2" (required by prepare.ts). Prints counts,
  * object names and hosts only — never statement contents.
  */
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { PRODUCTION_SUPABASE_REF } from '../../lib/supabaseTarget';
+import { APPLY_ROLE, foreignDefaultPrivileges } from './privileges';
 import { inspectStatements, needsReview, NEUTRAL_HOST, SECRET_PATTERNS, webhookTriggerOf } from './schemaDump';
 import { describeNotNull, findNotNull } from './columnNotNull';
 import { splitSqlStatements } from './sqlLexer';
 
-export const SANITIZED_HEADER = '-- lm-staging-sanitized v1';
+/** v2: also removes foreign ALTER DEFAULT PRIVILEGES (v1 copies fail on staging). */
+export const SANITIZED_HEADER = '-- lm-staging-sanitized v2';
 
 export type SanitizeChange = { line: number; object: string; change: string };
 
@@ -33,6 +40,8 @@ export type SanitizeResult = {
   /** Per-statement changes: line in the input, object label, what changed (no contents). */
   changes: SanitizeChange[];
   removedTriggers: string[];
+  /** Removed ALTER DEFAULT PRIVILEGES statements per FOR ROLE role. */
+  removedDefaultPrivileges: Record<string, number>;
   hosts: Record<string, number>;
   redacted: number;
   prodRefs: number;
@@ -52,6 +61,7 @@ export function sanitizeSchemaDump(input: string, productionRef = PRODUCTION_SUP
   const hosts: Record<string, number> = {};
   let redacted = 0;
   let prodRefs = 0;
+  const removedDefaultPrivileges: Record<string, number> = {};
   const prodRe = new RegExp(productionRef, 'gi');
   const refersToRemovedTrigger = (text: string) => {
     const m =
@@ -77,6 +87,13 @@ export function sanitizeSchemaDump(input: string, productionRef = PRODUCTION_SUP
     if (hook) {
       parts.push(`-- [lm-staging] removed Database Webhook trigger ${hook.name} ON ${hook.table}`);
       changes.push({ line: s.line, object: `TRIGGER ${hook.name} ON ${hook.table}`, change: 'removed (Database Webhook)' });
+      continue;
+    }
+    const foreign = foreignDefaultPrivileges(s);
+    if (foreign.length) {
+      for (const r of foreign) removedDefaultPrivileges[r] = (removedDefaultPrivileges[r] || 0) + 1;
+      parts.push(`-- [lm-staging] removed ALTER DEFAULT PRIVILEGES FOR ROLE ${foreign.join(', ')} (not runnable as ${APPLY_ROLE}; staging keeps its own defaults)`);
+      changes.push({ line: s.line, object: `DEFAULT PRIVILEGES FOR ROLE ${foreign.join(', ')}`, change: `removed (only that role or a superuser may change them; staging applies as ${APPLY_ROLE})` });
       continue;
     }
     if (refersToRemovedTrigger(s.text)) {
@@ -120,11 +137,12 @@ export function sanitizeSchemaDump(input: string, productionRef = PRODUCTION_SUP
     SANITIZED_HEADER,
     `-- source-sha256: ${createHash('sha256').update(input).digest('hex')}`,
     `-- removed webhook triggers: ${removed.size}`,
+    `-- removed ALTER DEFAULT PRIVILEGES for roles other than ${APPLY_ROLE}: ${Object.entries(removedDefaultPrivileges).map(([r, c]) => `${r}×${c}`).join(', ') || 'none'}`,
     `-- URL hosts rewritten to ${NEUTRAL_HOST}: ${hostList.replace(/https?:\/\//g, '')}`,
     `-- redacted secret-like values: ${redacted}; production refs replaced: ${prodRefs}`,
     ''
   ].join('\n');
-  return { sql: `${header}\n${parts.join('\n\n')}\n`, changes, removedTriggers: [...removed].map(([n, t]) => `${n} ON ${t}`), hosts, redacted, prodRefs };
+  return { sql: `${header}\n${parts.join('\n\n')}\n`, changes, removedTriggers: [...removed].map(([n, t]) => `${n} ON ${t}`), removedDefaultPrivileges, hosts, redacted, prodRefs };
 }
 
 function main() {
@@ -157,13 +175,15 @@ function main() {
   const check = inspectStatements(splitSqlStatements(result.sql), PRODUCTION_SUPABASE_REF);
   if (check.dataStatements.length || needsReview(check)) {
     unlinkSync(outAbs);
-    die(`sanitised copy still has findings (data ${check.dataStatements.length}, http ${check.outboundHttp.length}, prod refs ${check.productionRefs.length}, secrets ${check.secretLike.length}) — deleted`);
+    die(`sanitised copy still has findings (data ${check.dataStatements.length}, http ${check.outboundHttp.length}, prod refs ${check.productionRefs.length}, secrets ${check.secretLike.length}, foreign default privileges ${check.foreignDefaultPrivileges.length}) — deleted`);
   }
   console.log(`✓ staging copy written: ${outAbs} (mode 600)`);
   console.log(`✓ removed Database Webhook triggers: ${result.removedTriggers.length}${result.removedTriggers.length ? ` (${result.removedTriggers.join('; ')})` : ''}`);
+  const dp = Object.entries(result.removedDefaultPrivileges);
+  console.log(`✓ removed ALTER DEFAULT PRIVILEGES for roles other than ${APPLY_ROLE}: ${dp.reduce((a, [, c]) => a + c, 0)}${dp.length ? ` (${dp.map(([r, c]) => `${r}×${c}`).join(', ')})` : ''}`);
   console.log(`✓ URL hosts rewritten to ${NEUTRAL_HOST}: ${Object.entries(result.hosts).map(([h, c]) => `${h}×${c}`).join(', ') || 'none'}`);
   console.log(`✓ redacted secret-like values: ${result.redacted}; production refs replaced: ${result.prodRefs}`);
-  console.log('✓ re-check of the copy: no data, no outbound HTTP, no production ref, no secret-like values');
+  console.log('✓ re-check of the copy: no data, no outbound HTTP, no production ref, no secret-like values, no foreign default privileges');
   const before = findNotNull(readFileSync(inPath, 'utf8'));
   const after = findNotNull(result.sql);
   if (before.notNull && !after.notNull) {

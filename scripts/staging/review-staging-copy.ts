@@ -25,7 +25,7 @@ if (actual !== expected.sql) {
 }
 console.log('✓ staging copy = sanitizer output of this production dump (byte-identical)');
 const r = inspectSchemaDump(actual, PRODUCTION_SUPABASE_REF);
-console.log(`✓ re-check: data ${r.dataStatements.length}, outbound HTTP ${r.outboundHttp.length}, production refs ${r.productionRefs.length}, secret-like ${r.secretLike.length}`);
+console.log(`✓ re-check: data ${r.dataStatements.length}, outbound HTTP ${r.outboundHttp.length}, production refs ${r.productionRefs.length}, secret-like ${r.secretLike.length}, foreign default privileges ${r.foreignDefaultPrivileges.length}`);
 if (r.dataStatements.length || needsReview(r)) process.exit(1);
 const nn = findNotNull(actual);
 console.log(`${nn.notNull ? '✓' : '✗'} pickup_orders.pickup_date NOT NULL: ${describeNotNull(nn)}`);

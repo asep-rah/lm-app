@@ -197,7 +197,7 @@ bentuk itu, bentuk `CONSTRAINT … NOT NULL` (Postgres 18), serta
 dan `prepare` juga akan menolak.
 
 **4b. `sanitize-dump`** membuat `staging-schema.dump.sql` (mode 600, tidak
-menimpa, di luar repo, baris pertama `-- lm-staging-sanitized v1`):
+menimpa, di luar repo, baris pertama `-- lm-staging-sanitized v2`):
 
 - menolak total bila ada data (tidak ada file yang ditulis);
 - membuang trigger **Database Webhook** (`supabase_functions.http_request`,
@@ -208,7 +208,17 @@ menimpa, di luar repo, baris pertama `-- lm-staging-sanitized v1`):
   atau endpoint luar mana pun;
 - menyensor JWT, `sb_secret_`, `sk_…`, token `Bearer`, dan nilai key/token,
   serta mengganti ref produksi;
+- membuang `ALTER DEFAULT PRIVILEGES FOR ROLE <selain postgres>` (mis.
+  `supabase_admin`). `prepare` menerapkan salinan sebagai `postgres`, yang di
+  Supabase bukan superuser, sehingga statement itu gagal dengan
+  `permission denied to change default privileges`. Proyek staging sudah punya
+  default privileges `supabase_admin` sendiri dari Supabase.
+  `ALTER DEFAULT PRIVILEGES FOR ROLE postgres` serta semua `GRANT`/`REVOKE` pada
+  objek tetap dipertahankan;
 - memeriksa ulang hasilnya, dan menghapusnya bila belum bersih.
+
+Salinan `v1` (dibuat sebelum perbaikan ini) ditolak oleh `prepare`: hapus lalu
+buat ulang dengan 4b.
 
 Pemanggilan HTTP dengan target **dinamis** (URL dari setting/tabel, bukan
 literal) tidak bisa dinetralkan otomatis. Bila ada, `sanitize-dump` berhenti
@@ -240,23 +250,44 @@ Pemeriksaan ini tidak menulis apa pun:
 - pengaman staging (ref/URL/host; kunci atau host produksi ditolak);
 - staging menerima anon key dan service key;
 - koneksi DB sebagai `postgres.mbkmhvcqklikaswlklrz` dengan sesi read-only;
-- laporan versi server, jumlah tabel `public` (untuk proyek baru: 0), marker, dan status bucket.
+- laporan versi server, jumlah tabel `public` (untuk proyek baru: 0), marker,
+  langkah yang tercatat (`applied steps`), jumlah objek `public` (tabel, view,
+  fungsi, tipe, policy, trigger), dan status bucket.
+
+Setelah `prepare` yang gagal di `schema-dump`, hasil yang benar adalah
+`staging marker: mbkmhvcqklikaswlklrz; applied steps: none` dan semua jumlah
+objek `public` 0. Marker dibuat sebelum dump dan memang dipertahankan: aman
+dan dipakai ulang oleh `prepare` berikutnya. Dump diterapkan dalam satu
+transaksi, sehingga kegagalan membatalkan seluruh isinya.
 
 Jika langkah DB gagal, baris `✗ DB <langkah> failed (<host>:5432 as postgres.<ref>): <pesan psql> — hint: <saran>`
 menampilkan pesan asli psql dengan password, connection string dan key disensor, jadi aman dibagikan.
 `connect/login` gagal berarti host/region/password (lihat Masalah umum); langkah lain gagal berarti koneksi berhasil
 tetapi probe tertentu gagal.
 
-## 6. Dry run persiapan staging (tanpa menulis)
+## 6. Dry run dan gladi persiapan staging
 
 ```bash
+# 6a. tanpa menulis: validasi salinan + cek peran (read-only) di staging
 STAGING_DB_HOST=<HOST_POOLER_STAGING> scripts/staging/run-staging.sh prepare \
   --schema-dump ~/lm-staging/staging-schema.dump.sql --dry-run
+
+# 6b. gladi: semua file diterapkan dalam SATU transaksi lalu ROLLBACK (tidak ada yang tersimpan, tidak membuat marker)
+STAGING_DB_HOST=<HOST_POOLER_STAGING> scripts/staging/run-staging.sh prepare \
+  --schema-dump ~/lm-staging/staging-schema.dump.sql --rehearse
 ```
 
-Output diakhiri `dry run — would apply: schema-dump, 20260923_customer_verified_login.sql, 20260924_satuan_item_photos.sql, seed`.
-Bila database staging sudah berisi tabel tanpa marker `lm_staging`, skrip
-berhenti. Jangan pakai `--adopt-existing` kecuali Anda yakin itu staging.
+- `5b. roles OK on staging` memastikan semua peran yang disebut salinan ada
+  di staging dan `postgres` boleh bertindak untuk setiap peran `OWNER TO` /
+  `FOR ROLE`. Bila tidak, skrip berhenti sebelum menulis dan menyebut nama
+  perannya.
+- 6a diakhiri `dry run — would apply: schema-dump, 20260923_customer_verified_login.sql, 20260924_satuan_item_photos.sql, seed`.
+- 6b diakhiri `rehearsal passed: … applied in ONE transaction and rolled back`.
+  Bila gagal, baris `✗ rehearsal failed (rolled back, nothing kept): <file>:<baris>: ERROR: … — statement at line N: <kata kunci awal>`
+  aman dibagikan: literal string disamarkan. Untuk salinan staging,
+  `<baris>` merujuk ke `~/lm-staging/staging-schema.dump.sql`.
+- Bila database staging sudah berisi tabel tanpa marker `lm_staging`, skrip
+  berhenti. Jangan pakai `--adopt-existing` kecuali Anda yakin itu staging.
 
 ## 7. Setelah disetujui (belum dijalankan sekarang)
 

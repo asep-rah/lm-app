@@ -41,6 +41,7 @@ repo (mode 600, `*.dump.sql` diabaikan git). Periksa dengan
 npx tsx scripts/staging/sanitize-dump.ts ~/lm-staging/prod-schema.dump.sql ~/lm-staging/staging-schema.dump.sql
 npx tsx scripts/staging/review-staging-copy.ts ~/lm-staging/prod-schema.dump.sql ~/lm-staging/staging-schema.dump.sql
 scripts/staging/run-staging.sh prepare --schema-dump ~/lm-staging/staging-schema.dump.sql --dry-run   # cek saja
+scripts/staging/run-staging.sh prepare --schema-dump ~/lm-staging/staging-schema.dump.sql --rehearse  # gladi: satu transaksi + ROLLBACK
 scripts/staging/run-staging.sh prepare --schema-dump ~/lm-staging/staging-schema.dump.sql
 ```
 
@@ -86,3 +87,21 @@ bucket `satuan-item-photos` staging.
   sendiri dibuktikan lewat langkah 1.
 - `--selftest-local` pada ketiga skrip hanya untuk menguji skrip terhadap
   stack Supabase lokal — bukan hasil staging.
+
+## Test privileges locally
+
+`scripts/staging/privileges.test.ts` includes an integration test that runs as
+the non-superuser `postgres` role, the same way `prepare` applies on Supabase.
+It needs a local PostgreSQL 16+ whose bootstrap superuser is `supabase_admin`,
+plus the roles `postgres` (NOSUPERUSER CREATEROLE CREATEDB), `anon`,
+`authenticated` and `service_role`, with trust auth on
+`/var/tmp/lmpg:55432` (override with `LM_PG_HOST`/`LM_PG_PORT`):
+
+```bash
+LM_PG_ROLES_TEST=1 node --import tsx --test scripts/staging/privileges.test.ts
+```
+
+The fixture `fixtures/pgdump16-default-privileges.sql` is real `pg_dump
+--schema-only --schema=public` output from that setup. It contains
+`ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin …`, the statements that fail
+on staging.

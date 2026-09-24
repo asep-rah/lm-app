@@ -1,7 +1,7 @@
 /**
  * Prepare the STAGING database for the PR #5 tests.
  *
- *   npx tsx scripts/staging/prepare.ts --schema-dump <prod-schema.sql> [--dry-run] [--adopt-existing]
+ *   npx tsx scripts/staging/prepare.ts --schema-dump <staging-schema.dump.sql> [--dry-run | --rehearse] [--adopt-existing]
  *
  * Steps (each printed with ✓/✗, never printing keys or passwords):
  *  1. staging guard (URL / DB host / keys must be the staging project, never production)
@@ -10,10 +10,19 @@
  *  4. staging marker: refuses a non-empty database that was not prepared by
  *     this tool unless --adopt-existing (you confirm it is the staging DB)
  *  5. production SCHEMA-ONLY dump: validated (no data, no unreviewed outbound
- *     HTTP) and applied once, in one transaction
+ *     HTTP, no ALTER DEFAULT PRIVILEGES for another role) and applied once,
+ *     in one transaction
+ *  5b. read-only preflight on staging: no transaction control in the files;
+ *     every role they name exists and the apply role may act for every
+ *     OWNER TO / FOR ROLE role
  *  6. PR #5 migrations, each applied once
  *  7. synthetic seed (scripts/staging/seed.sql)
  *  8. PostgREST schema reload + API verification
+ *
+ * --dry-run: steps 1–5b only, writes nothing.
+ * --rehearse: steps 1–5b, then applies every pending file in ONE transaction
+ *   that ends in ROLLBACK (no marker, nothing kept) to prove the real run
+ *   will succeed; errors name file, line and the statement's first keywords.
  *
  * --selftest-local: runs the same steps against a LOCAL Supabase stack
  * (LOCAL_SB_URL/LOCAL_SB_ANON/LOCAL_SB_SERVICE/LOCAL_DB_URL, 127.0.0.1 only)
@@ -29,6 +38,9 @@ import { log, loadStagingEnv, verifyStagingKeys, type StagingEnv } from './guard
 import { SANITIZED_HEADER } from './sanitize-dump';
 import { describeNotNull, findNotNull } from './columnNotNull';
 import { inspectSchemaDump, needsReview } from './schemaDump';
+import { APPLY_ROLE, rolePreflight, rolesUsed } from './privileges';
+import { describeApplyError, rehearsalScript, transactionControl } from './applySql';
+import { splitSqlStatements } from './sqlLexer';
 
 const ROOT = join(__dirname, '..', '..');
 const args = process.argv.slice(2);
@@ -43,6 +55,7 @@ export const PR_MIGRATIONS = ['20260923_customer_verified_login.sql', '20260924_
 
 const selftest = flag('--selftest-local');
 const dryRun = flag('--dry-run');
+const rehearse = flag('--rehearse');
 
 const loadEnv = (): StagingEnv => {
   if (!selftest) return loadStagingEnv({ needDb: true });
@@ -75,6 +88,10 @@ const pgEnv = (dbUrl: string): NodeJS.ProcessEnv => {
 };
 
 async function main() {
+  if (dryRun && rehearse) {
+    log(false, 'use either --dry-run or --rehearse');
+    process.exit(2);
+  }
   let s: StagingEnv;
   try {
     s = loadEnv();
@@ -98,9 +115,9 @@ async function main() {
 
   const env = pgEnv(s.dbUrl);
   const sql = (q: string) =>
-    execFileSync('psql', ['-At', '-v', 'ON_ERROR_STOP=1', '-c', q], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    execFileSync('psql', ['-X', '-At', '-v', 'ON_ERROR_STOP=1', '-c', q], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   const sqlFile = (file: string, single = true) =>
-    execFileSync('psql', ['-q', '-v', 'ON_ERROR_STOP=1', ...(single ? ['--single-transaction'] : []), '-f', file], {
+    execFileSync('psql', ['-X', '-q', '-v', 'ON_ERROR_STOP=1', ...(single ? ['--single-transaction'] : []), '-f', file], {
       env,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe']
@@ -148,7 +165,8 @@ async function main() {
     }
     dumpSql = readFileSync(dumpPath, 'utf8');
     if (!dumpSql.startsWith(SANITIZED_HEADER + '\n')) {
-      log(false, '5. not a sanitised staging copy — run: npx tsx scripts/staging/sanitize-dump.ts <prod-schema.dump.sql> <staging-schema.dump.sql>');
+      const older = /^-- lm-staging-sanitized v\d+\n/.test(dumpSql);
+      log(false, `5. ${older ? `staging copy was made by an older sanitizer (${dumpSql.split('\n')[0].slice(3)}; need ${SANITIZED_HEADER.slice(3)}) — delete it and re-create` : 'not a sanitised staging copy'} — run: npx tsx scripts/staging/sanitize-dump.ts <prod-schema.dump.sql> <staging-schema.dump.sql>`);
       process.exit(2);
     }
     const report = inspectSchemaDump(dumpSql, PRODUCTION_SUPABASE_REF);
@@ -157,8 +175,8 @@ async function main() {
       process.exit(2);
     }
     if (needsReview(report)) {
-      log(false, '5. sanitised copy still has outbound HTTP / production ref / secret-like findings — refusing:');
-      [...report.outboundHttp, ...report.productionRefs, ...report.secretLike].slice(0, 30).forEach((l) => console.log(`     ${l}`));
+      log(false, '5. sanitised copy still has outbound HTTP / production ref / secret-like / foreign default-privilege findings — refusing (re-create it with the current sanitize-dump.ts):');
+      [...report.outboundHttp, ...report.productionRefs, ...report.secretLike, ...report.foreignDefaultPrivileges].slice(0, 30).forEach((l) => console.log(`     ${l}`));
       process.exit(2);
     }
     report.notes.slice(0, 20).forEach((l) => log(null, `5. note ${l}`));
@@ -174,13 +192,58 @@ async function main() {
     log(true, '5. schema dump already applied earlier');
   }
 
-  const plan = [
-    ...(done('schema-dump') ? [] : ['schema-dump']),
-    ...PR_MIGRATIONS.filter((m) => !done(m)),
-    'seed'
-  ];
+  // Every Supabase project already has schema "public"; make the dump's
+  // CREATE SCHEMA idempotent in a private temp copy (same line numbers; the
+  // original is untouched).
+  const tmp = mkdtempSync(join(tmpdir(), 'lm-staging-'));
+  process.on('exit', () => rmSync(tmp, { recursive: true, force: true }));
+  const normalised = join(tmp, 'schema.sql');
+  const files: Array<{ step: string; path: string }> = [];
+  if (!done('schema-dump')) {
+    writeFileSync(normalised, dumpSql.replace(/^CREATE SCHEMA (public|"public");$/gm, 'CREATE SCHEMA IF NOT EXISTS public;'), { mode: 0o600 });
+    files.push({ step: 'schema-dump', path: normalised });
+  }
+  for (const m of PR_MIGRATIONS.filter((m) => !done(m))) files.push({ step: m, path: join(ROOT, 'supabase/migrations', m) });
+  files.push({ step: 'seed', path: join(ROOT, 'scripts/staging/seed.sql') });
+  const label = (p: string) => (p === normalised ? 'staging copy (--schema-dump)' : p.replace(ROOT + '/', ''));
+
+  const txIssues = files.flatMap((f) => transactionControl(readFileSync(f.path, 'utf8')).map((l) => `${f.step} ${l}`));
+  if (txIssues.length) {
+    log(false, `5b. transaction control / meta-commands in files to apply — refusing: ${txIssues.slice(0, 10).join('; ')}`);
+    process.exit(2);
+  }
+  const allStmts = files.flatMap((f) => splitSqlStatements(readFileSync(f.path, 'utf8')));
+  const use = rolesUsed(allStmts);
+  try {
+    const pre = rolePreflight(env, use);
+    if (pre.missing.length || pre.notMember.length) {
+      if (pre.missing.length) log(false, `5b. roles named in the files but missing on staging: ${pre.missing.join(', ')}`);
+      if (pre.notMember.length) log(false, `5b. OWNER TO / FOR ROLE roles the apply role (${APPLY_ROLE}) cannot act as: ${pre.notMember.join(', ')}`);
+      process.exit(2);
+    }
+    log(true, `5b. roles OK on staging (read-only check): owners/FOR ROLE ${[...use.owners.keys()].sort().join(', ') || 'none'}; grantees ${[...use.grantees.keys()].sort().join(', ') || 'none'}`);
+  } catch (e) {
+    log(false, `5b. role preflight failed: ${(e as Error).message}`);
+    process.exit(2);
+  }
+
+  const plan = files.map((f) => f.step);
   if (dryRun) {
     log(null, `dry run — would apply: ${plan.join(', ')}`);
+    return;
+  }
+  if (rehearse) {
+    const script = join(tmp, 'rehearse.sql');
+    writeFileSync(script, rehearsalScript(files.map((f) => f.path)), { mode: 0o600 });
+    try {
+      execFileSync('psql', ['-X', '-q', '-f', script], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (e) {
+      log(false, `rehearsal failed (rolled back, nothing kept): ${describeApplyError(String((e as { stderr?: string }).stderr || ''), (p) => readFileSync(p, 'utf8'), label)}`);
+      process.exit(1);
+    }
+    const after = Number(sql("select count(*) from information_schema.tables where table_schema = 'public'"));
+    log(after === publicTables, `rehearsal passed: ${plan.join(', ')} applied in ONE transaction and rolled back (public tables still ${after})`);
+    if (after !== publicTables) process.exit(1);
     return;
   }
 
@@ -193,21 +256,13 @@ async function main() {
       sql(`insert into lm_staging.applied (step) values ('${step}') on conflict do nothing`);
       return true;
     } catch (e) {
-      const err = String((e as { stderr?: string }).stderr || (e as Error).message).split('\n').filter(Boolean).slice(0, 3).join(' | ');
-      log(false, `${step}: ${err}`);
+      log(false, `${step} (rolled back): ${describeApplyError(String((e as { stderr?: string }).stderr || (e as Error).message), (p) => readFileSync(p, 'utf8'), label)}`);
       return false;
     }
   };
 
   if (plan.includes('schema-dump')) {
-    // Every Supabase project already has schema "public"; make the dump's
-    // CREATE SCHEMA idempotent in a private temp copy (the original is untouched).
-    const tmp = mkdtempSync(join(tmpdir(), 'lm-staging-'));
-    const normalised = join(tmp, 'schema.sql');
-    writeFileSync(normalised, dumpSql.replace(/^CREATE SCHEMA (public|"public");$/gm, 'CREATE SCHEMA IF NOT EXISTS public;'), { mode: 0o600 });
-    const ok = apply('schema-dump', normalised);
-    rmSync(tmp, { recursive: true, force: true });
-    if (!ok) process.exit(1);
+    if (!apply('schema-dump', normalised)) process.exit(1);
     log(true, '5. production schema applied to staging');
   }
   for (const m of PR_MIGRATIONS) {

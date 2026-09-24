@@ -14,10 +14,14 @@
  * - productionRefs: the production project ref.
  * - secretLike: JWTs, sb_secret_/sk_live_/sk_test_ keys, Bearer tokens,
  *   key/token/secret/password assignments with a long value.
+ * - foreignDefaultPrivileges: ALTER DEFAULT PRIVILEGES FOR ROLE <not postgres>
+ *   (e.g. supabase_admin); the staging apply role cannot run them
+ *   (scripts/staging/privileges.ts).
  * Informational:
  * - functionBodyDml: DML inside CREATE FUNCTION/PROCEDURE (definition, not data).
  * - notes: extensions, extra schemas, event triggers, grants to non-standard roles.
  */
+import { foreignDefaultPrivileges } from './privileges';
 import { leadingWords, splitSqlStatements, type SqlStatement } from './sqlLexer';
 
 export type DumpReport = {
@@ -25,6 +29,7 @@ export type DumpReport = {
   outboundHttp: string[];
   productionRefs: string[];
   secretLike: string[];
+  foreignDefaultPrivileges: string[];
   functionBodyDml: string[];
   notes: string[];
 };
@@ -62,7 +67,7 @@ export const webhookTriggerOf = (stmt: SqlStatement): { name: string; table: str
 };
 
 export const inspectStatements = (stmts: SqlStatement[], productionRef: string): DumpReport => {
-  const r: DumpReport = { dataStatements: [], outboundHttp: [], productionRefs: [], secretLike: [], functionBodyDml: [], notes: [] };
+  const r: DumpReport = { dataStatements: [], outboundHttp: [], productionRefs: [], secretLike: [], foreignDefaultPrivileges: [], functionBodyDml: [], notes: [] };
   const prodRe = new RegExp(productionRef, 'gi');
   for (const s of stmts) {
     const n = `line ${s.line}`;
@@ -93,6 +98,9 @@ export const inspectStatements = (stmts: SqlStatement[], productionRef: string):
       }
       if (dml.size) r.functionBodyDml.push(`${n}: ${fn} → ${[...dml].join(', ')}`);
     }
+
+    const foreign = foreignDefaultPrivileges(s);
+    if (foreign.length) r.foreignDefaultPrivileges.push(`${n}: ALTER DEFAULT PRIVILEGES FOR ROLE ${foreign.join(', ')}`);
 
     const hook = webhookTriggerOf(s);
     if (hook) r.outboundHttp.push(`${n}: Database Webhook trigger ${hook.name} ON ${hook.table}`);
@@ -133,5 +141,6 @@ export const inspectStatements = (stmts: SqlStatement[], productionRef: string):
 export const inspectSchemaDump = (sql: string, productionRef: string): DumpReport =>
   inspectStatements(splitSqlStatements(sql), productionRef);
 
-/** Items that must be neutralised before the file may reach staging. */
-export const needsReview = (r: DumpReport) => r.outboundHttp.length + r.productionRefs.length + r.secretLike.length > 0;
+/** Items that must be neutralised (or removed) before the file may reach staging. */
+export const needsReview = (r: DumpReport) =>
+  r.outboundHttp.length + r.productionRefs.length + r.secretLike.length + r.foreignDefaultPrivileges.length > 0;

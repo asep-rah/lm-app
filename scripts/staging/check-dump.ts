@@ -38,6 +38,7 @@ r.functionBodyDml.slice(0, 40).forEach((l) => console.log(`    ${l}`));
 section('outbound HTTP / URLs (review)', r.outboundHttp);
 section('production ref (review)', r.productionRefs);
 section('secret-like literals (review)', r.secretLike);
+section('ALTER DEFAULT PRIVILEGES for another role (removed by sanitize-dump)', r.foreignDefaultPrivileges);
 console.log(`• notes: ${r.notes.length}`);
 r.notes.slice(0, 40).forEach((l) => console.log(`    ${l}`));
 

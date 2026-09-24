@@ -61,9 +61,25 @@ async function main() {
   const markerExists = step('staging marker lookup', "select (to_regclass('lm_staging.marker') is not null)::text");
   const bucket = step('storage bucket lookup', "select coalesce((select public::text from storage.buckets where id='satuan-item-photos'), 'absent')");
   const marker = markerExists === 'true' ? step('staging marker read', 'select ref from lm_staging.marker limit 1') || 'none' : 'none';
+  const applied =
+    markerExists === 'true'
+      ? step('applied steps', "select coalesce((select string_agg(step, ', ' order by applied_at) from lm_staging.applied), 'none')")
+      : 'none';
+  // Objects in public (a fresh project has none; a rolled-back apply leaves none).
+  const objects = step(
+    'public object counts',
+    "select format('tables %s, views %s, functions %s, types %s, policies %s, triggers %s', " +
+      "(select count(*) from pg_class where relnamespace = 'public'::regnamespace and relkind in ('r','p')), " +
+      "(select count(*) from pg_class where relnamespace = 'public'::regnamespace and relkind in ('v','m')), " +
+      "(select count(*) from pg_proc where pronamespace = 'public'::regnamespace), " +
+      "(select count(*) from pg_type t where typnamespace = 'public'::regnamespace and typtype in ('e','d','c') and (typtype <> 'c' or (select relkind from pg_class where oid = t.typrelid) = 'c')), " +
+      "(select count(*) from pg_policies where schemaname = 'public'), " +
+      "(select count(*) from pg_trigger g join pg_class c on c.oid = g.tgrelid where c.relnamespace = 'public'::regnamespace and not g.tgisinternal))"
+  );
   log(null, `server version ${version}`);
   log(null, `public tables: ${tables}`);
-  log(null, `staging marker: ${marker === 'none' ? 'none (not prepared yet)' : marker}`);
+  log(null, `staging marker: ${marker === 'none' ? 'none (not prepared yet)' : marker}; applied steps: ${applied}`);
+  log(null, `public objects: ${objects}`);
   log(null, `bucket satuan-item-photos: ${bucket === 'false' ? 'private' : bucket}`);
 }
 

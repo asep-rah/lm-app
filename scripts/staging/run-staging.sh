@@ -2,7 +2,7 @@
 # Run a staging step with secrets that live ONLY in this process.
 #
 #   scripts/staging/run-staging.sh check                      # read-only: guard + staging accepts keys + DB read-only probe
-#   scripts/staging/run-staging.sh prepare --schema-dump <sanitised staging copy> [--dry-run]
+#   scripts/staging/run-staging.sh prepare --schema-dump <sanitised staging copy> [--dry-run | --rehearse]
 #   scripts/staging/run-staging.sh e2e                        # builds against staging, then runs the E2E
 #   scripts/staging/run-staging.sh cleanup [--execute] [--all]
 #
