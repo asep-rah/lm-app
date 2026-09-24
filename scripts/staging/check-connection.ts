@@ -30,7 +30,7 @@ async function main() {
   await verifyStagingKeys(s);
   log(true, 'staging accepts the service key');
   const u = new URL(s.dbUrl);
-  const pg = {
+  const pg: NodeJS.ProcessEnv = {
     ...process.env,
     PGHOST: u.hostname,
     PGPORT: u.port || '5432',
@@ -38,25 +38,29 @@ async function main() {
     PGPASSWORD: decodeURIComponent(u.password),
     PGDATABASE: u.pathname.slice(1) || 'postgres',
     PGSSLMODE: 'require',
-    PGCONNECT_TIMEOUT: '15',
-    PGOPTIONS: '-c default_transaction_read_only=on -c statement_timeout=30000'
+    PGCONNECT_TIMEOUT: '15'
   };
+  delete pg.PGOPTIONS;
   // Every probe runs inside BEGIN TRANSACTION READ ONLY: through the Session
-  // pooler, startup options (PGOPTIONS) never reach Postgres.
-  let version: string, tables: string, markerExists: string, bucket: string;
-  try {
-    [version, tables, markerExists, bucket] = readOnlyProbe(pg, [
-      'show server_version',
-      "select count(*) from information_schema.tables where table_schema='public'",
-      "select (to_regclass('lm_staging.marker') is not null)::text",
-      "select coalesce((select public::text from storage.buckets where id='satuan-item-photos'), 'absent')"
-    ]);
-  } catch (e) {
-    log(false, `DB check stopped: ${(e as Error).message.split('\n')[0]}`);
-    process.exit(1);
-  }
-  const marker = markerExists === 'true' ? readOnlyProbe(pg, ['select ref from lm_staging.marker limit 1'])[0] || 'none' : 'none';
-  log(true, `DB via ${u.hostname}:${u.port} as ${decodeURIComponent(u.username)} — probes in a READ ONLY transaction`);
+  // pooler, startup options (PGOPTIONS) never reach Postgres, so none are sent.
+  // Connect first, then one probe at a time so a failure names its step.
+  // Failure messages come from psql stderr with the password/keys redacted.
+  const where = `${u.hostname}:${u.port || '5432'} as ${decodeURIComponent(u.username)}`;
+  const step = (name: string, sql: string): string => {
+    try {
+      return readOnlyProbe(pg, [sql])[0] ?? '';
+    } catch (e) {
+      log(false, `DB ${name} failed (${where}): ${(e as Error).message}`);
+      process.exit(1);
+    }
+  };
+  step('connect/login', 'select 1');
+  log(true, `DB connected via ${where} — probes in a READ ONLY transaction`);
+  const version = step('server_version', 'show server_version');
+  const tables = step('public table count', "select count(*) from information_schema.tables where table_schema='public'");
+  const markerExists = step('staging marker lookup', "select (to_regclass('lm_staging.marker') is not null)::text");
+  const bucket = step('storage bucket lookup', "select coalesce((select public::text from storage.buckets where id='satuan-item-photos'), 'absent')");
+  const marker = markerExists === 'true' ? step('staging marker read', 'select ref from lm_staging.marker limit 1') || 'none' : 'none';
   log(null, `server version ${version}`);
   log(null, `public tables: ${tables}`);
   log(null, `staging marker: ${marker === 'none' ? 'none (not prepared yet)' : marker}`);

@@ -242,6 +242,11 @@ Pemeriksaan ini tidak menulis apa pun:
 - koneksi DB sebagai `postgres.mbkmhvcqklikaswlklrz` dengan sesi read-only;
 - laporan versi server, jumlah tabel `public` (untuk proyek baru: 0), marker, dan status bucket.
 
+Jika langkah DB gagal, baris `✗ DB <langkah> failed (<host>:5432 as postgres.<ref>): <pesan psql> — hint: <saran>`
+menampilkan pesan asli psql dengan password, connection string dan key disensor, jadi aman dibagikan.
+`connect/login` gagal berarti host/region/password (lihat Masalah umum); langkah lain gagal berarti koneksi berhasil
+tetapi probe tertentu gagal.
+
 ## 6. Dry run persiapan staging (tanpa menulis)
 
 ```bash
@@ -281,5 +286,6 @@ STAGING_DB_HOST=<HOST_POOLER_STAGING> scripts/staging/run-staging.sh cleanup --e
 ## Masalah umum
 
 - `pg_dump … older than server` → `brew upgrade libpq`.
-- `Tenant or user not found` → host pooler region salah untuk proyek itu, atau ref salah.
+- `Tenant or user not found` → host pooler salah untuk proyek itu (mis. `aws-0-…` vs `aws-1-…`, atau region lain), atau ref salah. Salin host persis dari Dashboard staging → Connect → Session pooler.
+- `could not translate host name` → salah ketik host. `timeout expired` / `Connection refused` → jaringan memblokir port 5432 (coba jaringan lain/VPN mati).
 - `password authentication failed` → reset password DB di Dashboard → Settings → Database.
