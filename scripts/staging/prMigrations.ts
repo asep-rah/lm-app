@@ -4,5 +4,6 @@ export const PR_MIGRATION_FILES = [
   '20260924_satuan_item_photos.sql',
   '20260925_service_role_log_grants.sql',
   '20260926_customer_order_server_grants.sql',
-  '20260927_service_role_server_grants.sql'
+  '20260927_service_role_server_grants.sql',
+  '20260928_revoke_anon_pickup_insert.sql'
 ];

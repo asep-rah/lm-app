@@ -1,8 +1,6 @@
 'use client';
 
 import React, { useState, useMemo } from 'react';
-import { supabase } from '@/lib/supabaseClient';
-import { localDateISO } from '@/lib/customerActivity';
 
 
 // Database Layanan Satuan Reguler (3 Hari untuk Pakaian/Bedcover, 7 Hari Sepatu, 14 Hari Karpet/Gordyn)
@@ -95,26 +93,24 @@ export default function OnlineOrderForm() {
     setLoading(true);
 
     try {
-      const orderData = {
-        order_type: 'ONLINE',
-        customer_name: customerName,
-        phone_number: phone,
-        pickup_address: address,
-        category: category,
-        service_detail: category === 'KILOAN' 
-          ? `${kiloanPackage} (~${estimatedKg} kg)`
-          : JSON.stringify(selectedSatuanItems),
-        speed_type: speed,
-        estimated_completion: maxEstimateDays,
-        estimated_subtotal: totalEstimasiLayanan,
-        status: 'PENDING_ONLINE_POS',
-        pickup_date: localDateISO(),
-        created_at: new Date().toISOString()
-      };
-
-      const { error } = await supabase.from('pickup_orders').insert([orderData]);
-
-      if (error) throw error;
+      // Dibuat SERVER (/api/staff/pickup-orders): butuh sesi staf, kolom & status
+      // sama dengan pesanan pelanggan. Browser tidak lagi menulis pickup_orders.
+      const detail =
+        category === 'KILOAN' ? `${kiloanPackage} (~${estimatedKg} kg)` : JSON.stringify(selectedSatuanItems);
+      const res = await fetch('/api/staff/pickup-orders', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          customer_name: customerName,
+          customer_phone: phone,
+          address,
+          service_type: `${category} · ${speed}`,
+          notes: `[ORDER ADMIN] ${detail} | Estimasi selesai: ${maxEstimateDays} hari | Estimasi biaya: ${totalEstimasiLayanan}`
+        })
+      });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(out?.error || `HTTP ${res.status}`);
 
       alert('🚀 Order Online Berhasil Terkirim ke POS!');
       setCustomerName('');

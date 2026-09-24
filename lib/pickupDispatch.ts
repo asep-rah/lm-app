@@ -1,9 +1,5 @@
-import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
 import { supabase } from '@/lib/supabaseClient';
-import { updatePickupOrder } from '@/lib/pickupUpdates';
-import { notifyStaffNewOrder } from '@/lib/notifications';
 import { buildOrderErrorReport, classifyOrderError } from '@/lib/orderErrorReport';
-import { pickupOrderAttempts, pickupRoleTaskAttempts } from '@/lib/pickupOrderRows';
 
 const schemaMissesColumn = (err: { message?: string } | null | undefined, column: string) => {
   const msg = String(err?.message || '').toLowerCase();
@@ -66,88 +62,12 @@ export async function findPickupIdByTransaction(txId: string): Promise<string | 
   }
 }
 
-export async function insertPickupOrder(
-  payload: Record<string, unknown>
-): Promise<{ data: { id: string }[] | null; error: { message: string } | null }> {
-  const attempts = pickupOrderAttempts(payload);
-  const core = attempts[attempts.length - 3] as Record<string, unknown>;
-  const result = await insertWithFallback<{ id: string }>(
-    'pickup_orders',
-    attempts,
-    { select: 'id' }
-  );
-  if (!result.error) {
-    notifyStaffNewOrder({
-      outletId: String(payload.outlet_id || core.outlet_id || '') || null,
-      customerName: String(core.customer_name || ''),
-      service: String(core.service_type || '')
-    });
-  }
-  return result;
-}
-
-export async function createPickupRoleTasks(order: {
-  id?: string;
-  customer_name?: string;
-  customer_phone?: string;
-  outlet_id?: string;
-}) {
-  if (!order?.id) return;
-  const due = new Date();
-  due.setHours(due.getHours() + 2);
-  for (const role of ['driver', 'cs'] as const) {
-    await insertWithFallback('system_tasks', pickupRoleTaskAttempts(order, role, due));
-  }
-}
-
-/** Tugas driver (kartu portal) plus CS & Admin Ops. */
-export async function createDeliveryRequestTasks(order: {
-  id?: string;
-  customer_name?: string;
-  customer_phone?: string;
-  notes?: string;
-  outlet_id?: string;
-}) {
-  if (!order?.id) return;
-  const due = new Date();
-  due.setHours(due.getHours() + 4);
-  const desc =
-    `${order.customer_name || 'Pelanggan'} · ${order.customer_phone || ''} · ${order.notes || 'Request Pengantaran Customer'}`.trim();
-
-  for (const role of ['driver', 'cs', 'admin_ops'] as const) {
-    const title = role === 'driver' ? 'Pengantaran ke pelanggan' : 'Request Pengantaran Customer';
-    await insertWithFallback('system_tasks', [
-      {
-        title,
-        description: desc,
-        assigned_to_role: role,
-        sla_hours: 4,
-        due_date: due.toISOString(),
-        kpi_penalty_points: 5,
-        status: 'pending',
-        source_type: 'CUSTOMER_DELIVERY',
-        source_id: order.id,
-        outlet_id: order.outlet_id || null
-      },
-      {
-        title,
-        description: desc,
-        assigned_to_role: role,
-        due_date: due.toISOString(),
-        status: 'pending',
-        source_id: order.id
-      },
-      {
-        title,
-        description: desc,
-        assigned_to_role: role,
-        status: 'pending'
-      }
-    ]);
-  }
-}
-
-/** Status Siap Diantar + kartu pickup_orders untuk Portal Driver. */
+/**
+ * Status Siap Diantar + kartu pickup_orders untuk Portal Driver — dikerjakan
+ * SERVER (/api/customer/delivery-request, lib/deliveryRequestServer): hanya
+ * untuk pesanan milik nomor yang masuk, sekali saja, plus tugas driver/CS/Admin
+ * Ops. Browser tidak lagi menulis pickup_orders.
+ */
 export async function requestDriverDelivery(opts: {
   order: any;
   customerName?: string;
@@ -156,64 +76,24 @@ export async function requestDriverDelivery(opts: {
   selectedOutlet?: string;
 }): Promise<{ error: { message: string } | null; pickupId?: string | null }> {
   const order = opts.order || {};
-  const notes = `Request Pengantaran Customer · ${order.receipt_number || order.order_number || order.id}`;
-  const isPosOrder = Boolean(order.receipt_number);
-  const outletId = order.outlet_id || opts.selectedOutlet || null;
-  let pickupId = isPosOrder ? order.pickup_id || null : order.id;
-
-  if (isPosOrder && !pickupId) {
-    pickupId = await findPickupIdByTransaction(order.id);
-  }
-
-  let updated = false;
-  if (pickupId) {
-    const patch: Record<string, any> = {
-      status: 'Siap Diantar',
-      notes: `${order.notes || ''} | ${notes}`.trim()
-    };
-    if (outletId) patch.outlet_id = outletId;
-    const { error } = await updatePickupOrder(pickupId, patch);
-    if (!error) updated = true;
-    else {
-      const retry = await updatePickupOrder(pickupId, { status: 'Siap Diantar' });
-      updated = !retry.error;
-    }
-  }
-
-  if (!updated) {
-    const { data, error } = await insertPickupOrder({
-      outlet_id: outletId,
-      customer_name: opts.customerName || order.customer_name || 'Pelanggan',
-      customer_phone: opts.customerPhone,
-      phone_number: opts.customerPhone,
-      service_type: order.service_type || 'Antar cucian',
-      address: opts.customerAddress || order.address || '',
-      notes,
-      status: 'Siap Diantar',
-      transaction_id: isPosOrder ? order.id : undefined
+  try {
+    const res = await fetch('/api/customer/delivery-request', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        kind: order.receipt_number ? 'transaction' : 'pickup',
+        orderId: order.id,
+        customerPhone: opts.customerPhone,
+        customerName: opts.customerName || order.customer_name,
+        address: opts.customerAddress || order.address || '',
+        outletId: order.outlet_id || opts.selectedOutlet || null
+      })
     });
-    if (error) return { error };
-    pickupId = data?.[0]?.id || pickupId;
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) return { error: { message: String(out?.error || `HTTP ${res.status}`) } };
+    return { error: null, pickupId: out?.pickupId ?? null };
+  } catch (e) {
+    return { error: { message: String((e as Error)?.message || 'Failed to fetch') } };
   }
-
-  if (isPosOrder && order.id) {
-    await updateWithFallback(
-      'transactions',
-      [
-        { status: 'Siap Diantar', delivery_requested: true },
-        { status: 'Siap Diantar' }
-      ],
-      { column: 'id', value: order.id }
-    );
-  }
-
-  await createDeliveryRequestTasks({
-    id: pickupId || order.id,
-    customer_name: opts.customerName || order.customer_name,
-    customer_phone: opts.customerPhone,
-    notes,
-    outlet_id: outletId
-  });
-
-  return { error: null, pickupId };
 }

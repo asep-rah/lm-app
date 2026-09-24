@@ -112,3 +112,29 @@ export function pickupRoleTaskAttempts(
     { title, description: desc, assigned_to_role: role, status: 'pending' }
   ];
 }
+
+/** Driver / CS / Admin Ops tasks for a customer delivery request (same rows as lib/pickupDispatch). */
+export function deliveryTaskAttempts(
+  order: { id?: string; customer_name?: string; customer_phone?: string; notes?: string; outlet_id?: string | null },
+  role: 'driver' | 'cs' | 'admin_ops',
+  due: Date
+): Record<string, unknown>[] {
+  const desc = `${order.customer_name || 'Pelanggan'} · ${order.customer_phone || ''} · ${order.notes || 'Request Pengantaran Customer'}`.trim();
+  const title = role === 'driver' ? 'Pengantaran ke pelanggan' : 'Request Pengantaran Customer';
+  return [
+    {
+      title,
+      description: desc,
+      assigned_to_role: role,
+      sla_hours: 4,
+      due_date: due.toISOString(),
+      kpi_penalty_points: 5,
+      status: 'pending',
+      source_type: 'CUSTOMER_DELIVERY',
+      source_id: order.id,
+      outlet_id: order.outlet_id || null
+    },
+    { title, description: desc, assigned_to_role: role, due_date: due.toISOString(), status: 'pending', source_id: order.id },
+    { title, description: desc, assigned_to_role: role, status: 'pending' }
+  ];
+}

@@ -449,9 +449,9 @@ async function main() {
   await step('Staff view: photo not on the order / smuggled other-customer photo → 404', async () => {
     const kasir = await login('kasirA');
     assert.equal((await view(kasir, { pickupOrderId: String(instant?.id), path: victimPath })).status, 404);
-    // Inserted with the ANON client, the same way the customer app creates orders
-    // (production grants the pickup_order_seq sequence to anon/authenticated).
-    const { data, error } = await anon
+    // Test fixture written with the service role (after 20260928 the anon key can
+    // no longer insert pickup_orders; the app creates orders on the server).
+    const { data, error } = await service
       .from('pickup_orders')
       .insert({ outlet_id: SYN.outletA, customer_phone: SYN.customer, customer_name: '[STAGING] smuggle', pickup_date: jakartaToday(), status: 'Menunggu Kurir', items: [{ name: 'Jas', pieces: [{ photo_path: victimPath }] }] })
       .select('id')
@@ -620,6 +620,43 @@ async function main() {
     const tasks = await anon.from('system_tasks').select('assigned_to_role').eq('source_id', String(j1.id));
     assert.ifError(tasks.error);
     assert.deepEqual((tasks.data || []).map((t) => t.assigned_to_role).sort(), ['cs', 'driver']);
+  });
+
+  // --- 9. last gate: no browser insert into pickup_orders; delivery + staff paths on the server ---
+  await step('Anon key can no longer insert pickup_orders directly (would skip the server checks)', async () => {
+    const { error } = await anon.from('pickup_orders').insert({ outlet_id: SYN.outletA, customer_phone: SYN.customer, customer_name: '[STAGING] direct', pickup_date: jakartaToday(), status: 'Menunggu Kurir' });
+    assert.ok(error, 'anon insert must fail');
+    assert.match(`${error.code} ${error.message}`, /42501|permission denied/i);
+  });
+  const deliveryApi = (body: Record<string, unknown>, cookie = `ldrv_cust_session=${customerCookie(SYN.customer)}`) =>
+    fetch(APP + '/api/customer/delivery-request', { method: 'POST', headers: { 'content-type': 'application/json', origin: APP, cookie }, body: JSON.stringify(body) });
+  await step('Delivery request: own order → Siap Diantar + driver/CS/admin_ops tasks once; other customer → 404', async () => {
+    const r1 = await deliveryApi({ kind: 'pickup', orderId: String(instant?.id), customerPhone: SYN.customer, address: '[STAGING] jl uji' });
+    const j1 = (await r1.json()) as { pickupId?: string; already?: boolean };
+    assert.equal(r1.status, 200, JSON.stringify(j1));
+    assert.deepEqual([j1.pickupId, j1.already], [String(instant?.id), false]);
+    const again = (await (await deliveryApi({ kind: 'pickup', orderId: String(instant?.id), customerPhone: SYN.customer })).json()) as { already?: boolean };
+    assert.equal(again.already, true);
+    const { data: row } = await service.from('pickup_orders').select('status').eq('id', String(instant?.id)).single();
+    assert.equal(row?.status, 'Siap Diantar');
+    const tasks = await anon.from('system_tasks').select('assigned_to_role, source_type').eq('source_id', String(instant?.id));
+    assert.ifError(tasks.error);
+    assert.deepEqual((tasks.data || []).filter((t) => t.source_type === 'CUSTOMER_DELIVERY').map((t) => t.assigned_to_role).sort(), ['admin_ops', 'cs', 'driver']);
+    const other = await deliveryApi({ kind: 'pickup', orderId: String(instant?.id), customerPhone: SYN.otherCustomer }, `ldrv_cust_session=${customerCookie(SYN.otherCustomer)}`);
+    assert.equal(other.status, 404);
+  });
+  await step('Staff order endpoint: no session 401, driver 403, cashier creates an order (audited)', async () => {
+    const body = { customer_name: '[STAGING] Pelanggan Uji', customer_phone: SYN.customer, address: '[STAGING] jl uji', service_type: 'KILOAN · Reguler', notes: '[STAGING] staff order' };
+    const post = (cookie: string) => fetch(APP + '/api/staff/pickup-orders', { method: 'POST', headers: { 'content-type': 'application/json', origin: APP, cookie }, body: JSON.stringify(body) });
+    assert.equal((await post('')).status, 401);
+    assert.equal((await post(await login('driverA'))).status, 403);
+    const r = await post(await login('kasirA'));
+    const j = (await r.json()) as { id?: string };
+    assert.equal(r.status, 200, JSON.stringify(j));
+    const { data: row } = await service.from('pickup_orders').select('status, customer_phone').eq('id', String(j.id)).single();
+    assert.deepEqual([row?.status, row?.customer_phone], ['Menunggu Kurir', SYN.customer]);
+    const { data: audit } = await service.from('audit_logs').select('action').eq('entity_id', String(j.id));
+    assert.deepEqual((audit || []).map((a) => a.action), ['staff_create_pickup_order']);
   });
 
   await step('No browser request reached the production database host', async () => {
