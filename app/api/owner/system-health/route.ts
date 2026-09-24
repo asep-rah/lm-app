@@ -3,6 +3,7 @@ import { paymentServiceDb } from '@/lib/paymentSecurity';
 import { requirePaymentOpsAuth } from '@/lib/requirePaymentOpsAuth';
 import { isPaymentLocked } from '@/lib/paymentVerify';
 import { envAuditFlags } from '@/lib/supabaseEnv';
+import { customerWaLoginChecks } from '@/lib/customerAuth/server';
 
 export const dynamic = 'force-dynamic';
 
@@ -103,7 +104,8 @@ export async function GET(req: Request) {
       errors: errs || [],
       webhooks: hooks || [],
       pending,
-      env: envAuditFlags()
+      env: envAuditFlags(),
+      customerLogin: customerWaLoginChecks()
     });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || 'Gagal muat diagnosis', env: envAuditFlags() }, { status: 500 });

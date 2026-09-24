@@ -80,6 +80,30 @@ export const customerAuthConfig = () => {
   };
 };
 
+/**
+ * Why WhatsApp login is on/off: one yes/no per requirement of
+ * customerAuthConfig().whatsapp, for the owner diagnosis page. Names and
+ * booleans only — never a value, length or partial secret.
+ */
+export const customerWaLoginChecks = () => {
+  const waNumber = canonicalPhone62(env('CUSTOMER_WA_LOGIN_NUMBER'));
+  const checks = [
+    { key: 'CUSTOMER_WA_LOGIN_ENABLED', ok: flag('CUSTOMER_WA_LOGIN_ENABLED', false), need: 'isi true' },
+    { key: 'CUSTOMER_AUTH_SECRET', ok: env('CUSTOMER_AUTH_SECRET').length >= 32, need: 'minimal 32 karakter' },
+    { key: 'SUPABASE_SERVICE_ROLE_KEY', ok: Boolean(env('SUPABASE_SERVICE_ROLE_KEY')), need: 'wajib ada' },
+    { key: 'CUSTOMER_WA_LOGIN_NUMBER', ok: /^62\d{8,13}$/.test(waNumber), need: 'nomor WA sistem, mis. 6285… (angka saja)' },
+    { key: 'EVOLUTION_INSTANCE', ok: Boolean(env('EVOLUTION_INSTANCE')), need: 'nama instance Evolution' },
+    { key: 'EVOLUTION_WEBHOOK_TOKEN', ok: env('EVOLUTION_WEBHOOK_TOKEN').length >= 24, need: 'minimal 24 karakter' }
+  ];
+  const c = customerAuthConfig();
+  return {
+    whatsapp: c.whatsapp,
+    legacy: c.legacy,
+    replies: Boolean(c.evolution.apiUrl && c.evolution.apiKey),
+    checks
+  };
+};
+
 /** Public (browser-safe) view of the configuration. Never includes secrets. */
 export const publicAuthConfig = () => {
   const c = customerAuthConfig();

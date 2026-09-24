@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { AlertTriangle, ArrowLeft, Loader2, RefreshCw, Shield } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, CheckCircle2, Loader2, RefreshCw, Shield, XCircle } from 'lucide-react';
 import { diagnosisCardOf } from '@/lib/errorDiagnosis';
 import { toast } from '@/lib/toast';
 import { paymentOpsClientHeaders } from '@/lib/requirePaymentOpsAuth';
@@ -25,6 +25,12 @@ export default function SystemHealthPage() {
   const [errors, setErrors] = useState<ErrRow[]>([]);
   const [webhooks, setWebhooks] = useState<any[]>([]);
   const [pending, setPending] = useState<any[]>([]);
+  const [customerLogin, setCustomerLogin] = useState<{
+    whatsapp: boolean;
+    legacy: boolean;
+    replies: boolean;
+    checks: Array<{ key: string; ok: boolean; need: string }>;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [resyncId, setResyncId] = useState<string | null>(null);
   const [manualOrder, setManualOrder] = useState<any | null>(null);
@@ -53,6 +59,7 @@ export default function SystemHealthPage() {
       setErrors((json.errors as ErrRow[]) || []);
       setWebhooks(json.webhooks || []);
       setPending(json.pending || []);
+      setCustomerLogin(json.customerLogin || null);
     } catch (e: any) {
       toast(e?.message || 'Gagal muat diagnosis (cek PAYMENT_OPS_SECRET)', 'err');
       setErrors([]);
@@ -154,6 +161,41 @@ export default function SystemHealthPage() {
         </p>
       ) : (
         <div className="space-y-6">
+          {customerLogin && (
+            <section className="space-y-2">
+              <h2 className="text-xs font-black uppercase tracking-wide text-slate-500">Login WhatsApp pelanggan</h2>
+              <div
+                className={`rounded-2xl border p-4 space-y-2 text-[12px] ${
+                  customerLogin.whatsapp ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'
+                }`}
+              >
+                <p className="font-black text-slate-900">
+                  {customerLogin.whatsapp
+                    ? 'Aktif — pelanggan wajib mengirim kode lewat WhatsApp dan nomornya diverifikasi otomatis.'
+                    : 'Belum aktif — halaman login masih memakai cara lama (tanpa verifikasi). Lengkapi env di bawah lalu Redeploy (Production).'}
+                </p>
+                <ul className="space-y-1">
+                  {customerLogin.checks.map((c) => (
+                    <li key={c.key} className="flex items-start gap-2">
+                      {c.ok ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                      ) : (
+                        <XCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                      )}
+                      <span>
+                        <code className="font-bold">{c.key}</code>
+                        {!c.ok && <span className="text-rose-700"> — {c.need}</span>}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-slate-600">
+                  Balasan otomatis WA: {customerLogin.replies ? 'aktif' : 'nonaktif (EVOLUTION_API_URL/KEY kosong — login tetap jalan)'} · Login lama
+                  (CUSTOMER_LEGACY_LOGIN_ENABLED): {customerLogin.legacy ? 'masih diterima' : 'dimatikan'}
+                </p>
+              </div>
+            </section>
+          )}
           <section className="space-y-3">
             <h2 className="text-xs font-black uppercase tracking-wide text-slate-500">Log Error & Cara Solving</h2>
             {errors.length === 0 ? (
