@@ -4,9 +4,9 @@
  *   npx tsx scripts/staging/check-connection.ts --anon-only   # cloud session: STAGING_REF, STAGING_SUPABASE_URL, STAGING_SUPABASE_ANON_KEY
  *   scripts/staging/run-staging.sh check                      # Mac: + service key + DB via Session pooler (read-only session)
  */
-import { execFileSync } from 'node:child_process';
 import { checkSupabaseKey } from '../../lib/supabaseKeyCheck';
 import { log, loadStagingEnv, validateStagingApiEnv, verifyStagingKeys } from './guard';
+import { readOnlyProbe } from './readOnlyProbe';
 
 const anonOnly = process.argv.includes('--anon-only');
 const env = (k: string) => String(process.env[k] || '').trim();
@@ -41,24 +41,25 @@ async function main() {
     PGCONNECT_TIMEOUT: '15',
     PGOPTIONS: '-c default_transaction_read_only=on -c statement_timeout=30000'
   };
-  const q = (sql: string) => execFileSync('psql', ['-X', '-At', '-c', sql], { env: pg, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  // Every probe runs inside BEGIN TRANSACTION READ ONLY: through the Session
+  // pooler, startup options (PGOPTIONS) never reach Postgres.
+  let version: string, tables: string, markerExists: string, bucket: string;
   try {
-    log(q('show transaction_read_only') === 'on', `DB via ${u.hostname}:${u.port} as ${decodeURIComponent(u.username)} — session read-only`);
-  } catch {
-    log(false, 'DB connection failed (check Session pooler host / password / network).');
+    [version, tables, markerExists, bucket] = readOnlyProbe(pg, [
+      'show server_version',
+      "select count(*) from information_schema.tables where table_schema='public'",
+      "select (to_regclass('lm_staging.marker') is not null)::text",
+      "select coalesce((select public::text from storage.buckets where id='satuan-item-photos'), 'absent')"
+    ]);
+  } catch (e) {
+    log(false, `DB check stopped: ${(e as Error).message.split('\n')[0]}`);
     process.exit(1);
   }
-  log(null, `server version ${q('show server_version')}`);
-  log(null, `public tables: ${q("select count(*) from information_schema.tables where table_schema='public'")}`);
-  const marker = (() => {
-    try {
-      return q('select ref from lm_staging.marker limit 1');
-    } catch {
-      return '';
-    }
-  })();
-  log(null, `staging marker: ${marker || 'none (not prepared yet)'}`);
-  const bucket = q("select coalesce((select public::text from storage.buckets where id='satuan-item-photos'), 'absent')");
+  const marker = markerExists === 'true' ? readOnlyProbe(pg, ['select ref from lm_staging.marker limit 1'])[0] || 'none' : 'none';
+  log(true, `DB via ${u.hostname}:${u.port} as ${decodeURIComponent(u.username)} — probes in a READ ONLY transaction`);
+  log(null, `server version ${version}`);
+  log(null, `public tables: ${tables}`);
+  log(null, `staging marker: ${marker === 'none' ? 'none (not prepared yet)' : marker}`);
   log(null, `bucket satuan-item-photos: ${bucket === 'false' ? 'private' : bucket}`);
 }
 

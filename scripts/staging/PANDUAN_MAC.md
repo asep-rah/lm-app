@@ -46,37 +46,114 @@ region sama; yang membedakan proyek adalah user `postgres.<ref>`.
 
 ## 3. Dump SKEMA produksi (read-only)
 
+### Mengapa `transaction_read_only=off` lewat Session pooler
+
+`PGOPTIONS="-c default_transaction_read_only=on"` dikirim libpq sebagai
+parameter startup `options`. **Supavisor (Session pooler) tidak meneruskan
+parameter itu ke Postgres**, jadi sesi tetap `off`. Hal ini sudah
+direproduksi pada Supavisor lokal: koneksi langsung → `on`, lewat pooler →
+`off`. Pemeriksaan skrip sudah benar dengan berhenti. Perintah `SET` atau
+`BEGIN TRANSACTION READ ONLY` **di dalam** sesi tetap berlaku lewat pooler.
+
+Pilih salah satu jalur. Keduanya tidak mengubah role, setting, atau objek
+apa pun di produksi.
+
+| Jalur | Host | Pemaksaan read-only |
+|---|---|---|
+| **Langsung** (bila Mac punya IPv6) | `db.qlgbjvzabnfqmfnjdkmo.supabase.co` | `PGOPTIONS` sampai ke Postgres; seluruh sesi `transaction_read_only=on` (pemeriksaan lama, tidak berubah) |
+| **Session pooler** (IPv4) | `<region>.pooler.supabase.com` | probe `psql` di dalam `BEGIN TRANSACTION READ ONLY` (harus `on`); `pg_dump` hanya boleh jalan bila binary yang sama sudah **dibuktikan** di langkah 3a |
+
+Cek IPv6 Mac: `ping6 -c1 db.qlgbjvzabnfqmfnjdkmo.supabase.co`. Bila berhasil,
+jalur langsung lebih sederhana dan langkah 3a tidak diperlukan.
+
+### 3a. Bukti read-only `pg_dump` (wajib untuk jalur pooler, dijalankan lokal)
+
+Uji ini memakai stack Supabase **lokal** (Docker Desktop) dengan Supavisor
+mode session. Tidak ada koneksi ke produksi. Setiap statement yang dikirim
+`pg_dump` Anda lewat pooler dicatat, lalu diperiksa:
+
+- `pg_dump` membuka `SET TRANSACTION … READ ONLY`;
+- sebelum itu hanya ada pengaturan **sesi** (`DISCARD ALL`, `SET …`, `set_config(…, false)`);
+- seluruh statement hanya SELECT / LOCK … ACCESS SHARE / PREPARE … AS SELECT / EXECUTE / BEGIN;
+- dump tidak berisi baris data, dan data uji tidak berubah.
+
+Bila lulus, stempel `~/lm-staging/.pgdump-readonly-proof` ditulis, berisi
+path dan versi `pg_dump`. Skrip dump menolak jalur pooler tanpa stempel yang
+cocok persis.
+
 ```bash
-scripts/staging/dump-prod-schema.sh <HOST_POOLER_PRODUKSI> ~/lm-staging/prod-schema.dump.sql
+mkdir -p ~/lm-ro-proof && cd ~/lm-ro-proof
+npx supabase@2 init --force
+# aktifkan pooler mode session:
+sed -i '' -e '/^\[db.pooler\]/,/^\[/ s/^enabled = false/enabled = true/' \
+          -e '/^\[db.pooler\]/,/^\[/ s/^pool_mode = "transaction"/pool_mode = "session"/' supabase/config.toml
+npx supabase@2 start -x realtime,studio,edge-runtime,logflare,vector,imgproxy,mailpit,postgres-meta,gotrue,storage-api,postgrest,kong
+cd -   # kembali ke repo
+scripts/staging/prove-pgdump-readonly.sh
+(cd ~/lm-ro-proof && npx supabase@2 stop --no-backup)
 ```
 
-Pemeriksaan otomatis sebelum `pg_dump` berjalan (skrip berhenti bila salah satu gagal):
-
-1. Host harus `…pooler.supabase.com` dan tidak menyebut ref staging.
-2. File output harus di luar repo, berakhiran `.dump.sql`, dan belum ada (tidak menimpa).
-3. User dikunci ke `postgres.qlgbjvzabnfqmfnjdkmo`, port 5432, SSL wajib.
-4. Semua perintah memakai `default_transaction_read_only=on`. Sesi **harus**
-   melaporkan `transaction_read_only = on`; bila tidak, skrip berhenti.
-5. Versi `pg_dump` ≥ versi server.
-6. Anda mengetik ulang ref produksi sebagai konfirmasi.
-7. `pg_dump --schema-only --schema=public --no-owner` → hanya katalog, tanpa
-   baris tabel. File dibuat dengan mode 600.
-8. Hasilnya langsung diperiksa. Bila ternyata berisi data, file **dihapus**.
-
-Contoh output yang benar:
+Output yang benar diakhiri:
 
 ```
-✓ host looks like a Supabase Session pooler: aws-1-…pooler.supabase.com
+• pooler + PGOPTIONS → transaction_read_only=off (off = startup options are dropped by Supavisor)
+✓ BEGIN TRANSACTION READ ONLY through the pooler → transaction_read_only=on
+✓ captured 67 statements issued by pg_dump through the pooler
+✓ pg_dump opens a READ ONLY transaction (statement 16)
+✓ before it: only session-local settings (DISCARD/SET/set_config(…, false))
+✓ all statements: SELECT/SET/LOCK(ACCESS SHARE)/PREPARE…AS SELECT/EXECUTE/BEGIN/DISCARD
+✓ dump contains schema only; fixture row untouched
+✓ proof stamp written: /Users/<anda>/lm-staging/.pgdump-readonly-proof (pg_dump (PostgreSQL) 17.x)
+```
+
+(Jumlah statement bisa berbeda per versi. Yang wajib hanyalah semua baris `✓`.)
+Bila `brew upgrade libpq` mengganti versi `pg_dump`, jalankan ulang 3a.
+
+### 3b. Dump
+
+```bash
+scripts/staging/dump-prod-schema.sh <HOST> ~/lm-staging/prod-schema.dump.sql
+#   <HOST> = db.qlgbjvzabnfqmfnjdkmo.supabase.co   (langsung)  atau  host Session pooler produksi
+```
+
+Pemeriksaan sebelum `pg_dump` berjalan (skrip berhenti bila salah satu gagal):
+
+1. Host = `db.qlgbjvzabnfqmfnjdkmo.supabase.co` atau `…pooler.supabase.com`,
+   dan tidak menyebut ref staging. User dikunci: `postgres` (langsung) atau
+   `postgres.qlgbjvzabnfqmfnjdkmo` (pooler). Port 5432, SSL wajib.
+2. File output di luar repo, berakhiran `.dump.sql`, belum ada.
+3. Jalur pooler: stempel 3a cocok dengan path **dan** versi `pg_dump`.
+4. Probe koneksi berjalan di dalam `BEGIN TRANSACTION READ ONLY` dan harus
+   `transaction_read_only = on`.
+5. Jalur langsung: sesi harus `transaction_read_only = on`. Jalur pooler:
+   nilai sesi `off` dilaporkan apa adanya; yang dipakai adalah transaksi
+   READ ONLY milik `pg_dump` yang sudah dibuktikan.
+6. Versi `pg_dump` ≥ versi server.
+7. Anda mengetik ulang ref produksi.
+8. `pg_dump --schema-only --schema=public --no-owner --lock-wait-timeout=5000`,
+   mode file 600. Bila berisi data, file dihapus.
+
+Contoh output jalur pooler:
+
+```
+✓ mode: pooler (aws-1-…pooler.supabase.com, user postgres.qlgbjvzabnfqmfnjdkmo)
 ✓ output: /Users/<anda>/lm-staging/prod-schema.dump.sql
+✓ read-only proof matches this pg_dump (pg_dump (PostgreSQL) 17.x)
 Password database PRODUKSI (tidak ditampilkan):
-✓ connected as postgres.qlgbjvzabnfqmfnjdkmo; session is read-only (transaction_read_only=on)
+✓ connected as postgres.qlgbjvzabnfqmfnjdkmo; probes ran in a READ ONLY transaction (transaction_read_only=on)
+• pooler: session default transaction_read_only=off (startup options are dropped by Supavisor); relying on the proven pg_dump READ ONLY transaction
 ✓ pg_dump 17 ≥ server 17
 Ketik ref produksi untuk lanjut: qlgbjvzabnfqmfnjdkmo
 ✓ schema-only dump written (… lines)
 ```
 
-`pg_dump` hanya mengambil lock ACCESS SHARE saat membaca katalog, jadi
-aplikasi produksi tetap bisa membaca dan menulis seperti biasa.
+`LOCK … IN ACCESS SHARE MODE` hanya menunggu DDL. Baca dan tulis aplikasi
+produksi tetap berjalan, dan `--lock-wait-timeout=5000` membatalkan dump
+bila ada DDL yang sedang berjalan.
+
+Tidak dipakai, karena mengubah produksi: memberi password pada role bawaan
+`supabase_read_only_user`, `ALTER ROLE … SET default_transaction_read_only`,
+atau `supabase db dump --linked` (yang membuat role login sementara).
 
 ## 4. Tinjau dan bersihkan dump
 
