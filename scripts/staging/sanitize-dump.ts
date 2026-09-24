@@ -21,6 +21,7 @@ import { existsSync, readFileSync, realpathSync, unlinkSync, writeFileSync } fro
 import { dirname, join, resolve } from 'node:path';
 import { PRODUCTION_SUPABASE_REF } from '../../lib/supabaseTarget';
 import { inspectStatements, needsReview, NEUTRAL_HOST, SECRET_PATTERNS, webhookTriggerOf } from './schemaDump';
+import { describeNotNull, findNotNull } from './columnNotNull';
 import { splitSqlStatements } from './sqlLexer';
 
 export const SANITIZED_HEADER = '-- lm-staging-sanitized v1';
@@ -163,6 +164,13 @@ function main() {
   console.log(`✓ URL hosts rewritten to ${NEUTRAL_HOST}: ${Object.entries(result.hosts).map(([h, c]) => `${h}×${c}`).join(', ') || 'none'}`);
   console.log(`✓ redacted secret-like values: ${result.redacted}; production refs replaced: ${result.prodRefs}`);
   console.log('✓ re-check of the copy: no data, no outbound HTTP, no production ref, no secret-like values');
+  const before = findNotNull(readFileSync(inPath, 'utf8'));
+  const after = findNotNull(result.sql);
+  if (before.notNull && !after.notNull) {
+    unlinkSync(outAbs);
+    die('pickup_orders.pickup_date NOT NULL was lost in the copy — deleted');
+  }
+  console.log(`${after.notNull ? '✓' : '✗'} pickup_orders.pickup_date NOT NULL in the copy: ${describeNotNull(after)}`);
 }
 
 if (require.main === module) main();

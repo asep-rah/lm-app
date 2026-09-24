@@ -27,6 +27,7 @@ import { createClient } from '@supabase/supabase-js';
 import { PRODUCTION_SUPABASE_REF } from '../../lib/supabaseTarget';
 import { log, loadStagingEnv, verifyStagingKeys, type StagingEnv } from './guard';
 import { SANITIZED_HEADER } from './sanitize-dump';
+import { describeNotNull, findNotNull } from './columnNotNull';
 import { inspectSchemaDump, needsReview } from './schemaDump';
 
 const ROOT = join(__dirname, '..', '..');
@@ -162,6 +163,12 @@ async function main() {
     }
     report.notes.slice(0, 20).forEach((l) => log(null, `5. note ${l}`));
     log(null, `5. ${report.functionBodyDml.length} function(s) contain DML in their bodies (definitions, not data)`);
+    const nn = findNotNull(dumpSql);
+    if (!nn.notNull) {
+      log(false, `5. pickup_orders.pickup_date NOT NULL: ${describeNotNull(nn)} — staging would not reproduce the production constraint; refusing`);
+      process.exit(2);
+    }
+    log(true, `5. pickup_orders.pickup_date NOT NULL: ${describeNotNull(nn)}`);
     log(true, `5. sanitised dump validated: schema only (${dumpSql.split('\n').length} lines), no webhook/URL/secret/production ref`);
   } else {
     log(true, '5. schema dump already applied earlier');

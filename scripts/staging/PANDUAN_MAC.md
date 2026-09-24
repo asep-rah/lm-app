@@ -188,6 +188,14 @@ npx tsx scripts/staging/review-staging-copy.ts ~/lm-staging/prod-schema.dump.sql
   rahasia, sedangkan JWT, `sb_secret_…`, `sk_…`, token `Bearer`, dan nilai
   key/token tetap dianggap rahasia.
 
+Baris `pickup_orders.pickup_date NOT NULL` harus berbunyi `yes — …`.
+`pg_dump` menulis `DEFAULT` di antara tipe dan `NOT NULL`, misalnya
+`pickup_date date DEFAULT CURRENT_DATE NOT NULL`, dan pemeriksa mengenali
+bentuk itu, bentuk `CONSTRAINT … NOT NULL` (Postgres 18), serta
+`ALTER … SET NOT NULL`. `CHECK (… IS NOT NULL)` tidak dihitung. Bila tertulis
+`NO` atau `NOT FOUND`, jangan lanjut: `sanitize-dump`, `review-staging-copy`,
+dan `prepare` juga akan menolak.
+
 **4b. `sanitize-dump`** membuat `staging-schema.dump.sql` (mode 600, tidak
 menimpa, di luar repo, baris pertama `-- lm-staging-sanitized v1`):
 

@@ -9,6 +9,7 @@
  */
 import { readFileSync, statSync } from 'node:fs';
 import { PRODUCTION_SUPABASE_REF } from '../../lib/supabaseTarget';
+import { describeNotNull, findNotNull } from './columnNotNull';
 import { inspectSchemaDump, needsReview } from './schemaDump';
 
 const file = process.argv[2];
@@ -26,7 +27,7 @@ const mode = (statSync(file).mode & 0o777).toString(8);
 
 console.log(`file: ${sql.split('\n').length} lines, permissions ${mode}${mode !== '600' ? '  ← run: chmod 600 <file>' : ''}`);
 console.log(`objects: ${tables} tables, ${policies} policies, ${fns} functions, ${triggers} triggers`);
-console.log(`pickup_orders.pickup_date NOT NULL: ${/CREATE TABLE public\.pickup_orders \([\s\S]*?pickup_date date NOT NULL/.test(sql) ? 'yes' : 'NOT FOUND'}`);
+console.log(`pickup_orders.pickup_date NOT NULL: ${describeNotNull(findNotNull(sql))}`);
 const section = (title: string, items: string[]) => {
   console.log(`${items.length ? '✗' : '✓'} ${title}: ${items.length}`);
   items.slice(0, 40).forEach((l) => console.log(`    ${l}`));
