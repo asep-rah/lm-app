@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { hashStaffPassword, isHashedStaffPassword, verifyStaffPassword } from '@/lib/staffPassword';
 import { paymentServiceDb } from '@/lib/paymentSecurity';
+import { setStaffSessionCookie } from '@/lib/staffAuth/server';
 
 export const dynamic = 'force-dynamic';
 
@@ -124,7 +125,10 @@ export async function POST(req: Request) {
     }
 
     const { password: _pw, ...safe } = user;
-    return NextResponse.json({ user: safe });
+    const res = NextResponse.json({ user: safe });
+    // Identitas staf terverifikasi untuk API yang membutuhkannya (cookie HttpOnly).
+    setStaffSessionCookie(res, { sid: String(user.id || ''), role: String(user.role || '') });
+    return res;
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || 'Login gagal' }, { status: 500 });
   }

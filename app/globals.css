@@ -10,6 +10,23 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+
+  /*
+   * Warna brand Laundrivery (portal customer). Acuan: biru pada
+   * public/images/Logo-Laundrivery.png = #098FF1 (brand-500), aksen kuning #FED819.
+   * brand-600 ke atas dipakai untuk teks/tombol berteks putih agar kontras ≥ 4.5:1.
+   */
+  --color-brand-50: #eaf5fe;
+  --color-brand-100: #d3eafd;
+  --color-brand-200: #a7d4fb;
+  --color-brand-300: #6db8f7;
+  --color-brand-400: #3aa3f4;
+  --color-brand-500: #098ff1;
+  --color-brand-600: #0778cc;
+  --color-brand-700: #065fa3;
+  --color-brand-800: #054a7f;
+  --color-brand-900: #043963;
+  --color-brand-accent: #fed819;
 }
 
 body {

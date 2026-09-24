@@ -102,7 +102,7 @@ export default function WalkInPaySuccessModal({
       void pollOnce();
     }, 4000);
 
-    // Cek berkali-kali di awal — settlement Mayar/Xendit sering 5–30 dtk
+    // Cek berkali-kali di awal — settlement Mayar sering 5–30 dtk
     void (async () => {
       const gaps = [2000, 3000, 5000, 8000];
       for (const gap of gaps) {

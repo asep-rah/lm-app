@@ -26,7 +26,7 @@ Authorization must be explicit and enforced server-side for sensitive operations
 | Frontend / API | Next.js App Router + TypeScript (React 19) |
 | Styling | Tailwind CSS + daisyUI |
 | Database & Realtime | Supabase (Postgres + RLS + Realtime) |
-| Payments | Mayar (QRIS) webhook + polling + cron; Xendit QRIS routes |
+| Payments | Mayar (QRIS) webhook + polling + cron |
 | Maps / Location | Leaflet + Nominatim; Google Maps deep links / outlet rating |
 | Push Notifications | Web Push (VAPID) |
 | AI features | Gemini / OpenAI via `@google/genai` and server routes |

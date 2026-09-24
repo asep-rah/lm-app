@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabaseClient';
 import RoleTaskInbox from '@/components/RoleTaskInbox';
 import { logCourierStage, updatePickupOrder } from '@/lib/pickupUpdates';
 import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
@@ -14,11 +14,8 @@ import { Camera, Check } from 'lucide-react';
 import GoogleMapsNavButton from '@/components/GoogleMapsNavButton';
 import DriverAttendancePanel from '@/components/driver/DriverAttendancePanel';
 import type { DriverAttendance } from '@/lib/driverAttendance';
+import { clearStaffServerSession } from '@/lib/staffSession';
 
-const supabase = createClient(
-  'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
-  'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs'
-);
 
 const ACTIVE_STATUSES = [
   'Baru Masuk',
@@ -141,6 +138,7 @@ export default function DriverDashboard() {
 
   const handleLogout = () => {
     if (confirm('Apakah Anda yakin ingin keluar dari Portal Driver?')) {
+      clearStaffServerSession();
       localStorage.removeItem('laundry_user');
       localStorage.removeItem('laundry_owner_user');
       localStorage.removeItem('laundry_driver_user');

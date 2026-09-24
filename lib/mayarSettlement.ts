@@ -59,6 +59,7 @@ function isQrisLike(row: MayarSettlementRow): boolean {
   const type = String(row?.balanceHistoryType || '').toLowerCase();
   if (/gratis|free|saas/i.test(method)) return false;
   if (!method) return true;
+  // Method label as reported by Mayar's balance history (Mayar may name its underlying processor).
   return /qris|qr|ewallet|e-wallet|gopay|ovo|dana|shopee|payme|xendit/i.test(method) || /payme|qris/i.test(type);
 }
 

@@ -292,7 +292,7 @@ export const fetchRoleKpis = async (
   const cashTx = txsThis.filter((t: any) => String(t.payment_method || '').toLowerCase().includes('cash'));
   const bankTx = txsThis.filter((t: any) => {
     const pm = String(t.payment_method || '').toLowerCase();
-    return pm.includes('qris') || pm.includes('transfer') || pm.includes('bank') || pm.includes('xendit');
+    return pm.includes('qris') || pm.includes('transfer') || pm.includes('bank');
   });
   const closeMatch = closings.length ? pct(matchedClosings, closings.length) : null;
   const mixOk = txsThis.length ? pct(cashTx.length + bankTx.length, txsThis.length) : 100;

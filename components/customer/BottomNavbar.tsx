@@ -38,7 +38,7 @@ export default function BottomNavbar({
   onActivity: () => void;
   onProfile: () => void;
 }) {
-  const item = (on: boolean) => (on ? 'text-blue-700' : 'text-slate-600');
+  const item = (on: boolean) => (on ? 'text-brand-700' : 'text-slate-600');
   const tabClass = 'flex flex-col items-center justify-center gap-0.5 py-1 min-h-[2.75rem]';
   const [unreadChatCount, setUnreadChatCount] = useState(0);
   const inChatRef = useRef(activeTab === 'chat');
@@ -135,8 +135,8 @@ export default function BottomNavbar({
             aria-label="Order"
             className={`${tabClass} mx-0.5 rounded-xl text-white ${
               activeTab === 'order'
-                ? 'bg-gradient-to-br from-blue-500 via-blue-600 to-indigo-700'
-                : 'bg-blue-600'
+                ? 'bg-gradient-to-br from-brand-500 via-brand-600 to-indigo-700'
+                : 'bg-brand-600'
             }`}
           >
             {/* Official Laundrivery collar mark — white on blue tab */}
@@ -153,7 +153,7 @@ export default function BottomNavbar({
           <button type="button" onClick={onActivity} className={`relative ${tabClass} ${item(activeTab === 'activity')}`}>
             <ListTodo className="w-5 h-5" strokeWidth={2.2} />
             {!!ongoingCount && (
-              <span className="absolute top-0 right-[18%] min-w-[15px] h-[15px] px-1 rounded-full bg-blue-600 text-white text-[8px] font-black flex items-center justify-center">
+              <span className="absolute top-0 right-[18%] min-w-[15px] h-[15px] px-1 rounded-full bg-brand-600 text-white text-[8px] font-black flex items-center justify-center">
                 {ongoingCount > 99 ? '99+' : ongoingCount}
               </span>
             )}

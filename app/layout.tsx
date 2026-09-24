@@ -4,6 +4,7 @@ import "./globals.css";
 import ToastHost from "@/components/ui/ToastHost";
 import PushPermissionBanner from "@/components/PushPermissionBanner";
 import OutletGroupChatDrawer from "@/components/OutletGroupChatDrawer";
+import DatabaseTargetBadge from "@/components/DatabaseTargetBadge";
 
 const inter = Inter({ subsets: ["latin"], display: "swap" });
 
@@ -38,6 +39,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         {children}
         <PushPermissionBanner />
         <OutletGroupChatDrawer />
+        <DatabaseTargetBadge />
       </body>
     </html>
   );

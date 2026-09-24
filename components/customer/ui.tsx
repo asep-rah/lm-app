@@ -22,7 +22,7 @@ import {
 import { displayStatusLabel } from '@/lib/stageTimeline';
 
 const TONE: Record<string, string> = {
-  blue: 'bg-blue-50 text-blue-600',
+  blue: 'bg-brand-50 text-brand-600',
   indigo: 'bg-indigo-50 text-indigo-600',
   amber: 'bg-amber-50 text-amber-600',
   emerald: 'bg-emerald-50 text-emerald-600',
@@ -89,7 +89,7 @@ export function StatusPill({ status }: { status?: string }) {
         tone === 'emerald'
           ? 'bg-emerald-50/80 text-emerald-700 border-emerald-100/80'
           : tone === 'blue'
-          ? 'bg-blue-50/80 text-blue-700 border-blue-100/80'
+          ? 'bg-brand-50/80 text-brand-700 border-brand-100/80'
           : tone === 'indigo'
           ? 'bg-indigo-50/80 text-indigo-700 border-indigo-100/80'
           : tone === 'cyan'
@@ -142,7 +142,7 @@ export function StepperBtn({
   tone?: 'blue' | 'indigo';
 }) {
   const Icon = variant === 'plus' ? Plus : Minus;
-  const plusTone = tone === 'indigo' ? 'bg-indigo-600 shadow-indigo-200' : 'bg-blue-600 shadow-blue-200';
+  const plusTone = tone === 'indigo' ? 'bg-indigo-600 shadow-indigo-200' : 'bg-brand-600 shadow-brand-200';
   return (
     <button
       type="button"

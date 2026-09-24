@@ -32,7 +32,18 @@ export type ShowcasePromo = {
 export const ALL_OUTLET_TARGET = 'ALL';
 
 export type BannerSlide =
-  | { kind: 'promo'; id: string; title: string; subtitle: string; image: string; outletId?: string; promoCode?: string; promoId?: string }
+  | {
+      kind: 'promo';
+      id: string;
+      title: string;
+      subtitle: string;
+      image: string;
+      outletId?: string;
+      promoCode?: string;
+      promoId?: string;
+      /** Normalised target outlets (`['ALL']` = semua outlet). */
+      targetOutletIds?: string[];
+    }
   | { kind: 'coming_soon'; id: string; title: string; subtitle: string; image: string; outletId: string };
 
 export const haversineKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
@@ -127,15 +138,47 @@ export const citiesMatch = (a?: string | null, b?: string | null) => {
   return x === y || x.includes(y) || y.includes(x);
 };
 
-export const outletCityOf = (outlet: ShowcaseOutlet | null | undefined) => {
-  const explicit = String(outlet?.city || '').trim();
-  if (explicit) return explicit;
-  const addr = String(outlet?.address_detail || '');
-  const parts = addr
+/**
+ * Placeholder values written when a city was left empty (Owner → Outlet saves
+ * `city: '-'` when blank). They must not count as a real city, otherwise the
+ * outlet never matches any city filter.
+ */
+const isPlaceholderCity = (raw: string) => !normalizeCityName(raw) || /^(-+|n\/?a|null|undefined|tidak ada)$/i.test(raw.trim());
+
+/** Province / country / postal-code segments that are not a city name. */
+const NON_CITY_SEGMENT =
+  /^(indonesia|jawa\s+(barat|tengah|timur)|jabar|jateng|jatim|dki(\s+jakarta)?|banten|bali|d\.?\s*i\.?\s*yogyakarta|diy|sumatera\s+\w+|kalimantan\s+\w+|sulawesi\s+\w+)?\s*\d{0,5}$/i;
+
+/** City segment of a free-text address: prefers "Kota X"/"Kabupaten X", else the last non-province part. */
+export const cityFromAddress = (address: string) => {
+  const parts = String(address || '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
-  return parts[parts.length - 1] || '';
+  const explicit = parts.find((p) => /^(kota|kabupaten|kab\.?)\s+/i.test(p));
+  if (explicit) return explicit.replace(/\s+\d{5}$/, '').trim();
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const cleaned = parts[i].replace(/\s+\d{5}$/, '').trim();
+    if (cleaned && !NON_CITY_SEGMENT.test(cleaned)) return i === 0 && parts.length > 1 ? '' : cleaned;
+  }
+  return '';
+};
+
+export const outletCityOf = (outlet: ShowcaseOutlet | null | undefined) => {
+  const explicit = String(outlet?.city || '').trim();
+  if (explicit && !isPlaceholderCity(explicit)) return explicit;
+  return cityFromAddress(String(outlet?.address_detail || ''));
+};
+
+/** Outlet belongs to `city` by its city column or anywhere in its address text. */
+export const outletMatchesCity = (outlet: ShowcaseOutlet, city: string) => {
+  const oc = outletCityOf(outlet);
+  if (oc && citiesMatch(oc, city)) return true;
+  const want = normalizeCityName(city);
+  if (want.length < 4) return false;
+  return String(outlet?.address_detail || '')
+    .split(',')
+    .some((part) => normalizeCityName(part) === want || normalizeCityName(part.replace(/\s+\d{5}$/, '')) === want);
 };
 
 export const uniqueOutletCities = (outlets: ShowcaseOutlet[]) => {
@@ -193,10 +236,7 @@ export const outletsInCustomerCity = (
 ) => {
   const open = (outlets || []).filter((o) => !isComingSoonOutlet(o) && !o.is_overcapacity);
   const filtered = city
-    ? open.filter((o) => {
-        const oc = outletCityOf(o);
-        return Boolean(oc) && citiesMatch(oc, city);
-      })
+    ? open.filter((o) => outletMatchesCity(o, city))
     : open.filter((o) => {
         if (!coords) return false;
         const km = outletDistanceKm(o, coords);
@@ -244,14 +284,13 @@ export const nearbyActiveOutlets = (
   const ignoreCity = Boolean(opts?.ignoreCity) || !city;
   return (outlets || [])
     .filter((o) => !isComingSoonOutlet(o))
-    .filter((o) => {
-      if (ignoreCity || !city) return true;
-      const oc = outletCityOf(o);
-      if (!oc) return false;
-      return citiesMatch(oc, city);
-    })
+    .filter((o) => ignoreCity || outletMatchesCity(o, city))
     .map((o) => ({ outlet: o, km: outletDistanceKm(o, coords) }))
     .filter(({ km }) => {
+      // Kota dipilih/diketahui → tampilkan semua cabang di kota itu (diurutkan
+      // jarak). Radius hanya dipakai saat kota tidak diketahui; GPS perangkat
+      // bisa meleset jauh (mis. lokasi berbasis IP di laptop).
+      if (!ignoreCity) return true;
       if (!coords) return true;
       if (km == null) return false;
       return km <= maxKm;
@@ -361,7 +400,8 @@ export const bannerSlidesOf = (
       image: promoBannerUrlOf(p),
       outletId: p.outlet_id || undefined,
       promoCode: String(p.promo_code || '').trim() || undefined,
-      promoId: String(p.id)
+      promoId: String(p.id),
+      targetOutletIds: parseTargetOutletIds(p.target_outlet_ids, p.outlet_id)
     }));
   const soonSlides: BannerSlide[] = comingSoonOutlets(outlets).map((o) => ({
     kind: 'coming_soon',

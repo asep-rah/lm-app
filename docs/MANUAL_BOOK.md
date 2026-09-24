@@ -88,7 +88,7 @@ Alur tipikal pelanggan:
 | **Cron** | Webhook hilang / lambat; server poll Mayar per `mayar_payment_id` |
 | **Mark manual** | Override CS/Owner dengan bukti + catatan (audit) |
 
-Alias webhook: `/api/mayar/webhook` mengarah ke handler yang sama. Path legacy `/qris/webhook` juga dialihkan ke logika `markGatewayPaid` agar tidak ada dua jalur bayar yang berbeda.
+Alias webhook: `/api/mayar/webhook` mengarah ke handler yang sama. Gateway pembayaran hanya Mayar; route Xendit lama (`/qris/webhook`, `/api/qris/webhook`, `/api/qris/charge`) sudah dihapus.
 
 ### 1.5 Diagram arsitektur ringkas
 
@@ -116,15 +116,27 @@ Alias webhook: `/api/mayar/webhook` mengarah ke handler yang sama. Path legacy `
 
 #### Alur registrasi & sesi
 
-1. Pelanggan masuk (nomor WA / mekanisme login pelanggan yang ada di portal).
-2. Profil tersimpan; saldo deposit & poin loyalty diload dari CRM (`customer_crm_profiles` / settings).
+1. Pelanggan masuk di `/customer/login`:
+   - **WhatsApp terverifikasi** (bila `CUSTOMER_WA_LOGIN_ENABLED=true`): isi nomor → buka WhatsApp dengan pesan kode terisi → tekan **Kirim** ke nomor sistem → web masuk otomatis setelah webhook Evolution memverifikasi nomor pengirim. Sesi = cookie HttpOnly 30 hari.
+   - **Email cadangan** (bila `CUSTOMER_EMAIL_LOGIN_ENABLED=true`): hanya email yang sudah ditautkan & diverifikasi dari Profil; masuk ke akun (nomor WA) yang sama.
+   - **Login lama** (default selama WA belum dikonfigurasi): kode dibuat di browser + WA ke nomor admin, tanpa verifikasi server.
+   - Detail konfigurasi & uji: [`customer-verified-login.md`](customer-verified-login.md).
+2. Profil tersimpan; saldo deposit & poin loyalty diload dari CRM (`customer_crm_profiles` / settings). Profil menampilkan status email cadangan (bila fitur email aktif) dan alamat tersimpan; label sama (mis. dua "Rumah") ditampilkan dengan potongan nama jalan.
 3. PWA dapat mendaftarkan **Web Push** (`/sw.js`) untuk notifikasi status order.
 
 #### Pembuatan order
 
-1. Tab **Order** → isi layanan, jadwal jemput, catatan.
-2. **Lokasi:** pinpoint peta + saran alamat (OSM) → simpan koordinat & alamat lengkap (termasuk nomor rumah bila diminta form).
-3. Sistem menampilkan outlet terdekat / kapasitas.
+Tab **Order** berisi 3 langkah (pilihan tetap tersimpan saat maju/mundur/berpindah tab; tombol Lanjut/Pesan menempel di atas navigasi bawah):
+
+1. **Alamat & Penjemputan** — alamat tersimpan/baru, pencarian alamat + pin peta, nomor rumah/blok, patokan → outlet terdekat yang melayani (3 cabang terdekat, tidak coming soon/overload) → *Jemput sekarang* / *Jadwalkan* → **Driver Internal** (gratis, antrean & estimasi jemput) atau **Instan** (estimasi ongkir dari jarak jalan) → catatan penjemputan.
+2. **Layanan** — kiloan dan/atau satuan, durasi, kuantitas, detail cucian kiloan, voucher promo, tukar poin loyalty.
+3. **Periksa & Pesan** — ringkasan yang bisa diubah per bagian, nama pemesan, rincian estimasi (subtotal, ongkir, promo, poin, total), persetujuan, satu tombol **Pesan Sekarang** (dikunci terhadap ketukan ganda; nomor order dipakai ulang saat kirim ulang).
+
+Perhitungan harga/promo/poin/ongkir dan payload `pickup_orders` tidak berubah dibanding form satu halaman sebelumnya.
+
+Aktivitas menampilkan **progres cucian** (jemput → outlet → sortir … siap → selesai, dari status + `work_logs`) terpisah dari **status pembayaran** (Lunas / Menunggu pembayaran / Tagihan setelah ditimbang). Detail pesanan menampilkan subtotal, diskon (dipecah menjadi diskon manual dan potongan poin bila bisa diturunkan dari `discount_type`/`discount_value`), ongkir, dan total — rumus sama dengan struk POS: `subtotal = amount + discount_amount − delivery_fee`.
+
+Beranda → *Outlet terdekat*: bila kota diketahui/dipilih, semua cabang aktif di kota itu ditampilkan (diurutkan jarak). Kota outlet dibaca dari kolom `city`; nilai kosong/`-` jatuh ke teks alamat (mis. "Kota Bandung").
 4. Pilih metode bayar:
    - **QRIS (Mayar)** → invoice + QR; tunggu webhook / tekan **Cek Status Pembayaran**.
    - **Deposit** → potong saldo (mutasi server-side saat diproses di jalur yang memakai API deposit).

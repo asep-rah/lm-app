@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabaseClient';
 import StageTimeline from '@/components/StageTimeline';
 import WasherBatchTimeline from '@/components/pos/WasherBatchTimeline';
 import { isVoidTransaction } from '@/lib/voidTx';
@@ -36,10 +36,6 @@ import { sanitizePublicError } from '@/lib/supabaseEnv';
 
 const AICopilotCard = dynamic(() => import('@/components/analytics/AICopilotCard'), { ssr: false });
 
-const supabase = createClient(
-  'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
-  'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs'
-);
 
 const safeParse = (data: any, fallback: any) => {
   if (!data) return fallback;

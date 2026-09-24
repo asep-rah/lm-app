@@ -80,9 +80,53 @@ export async function decrementCustomerDeposit(db: any, phone: string, amount: n
   return { balance: next, error: null };
 }
 
-export async function creditCustomerDeposit(db: any, phone: string, amount: number, paymentId: string) {
+/**
+ * Pastikan baris pelanggan ada sebelum kredit. Di produksi `customers.registered_by`
+ * NOT NULL tanpa default, sehingga RPC `credit_customer_deposit` (yang membuat
+ * pelanggan baru tanpa kolom itu) dan fallback di bawah gagal untuk nomor baru.
+ * Pelanggan baru dibuat dengan `registered_by` = petugas yang melakukan top-up
+ * (sama dengan POS); tanpa petugas (top-up online Mayar oleh pelanggan) nomor baru
+ * ditolak — top-up tetap PENDING dan tercatat, bukan hilang.
+ */
+async function ensureDepositCustomer(db: Db, phone: string, registeredBy?: string) {
+  const variants = phonesOf(phone);
+  const { data: existing, error } = await db.from('customers').select('phone').in('phone', variants.length ? variants : [phone]).limit(1);
+  if (error) return { message: error.message };
+  if (existing?.[0]) return null;
+  const by = String(registeredBy || '').trim();
+  if (!by) return { message: DEPOSIT_NOT_REGISTERED_MESSAGE };
+  const ins = await db
+    .from('customers')
+    .insert([{ phone: normalizeCustomerPhone(phone) || phone, name: 'Pelanggan', registered_by: by, deposit_balance: 0 }]);
+  // 23505: dibuat bersamaan oleh permintaan lain — baris sudah ada.
+  if (ins.error && ins.error.code !== '23505') return { message: ins.error.message };
+  return null;
+}
+
+/** Pesan untuk nomor yang belum terdaftar (top-up mandiri maupun lewat kasir). */
+export const DEPOSIT_NOT_REGISTERED_MESSAGE =
+  'Nomor ini belum terdaftar sebagai pelanggan. Daftarkan dulu di kasir outlet (nama & nomor WhatsApp), lalu ulangi top-up.';
+
+/** Apakah nomor ini sudah ada di tabel customers (semua varian 08/62/+62)? */
+export async function isRegisteredCustomer(db: Db, phone: string): Promise<{ registered: boolean; error: { message: string } | null }> {
+  const variants = phonesOf(phone);
+  if (!variants.length) return { registered: false, error: null };
+  const { data, error } = await db.from('customers').select('phone').in('phone', variants).limit(1);
+  if (error) return { registered: false, error: { message: error.message } };
+  return { registered: Boolean(data?.[0]), error: null };
+}
+
+export async function creditCustomerDeposit(
+  db: any,
+  phone: string,
+  amount: number,
+  paymentId: string,
+  opts: { registeredBy?: string } = {}
+) {
   const pay = Number(amount) || 0;
   if (pay <= 0) return { balance: null as number | null, error: { message: 'Nominal kredit deposit tidak valid' }, already: false };
+  const missing = await ensureDepositCustomer(db, phone, opts.registeredBy);
+  if (missing) return { balance: null, error: missing, already: false };
   if (db.rpc) {
     const { data, error } = await db.rpc('credit_customer_deposit', {
       p_phone: phone,
@@ -110,8 +154,7 @@ export async function creditCustomerDeposit(db: any, phone: string, amount: numb
     if (error) return { balance: null, error: { message: error.message }, already: false };
   } else if (phone) {
     const ins = await insertAttempts(db, 'customers', [
-      { phone, name: 'Pelanggan', deposit_balance: nextBal },
-      { phone, deposit_balance: nextBal }
+      { phone, name: 'Pelanggan', registered_by: String(opts.registeredBy || '').trim() || null, deposit_balance: nextBal }
     ]);
     if (ins.error) return { balance: null, error: ins.error, already: false };
   }

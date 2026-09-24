@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic';
 
 import { useEffect, useMemo, useRef, useState, Suspense } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabaseClient';
 import Link from 'next/link';
 import StageTimeline from '@/components/StageTimeline';
 import { PAID_STAGE_KEYS, stageKeyOf } from '@/lib/stageTimeline';
@@ -18,6 +18,7 @@ import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
 import { uploadProofFile } from '@/lib/uploadProof';
 import { cartLineAmount } from '@/lib/kiloanPrice';
 import { assertPosQtyReady } from '@/lib/posQtyGate';
+import PickupItemsDetail from '@/components/PickupItemsDetail';
 import {
   findCustomerByPhone,
   maskPhone,
@@ -49,6 +50,7 @@ import LayFlatPhotoModal from '@/components/pos/LayFlatPhotoModal';
 import WasherBatchTimeline from '@/components/pos/WasherBatchTimeline';
 import { intakePcsOf, PCS_MISMATCH_ALERT } from '@/lib/layFlatProof';
 import { buildBagStickers, printBagStickers } from '@/utils/thermalPrinter';
+import { clearStaffServerSession } from '@/lib/staffSession';
 import {
   createWasherCycles,
   hasIncompleteWashCycles,
@@ -80,10 +82,6 @@ import {
   sortProsesBySla
 } from '@/lib/posQueue';
 
-const supabase = createClient(
-  'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
-  'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs'
-);
 
 const safeParse = (data: any, fallback: any) => {
   if (!data) return fallback;
@@ -1380,6 +1378,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
   };
 
   const handleLogout = () => {
+    clearStaffServerSession();
     localStorage.removeItem('laundry_user');
     localStorage.removeItem('laundry_owner_user');
     localStorage.removeItem('user_id');
@@ -4426,6 +4425,9 @@ const handleStatusChange = async (
                       </span>
                     </div>
                   )}
+
+                  {/* Referensi dari form customer — tidak mengisi keranjang nota. */}
+                  <PickupItemsDetail items={customerOrder.items} pickupOrderId={customerOrder.id} />
                 </div>
               )}
 

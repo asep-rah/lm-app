@@ -1,24 +1,22 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import { diagnosisHintOf } from '@/lib/errorDiagnosis';
-import { DEFAULT_SUPABASE_URL, resolveSupabaseUrl } from '@/lib/supabaseEnv';
+import { serverDeployEnv, serverServiceKey, serverSupabaseTarget } from '@/lib/supabaseServer';
 
-export type GatewayName = 'mayar' | 'xendit' | 'manual' | 'cron' | 'check-status';
-
-const DEV_ANON_FALLBACK = 'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs';
+export type GatewayName = 'mayar' | 'manual' | 'cron' | 'check-status';
 
 const serviceClient = () => {
-  const url = resolveSupabaseUrl({ allowFallback: true }) || DEFAULT_SUPABASE_URL;
-  const key = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  const target = serverSupabaseTarget();
+  if (!target.ok) throw new Error(`Akses database diblokir: ${target.reason}`);
+  const key = serverServiceKey();
   if (key) {
-    return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+    return createClient(target.url, key, { auth: { persistSession: false, autoRefreshToken: false } });
   }
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('SUPABASE_SERVICE_ROLE_KEY wajib di production untuk operasi pembayaran');
+  if (serverDeployEnv() === 'production' || process.env.NODE_ENV === 'production') {
+    throw new Error('SUPABASE_SERVICE_ROLE_KEY wajib untuk operasi server ini');
   }
-  // Dev: samakan fallback dengan supabaseClient / mayar create agar simulasi & cek status tidak 404.
-  const anon = String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '').trim() || DEV_ANON_FALLBACK;
-  return createClient(url, anon, {
+  // Dev lokal tanpa service role: anon key milik target yang sama (bukan produksi).
+  return createClient(target.url, target.anonKey, {
     auth: { persistSession: false, autoRefreshToken: false }
   });
 };
@@ -116,7 +114,7 @@ export async function insertErrorLog(row: {
   const db = serviceClient();
   const hint = row.hint || diagnosisHintOf(row.code || row.message);
   try {
-    await db.from('error_logs').insert([
+    const { error } = await db.from('error_logs').insert([
       {
         source: row.source,
         code: row.code || null,
@@ -127,6 +125,8 @@ export async function insertErrorLog(row: {
         transaction_id: row.transaction_id || null
       }
     ]);
+    // supabase-js returns (does not throw) insert errors; surface them in server logs.
+    if (error) console.warn('error_logs insert failed:', error.code, error.message);
   } catch (err) {
     console.warn('error_logs insert failed:', err);
   }
@@ -146,7 +146,7 @@ export async function insertAuditLog(row: {
 }) {
   const db = serviceClient();
   try {
-    await db.from('audit_logs').insert([
+    const { error } = await db.from('audit_logs').insert([
       {
         user_id: row.user_id || null,
         user_name: row.user_name || null,
@@ -159,6 +159,7 @@ export async function insertAuditLog(row: {
         ip_address: row.ip_address || null
       }
     ]);
+    if (error) console.warn('audit_logs insert failed:', error.code, error.message);
   } catch (err) {
     console.warn('audit_logs insert failed:', err);
   }

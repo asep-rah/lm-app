@@ -11,7 +11,7 @@ import {
   OWNER_TAB_EVENT,
   type SettingsPanel
 } from '@/components/owner/ownerNav';
-import { canAccessSettings, isOwnerRole } from '@/lib/staffSession';
+import { canAccessSettings, isOwnerRole, clearStaffServerSession } from '@/lib/staffSession';
 
 function tabFromPath(pathname: string): string {
   const p = pathname.replace(/\/$/, '') || '/owner';
@@ -85,6 +85,7 @@ function OwnerSidebarController({
   }, [pathname, searchParams]);
 
   const handleLogout = () => {
+    clearStaffServerSession();
     localStorage.removeItem('laundry_owner_user');
     localStorage.removeItem('laundry_user');
     window.location.href = '/login';

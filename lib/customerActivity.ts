@@ -49,6 +49,18 @@ export const isOrderFinished = (order: any) => {
   );
 };
 
+/**
+ * Tanggal `YYYY-MM-DD` dari komponen LOKAL (bukan `toISOString()`, yang memakai
+ * UTC dan bisa mundur satu hari untuk WIB/WITA/WIT pada dini hari). Dipakai
+ * untuk default input tanggal dan untuk `pickup_date` order "Jemput sekarang".
+ */
+export const localDateISO = (d: Date = new Date()): string =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+/** Jam lokal `HH:MM:SS`, pasangan `localDateISO` untuk `pickup_time`. */
+export const localTimeHMS = (d: Date = new Date()): string =>
+  `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+
 export const withScheduleNote = (notes: string, date: string, time: string) => {
   const line = `Jadwal jemput: ${date} ${time}`;
   const cleaned = String(notes || '')

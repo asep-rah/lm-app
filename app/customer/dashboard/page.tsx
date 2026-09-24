@@ -3,15 +3,16 @@
 import dynamic from 'next/dynamic';
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabaseClient';
 import { fetchThreadMessages, insertChatMessage, isStaffOnlyMessage, phoneVariants, threadKeyOf } from '@/lib/csChat';
 import { parseChatInvoice } from '@/lib/chatInvoice';
 import { findPromoByCode, mapDbPromo, mapSettingsPromo, promoDiscountRp, promoIsClaimable, type CatalogPromo } from '@/lib/promoCatalog';
-import { DEFAULT_CRM_SETTINGS, idr, type CrmProfile, type CrmSettings } from '@/lib/crm';
+import { cashbackCopy, DEFAULT_CRM_SETTINGS, idr, type CrmProfile, type CrmSettings } from '@/lib/crm';
 import { loadFreshCrmProfile } from '@/lib/crm-automation';
 import { redeemLoyaltyPoints, redeemableAmounts } from '@/lib/loyaltyRedeem';
-import { createPickupRoleTasks, insertPickupOrder, requestDriverDelivery } from '@/lib/pickupDispatch';
-import { displayStatusLabel, stageKeyOf } from '@/lib/stageTimeline';
+import { friendlyPickupOrderError, reportPickupOrderError, requestDriverDelivery } from '@/lib/pickupDispatch';
+import { notifyStaffNewOrder } from '@/lib/notifications';
+import { stageKeyOf, type WorkLogRow } from '@/lib/stageTimeline';
 import { laundryFallbackReply } from '@/lib/laundryFaq';
 import {
   confirmThirdPartyReceived,
@@ -19,7 +20,25 @@ import {
   thirdPartyFromOrder
 } from '@/lib/thirdPartyDelivery';
 import { fileToCompressedDataUrl, uploadChatAttachment, uploadProofFile } from '@/lib/uploadProof';
-import { displayItemAmount, kiloanLineTotal } from '@/lib/kiloanPrice';
+import { kiloanLineTotal } from '@/lib/kiloanPrice';
+import {
+  bagCategoryCountsComplete,
+  bagCategoryCountsValid,
+  BAG_CATEGORY_LABELS,
+  BAG_CATEGORY_ORDER,
+  emptyBagCategoryCounts,
+  KILOAN_MIN_ORDER_KG,
+  kiloanOrderKgOf,
+  MAX_KILOAN_BAGS,
+  summarizeBagWeight,
+  type BagCategoryCounts
+} from '@/lib/kiloanBagWeights';
+import {
+  fetchSatuanPhotoConfig,
+  satuanItemHasRequiredPhotos,
+  uploadSatuanItemPhoto,
+  type SatuanPhotoConfig
+} from '@/lib/satuanItemPhoto';
 import { formatEstSelesai, formatTrxId } from '@/lib/posQueue';
 import { DEPOSIT_PACKAGES, depositBonusOf, depositPackageShort } from '@/lib/depositTopup';
 import { requestMayarInvoice, simulateMayarAutoPay } from '@/lib/mayar';
@@ -68,6 +87,7 @@ import {
 } from '@/lib/customerAddresses';
 import { reverseGeocodeAddress, reverseGeocodeCity } from '@/lib/reverseGeocode';
 import { composePickupAddress, isValidHouseNumber, splitHouseNumber } from '@/lib/pickupAddress';
+import { addressDisplayLabel } from '@/lib/customerAddressLabels';
 import { fetchCustomerRoadKm, ongkirRoundTripFromOneWayKm } from '@/lib/roadDistance';
 import { matchOutletFromQuery, persistCustomerOutlet, readStoredCustomerOutlet } from '@/lib/outletUuid';
 import ActivitySegmentTabs from '@/components/customer/ActivitySegmentTabs';
@@ -76,6 +96,7 @@ import {
   isOngoingOrder,
   isOrderFinished,
   isScheduledOrder,
+  localDateISO,
   parseActivityTab,
   scheduleAtOf,
   parsePickupSchedule,
@@ -87,11 +108,27 @@ import { updateWithFallback } from '@/lib/safeWrite';
 import { hasOnDutyDriverAtOutlet } from '@/lib/driverAttendance';
 import { isPaymentLocked } from '@/lib/paymentVerify';
 import CheckPaymentStatusButton from '@/components/payment/CheckPaymentStatusButton';
+import { PaymentBadge, ProgressBar } from '@/components/customer/OrderStatusBadges';
+import {
+  customerPaymentOf,
+  customerProgressOf,
+  isTransactionRow,
+  priceBreakdownOf,
+  serviceSummaryOf
+} from '@/lib/customerOrderView';
+import {
+  clearCustomerLocal,
+  fetchCustomerAuthState,
+  logoutCustomer,
+  persistCustomerLocal,
+  type CustomerAuthState
+} from '@/lib/customerAuth/client';
 import {
   AlertTriangle,
   ArrowLeft,
   Box,
   Calendar,
+  Camera,
   CheckCircle2,
   ChevronRight,
   ClipboardList,
@@ -102,6 +139,7 @@ import {
   History,
   Info,
   ListTodo,
+  Loader2,
   MapPin,
   Navigation,
   Package,
@@ -127,13 +165,10 @@ const ComplaintTicketChat = dynamic(() => import('@/components/ComplaintTicketCh
 const PromoVoucherModal = dynamic(() => import('@/components/customer/PromoVoucherModal'), { ssr: false });
 const PromoBannerDetailModal = dynamic(() => import('@/components/customer/PromoBannerDetailModal'), { ssr: false });
 const OutletProfileDrawer = dynamic(() => import('@/components/customer/OutletProfileDrawer'), { ssr: false });
+const BackupEmailCard = dynamic(() => import('@/components/customer/BackupEmailCard'), { ssr: false });
 const AddressManager = dynamic(() => import('@/components/customer/AddressManager'), { ssr: false });
 const PickupLocationPicker = dynamic(() => import('@/components/customer/PickupLocationPicker'), { ssr: false });
 
-const supabase = createClient(
-  'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
-  'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs'
-);
 
 const safeParse = (data: any, fallback: any) => {
   if (!data) return fallback;
@@ -190,6 +225,30 @@ const calculateDistanceKm = (lat1: number, lon1: number, lat2: number, lon2: num
   return R * c;
 };
 
+/** Satu kantong kiloan: isian jumlah per kategori + layanan & durasi (dipakai per-kantong hanya saat mode "Pisah Perkantong"). */
+type KiloanBagForm = { categories: BagCategoryCounts; serviceName: string; duration: string };
+const emptyKiloanBagForm = (serviceName = '', duration = 'Reguler (3 Hari)'): KiloanBagForm => ({
+  categories: emptyBagCategoryCounts(),
+  serviceName,
+  duration
+});
+
+/** Form satu potong item satuan sedang diisi — termasuk progres unggah foto wajibnya. */
+type SatuanPieceForm = {
+  merk: string;
+  warna: string;
+  corak: string;
+  photoPath?: string;
+  photoPreviewUrl?: string;
+  photoUploading?: boolean;
+  photoError?: string;
+};
+const SATUAN_PHOTO_NEEDS_VERIFIED_LOGIN =
+  'Item satuan wajib disertai foto. Keluar lalu masuk lagi dengan verifikasi WhatsApp/email agar foto bisa diunggah dengan aman.';
+
+/** Bentuk tersimpan (keranjang & payload) — hanya path foto, tanpa state progres UI. */
+type SatuanPieceRecord = { merk: string; warna: string; corak: string; photo_path?: string };
+
 const paymentMethod: any = "CASH";
 
 const ensureOutletInList = (list: any[], all: any[], id: string) => {
@@ -232,7 +291,7 @@ function CustomerDashboardPage() {
   const [pickupDate, setPickupDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + 1);
-    return d.toISOString().split('T')[0];
+    return localDateISO(d);
   });
   const [pickupTime, setPickupTime] = useState('09:00');
   const [scheduleBusyId, setScheduleBusyId] = useState<string | null>(null);
@@ -241,6 +300,10 @@ function CustomerDashboardPage() {
   const [editScheduleTime, setEditScheduleTime] = useState('09:00');
   const [activeSupportTab, setActiveSupportTab] = useState<'cs' | 'ai'>('cs');
   const [customerPhone, setCustomerPhone] = useState('');
+  const [authState, setAuthState] = useState<CustomerAuthState | null>(null);
+  // Form nomor-saja (tanpa verifikasi) hanya dipakai selama login lama masih aktif
+  // dan login WhatsApp terverifikasi belum dikonfigurasi.
+  const inlinePhoneLoginAllowed = Boolean(authState?.config.legacy && !authState?.config.whatsapp);
   const [customerData, setCustomerData] = useState<any>(null);
   const [outletsList, setOutletsList] = useState<any[]>([]);
   const [filteredOutlets, setFilteredOutlets] = useState<any[]>([]);
@@ -287,20 +350,39 @@ function CustomerDashboardPage() {
 
   const [isKiloanChecked, setIsKiloanChecked] = useState(false);
   const [selectedKiloanSvc, setSelectedKiloanSvc] = useState('');
-  const [kiloanEstKg, setKiloanEstKg] = useState('3');
-  const [kiloanQty, setKiloanQty] = useState('1');
   const [kiloanDuration, setKiloanDuration] = useState('Reguler (3 Hari)');
-  const [cartKiloan, setCartKiloan] = useState<Array<{ name: string; kg: number; qty: number; duration: string; price: number }>>([]);
+  const [cartKiloan, setCartKiloan] = useState<
+    Array<{ name: string; kg: number; qty: number; duration: string; price: number; bagDetail?: BagCategoryCounts }>
+  >([]);
+  // Kg & pcs kiloan SELALU dihitung otomatis dari isian per kategori pakaian
+  // (lihat lib/kiloanBagWeights.ts) — tidak ada lagi input kg/pcs manual.
+  const [kiloanBagForms, setKiloanBagForms] = useState<KiloanBagForm[]>([emptyKiloanBagForm()]);
+  const [kiloanFormError, setKiloanFormError] = useState('');
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
   const [isSatuanChecked, setIsSatuanChecked] = useState(false);
-  const [cartSatuan, setCartSatuan] = useState<Array<{ name: string; basePrice: number; price: number; qty: number; duration: string; pieces?: Array<{ merk: string; warna: string; corak: string }> }>>([]);
+  const [cartSatuan, setCartSatuan] = useState<
+    Array<{ name: string; basePrice: number; price: number; qty: number; duration: string; pieces?: SatuanPieceRecord[] }>
+  >([]);
   const [selectedSatuanSvc, setSelectedSatuanSvc] = useState('');
   const [inputSatuanQty, setInputSatuanQty] = useState('1');
   const [satuanInputDuration, setSatuanInputDuration] = useState('Reguler (3 Hari)');
-  const emptySatuanPiece = () => ({ merk: '', warna: '', corak: '' });
-  const [satuanPieceNotes, setSatuanPieceNotes] = useState<Array<{ merk: string; warna: string; corak: string }>>([{ merk: '', warna: '', corak: '' }]);
+  const emptySatuanPiece = (): SatuanPieceForm => ({ merk: '', warna: '', corak: '' });
+  const [satuanPieceNotes, setSatuanPieceNotes] = useState<SatuanPieceForm[]>([emptySatuanPiece()]);
   const [satuanNotesSame, setSatuanNotesSame] = useState(true);
+  const [satuanFormError, setSatuanFormError] = useState('');
+  // null = masih dimuat (diperlakukan wajib foto sampai server menjawab).
+  const [satuanPhoto, setSatuanPhoto] = useState<SatuanPhotoConfig | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void fetchSatuanPhotoConfig().then((cfg) => {
+      if (alive) setSatuanPhoto(cfg);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const satuanPhotoRequired = satuanPhoto?.enabled !== false;
   const [agreedNoValuables, setAgreedNoValuables] = useState(false);
   const [agreedTerms, setAgreedTerms] = useState(false);
   const [showTermsModal, setShowTermsModal] = useState(false);
@@ -327,6 +409,11 @@ function CustomerDashboardPage() {
   const [detailPayBusy, setDetailPayBusy] = useState(false);
   const [notes, setNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [orderStep, setOrderStep] = useState<1 | 2 | 3>(1);
+  const [orderFormError, setOrderFormError] = useState('');
+  const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null);
+  const orderSubmitLockRef = useRef(false);
+  const draftOrderNoRef = useRef('');
 
   const [depositCheckout, setDepositCheckout] = useState<any | null>(null);
   const [depositPayBusy, setDepositPayBusy] = useState(false);
@@ -353,6 +440,7 @@ function CustomerDashboardPage() {
         })
       });
       const data = await res.json().catch(() => ({}));
+      if (data?.code === 'CUSTOMER_NOT_REGISTERED') return alert(data.error);
       if (!res.ok) throw new Error(data?.error || 'Gagal membuat QRIS Mayar');
       setDepositCheckout({
         ...data,
@@ -369,8 +457,8 @@ function CustomerDashboardPage() {
       setIsSubmitting(false);
     }
   };
-  const [bagCount, setBagCount] = useState('');
-  const [washProcess, setWashProcess] = useState('');
+  const [bagCount, setBagCount] = useState('1');
+  const [washProcess, setWashProcess] = useState('Gabung Semua');
   const [hasFading, setHasFading] = useState('');
   const [thirdPartyVendor, setThirdPartyVendor] = useState('');
 
@@ -393,6 +481,9 @@ function CustomerDashboardPage() {
     fetchQueue();
   }, []);
   const [activeOrders, setActiveOrders] = useState<any[]>([]);
+  // Log tahap produksi per transaksi aktif — agar progres di kartu Aktivitas sama
+  // dengan timeline di detail pesanan.
+  const [workLogsByTx, setWorkLogsByTx] = useState<Record<string, WorkLogRow[]>>({});
   const [completedOrders, setCompletedOrders] = useState<any[]>([]);
   const [depositLogs, setDepositLogs] = useState<any[]>([]);
   const [readyPopup, setReadyPopup] = useState<any>(null);
@@ -1075,7 +1166,18 @@ function CustomerDashboardPage() {
       const { data: bannerPromos } = await supabase.from('promotions').select('*').order('created_at', { ascending: false });
       if (bannerPromos) setShowcasePromos(bannerPromos);
 
-      const savedPhone = localStorage.getItem('laundry_customer_phone');
+      // Sesi terverifikasi (cookie HttpOnly) diutamakan. Nomor di localStorage tanpa
+      // sesi hanya diterima selama login lama (CUSTOMER_LEGACY_LOGIN_ENABLED) aktif.
+      const auth = await fetchCustomerAuthState();
+      setAuthState(auth);
+      let savedPhone = localStorage.getItem('laundry_customer_phone');
+      if (auth.session?.phone) {
+        savedPhone = auth.session.phone;
+        persistCustomerLocal(savedPhone);
+      } else if (!auth.config.legacy) {
+        clearCustomerLocal();
+        savedPhone = null;
+      }
       const savedAddr = localStorage.getItem('laundry_customer_address');
       if (savedAddr) setCustomerAddress(savedAddr);
 
@@ -1295,6 +1397,26 @@ function CustomerDashboardPage() {
 
   setActiveOrders(mergedActive);
 
+  const activeTxIds = mergedActive
+    .filter((o) => isTransactionRow(o) && !isOrderFinished(o))
+    .map((o) => String(o.id))
+    .slice(0, 50);
+  if (activeTxIds.length) {
+    const { data: logRows } = await supabase
+      .from('work_logs')
+      .select('transaction_id, stage, created_at')
+      .in('transaction_id', activeTxIds)
+      .order('created_at', { ascending: true });
+    const grouped: Record<string, WorkLogRow[]> = {};
+    (logRows || []).forEach((row: WorkLogRow & { transaction_id: string }) => {
+      const key = String(row.transaction_id);
+      (grouped[key] = grouped[key] || []).push(row);
+    });
+    setWorkLogsByTx(grouped);
+  } else {
+    setWorkLogsByTx({});
+  }
+
   const unpaidBills = mergedActive.filter((o: any) => isPaymentLocked(o));
   setPendingCashierInvoice(unpaidBills);
 
@@ -1384,8 +1506,14 @@ function CustomerDashboardPage() {
     }
   };
 
+  const goToLogin = () => {
+    const here = typeof window !== 'undefined' ? window.location.pathname + window.location.search : '/customer/dashboard';
+    router.push(`/customer/login?next=${encodeURIComponent(here)}`);
+  };
+
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!inlinePhoneLoginAllowed) return goToLogin();
     const norm = cleanPhone(customerPhone);
     if (!norm) return alert('Ketik nomor WA aktif!');
     localStorage.setItem('laundry_customer_phone', norm);
@@ -1397,6 +1525,7 @@ function CustomerDashboardPage() {
   };
 
   const handleLogout = () => {
+    void logoutCustomer();
     localStorage.removeItem('laundry_customer_phone');
     setCustomerPhone('');
     setCustomerData(null);
@@ -1528,16 +1657,132 @@ function CustomerDashboardPage() {
     return 7000;
   };
 
+  // Kiloan "dipisah" hanya berlaku bermakna kalau lebih dari 1 kantong —
+  // 1 kantong dipisah/dicampur sama saja (satu paket).
+  const isSplitKiloanBags = washProcess === 'Pisah Perkantong' && Number(bagCount) > 1;
+
+  // Jumlah form per-kantong diatur saat customer mengubah jumlah kantong atau
+  // pilihan campur/pisah. Form yang sudah ada dipertahankan; form yang akan
+  // dibuang karena sudah berisi rincian harus dikonfirmasi dulu.
+  const applyKiloanBagLayout = (nextBagCount: number, nextWashProcess: string) => {
+    const count = Math.max(1, Math.min(MAX_KILOAN_BAGS, nextBagCount || 1));
+    const split = nextWashProcess === 'Pisah Perkantong' && count > 1;
+    const n = split ? count : 1;
+    const dropped = kiloanBagForms.slice(n);
+    const droppedFilled = dropped
+      .map((f, i) => ({ f, bag: n + i + 1 }))
+      .filter(({ f }) => BAG_CATEGORY_ORDER.some((k) => String(f.categories[k] ?? '').trim() !== ''));
+    if (droppedFilled.length > 0) {
+      const names = droppedFilled.map(({ bag }) => `Kantong ${bag}`).join(', ');
+      const ok = window.confirm(`Rincian ${names} yang sudah diisi akan dihapus. Lanjutkan?`);
+      if (!ok) return;
+    }
+    setBagCount(String(count));
+    setWashProcess(count > 1 ? nextWashProcess : 'Gabung Semua');
+    setKiloanFormError('');
+    setKiloanBagForms((prev) =>
+      Array.from({ length: n }, (_, i) => prev[i] || emptyKiloanBagForm(selectedKiloanSvc, kiloanDuration))
+    );
+  };
+
+  const patchKiloanBagCategory = (bagIdx: number, key: (typeof BAG_CATEGORY_ORDER)[number], value: string) => {
+    setKiloanFormError('');
+    setKiloanBagForms((prev) =>
+      prev.map((f, i) => (i === bagIdx ? { ...f, categories: { ...f.categories, [key]: value } } : f))
+    );
+  };
+
+  const patchKiloanBagField = (bagIdx: number, field: 'serviceName' | 'duration', value: string) => {
+    setKiloanFormError('');
+    setKiloanBagForms((prev) => prev.map((f, i) => (i === bagIdx ? { ...f, [field]: value } : f)));
+  };
+
+  const kiloanUnitPriceFor = (svcName: string, duration: string) =>
+    Math.round(getServiceUnitPrice(svcName) * getDurationMultiplier(duration));
+
+  /** 5 isian jumlah per kategori pakaian (satu kantong). Dipakai mode gabung (bagIdx 0) & mode pisah (per kantong). */
+  const renderKiloanBagCategoryInputs = (bagIdx: number, categories: BagCategoryCounts) => (
+    <div className="grid grid-cols-2 gap-2">
+      {BAG_CATEGORY_ORDER.map((key) => (
+        <div key={key}>
+          <label className="block text-[9px] text-slate-500 font-bold mb-0.5">{BAG_CATEGORY_LABELS[key]}</label>
+          <input
+            type="number"
+            min="0"
+            inputMode="numeric"
+            placeholder="0"
+            aria-label={`${BAG_CATEGORY_LABELS[key]} Kantong ${bagIdx + 1}`}
+            value={categories[key]}
+            onChange={(e) => patchKiloanBagCategory(bagIdx, key, e.target.value.replace(/[^\d]/g, ''))}
+            className="w-full bg-white border border-brand-200 rounded-xl p-2 text-xs font-extrabold text-center"
+          />
+        </div>
+      ))}
+    </div>
+  );
+
+  /**
+   * Validasi & commit ke keranjang. Mode gabung: SATU form (kiloanBagForms[0])
+   * memakai layanan/durasi di atas (selectedKiloanSvc/kiloanDuration), berapa
+   * pun jumlah kantongnya — bukan berarti membuat 2 paket hanya karena
+   * bagCount=2. Mode pisah (>1 kantong): SEMUA kantong divalidasi dulu,
+   * lalu ditambahkan sekaligus, masing-masing dengan layanan/durasi sendiri.
+   */
   const handleAddKiloanToCart = () => {
-    if (!selectedKiloanSvc) return;
-    const kg = Math.max(3, Number(kiloanEstKg) || 3);
-    const qty = Math.max(1, Number(kiloanQty) || 1);
-    setCartKiloan((prev) => [
-      ...prev,
-      { name: selectedKiloanSvc, kg, qty, duration: kiloanDuration, price: kiloanActiveUnitPrice }
-    ]);
-    setKiloanEstKg('3');
-    setKiloanQty('1');
+    setKiloanFormError('');
+    if (isSplitKiloanBags) {
+      const n = Math.max(1, Math.min(MAX_KILOAN_BAGS, Number(bagCount) || 1));
+      const forms = kiloanBagForms.slice(0, n);
+      for (let i = 0; i < n; i++) {
+        const f = forms[i];
+        if (!f?.serviceName) {
+          setKiloanFormError(`Pilih jenis kiloan untuk Kantong ${i + 1}.`);
+          return;
+        }
+        if (!bagCategoryCountsComplete(f.categories)) {
+          setKiloanFormError(`Lengkapi semua isian jumlah di Kantong ${i + 1} (boleh 0, tidak boleh kosong).`);
+          return;
+        }
+        if (!bagCategoryCountsValid(f.categories)) {
+          setKiloanFormError(`Total isian Kantong ${i + 1} harus lebih dari 0.`);
+          return;
+        }
+      }
+      const newLines = forms.map((f) => {
+        const { pcs, kg } = summarizeBagWeight(f.categories);
+        return {
+          name: f.serviceName,
+          kg,
+          qty: pcs,
+          duration: f.duration,
+          price: kiloanUnitPriceFor(f.serviceName, f.duration),
+          bagDetail: { ...f.categories }
+        };
+      });
+      setCartKiloan((prev) => [...prev, ...newLines]);
+    } else {
+      if (!selectedKiloanSvc) {
+        setKiloanFormError('Pilih jenis kiloan dulu.');
+        return;
+      }
+      const f = kiloanBagForms[0] || emptyKiloanBagForm();
+      if (!bagCategoryCountsComplete(f.categories)) {
+        setKiloanFormError('Lengkapi semua isian jumlah (boleh 0, tidak boleh kosong).');
+        return;
+      }
+      if (!bagCategoryCountsValid(f.categories)) {
+        setKiloanFormError('Total isian harus lebih dari 0.');
+        return;
+      }
+      const { pcs, kg } = summarizeBagWeight(f.categories);
+      setCartKiloan((prev) => [
+        ...prev,
+        { name: selectedKiloanSvc, kg, qty: pcs, duration: kiloanDuration, price: kiloanActiveUnitPrice, bagDetail: { ...f.categories } }
+      ]);
+    }
+    setBagCount('1');
+    setWashProcess('Gabung Semua');
+    setKiloanBagForms([emptyKiloanBagForm(selectedKiloanSvc, kiloanDuration)]);
   };
 
   const handleRemoveKiloan = (idx: number) => {
@@ -1575,6 +1820,75 @@ function CustomerDashboardPage() {
     });
   };
 
+  // Foto wajib per potong. Mode "semua pcs sama": mengunggah/menghapus di
+  // slot 0 berlaku untuk semua potong (sama seperti merk/warna/corak di atas).
+  // Mode berbeda per pcs: setiap indeks independen.
+  const handleSatuanPiecePhotoSelect = async (idx: number, file: File | null) => {
+    if (!file) return;
+    setSatuanFormError('');
+    const applyPatch = (patch: Partial<SatuanPieceForm>) =>
+      setSatuanPieceNotes((prev) =>
+        satuanNotesSame ? prev.map((p) => ({ ...p, ...patch })) : prev.map((p, i) => (i === idx ? { ...p, ...patch } : p))
+      );
+    applyPatch({ photoUploading: true, photoError: undefined });
+    try {
+      const { path, previewUrl } = await uploadSatuanItemPhoto(file);
+      // Cabut pratinjau lama sebelum diganti supaya tidak bocor memori.
+      setSatuanPieceNotes((prev) => {
+        prev.forEach((p, i) => {
+          if (p.photoPreviewUrl && (satuanNotesSame || i === idx)) {
+            try {
+              URL.revokeObjectURL(p.photoPreviewUrl);
+            } catch {
+              /* ignore */
+            }
+          }
+        });
+        return prev;
+      });
+      applyPatch({ photoPath: path, photoPreviewUrl: previewUrl, photoUploading: false, photoError: undefined });
+    } catch (err: unknown) {
+      const message = err instanceof Error && err.message ? err.message : 'Gagal mengunggah foto. Coba lagi.';
+      applyPatch({ photoUploading: false, photoError: message });
+    }
+  };
+
+  const handleRemoveSatuanPiecePhoto = (idx: number) => {
+    setSatuanPieceNotes((prev) => {
+      const next = prev.map((p, i) => {
+        if (!(satuanNotesSame || i === idx)) return p;
+        if (p.photoPreviewUrl) {
+          try {
+            URL.revokeObjectURL(p.photoPreviewUrl);
+          } catch {
+            /* ignore */
+          }
+        }
+        return { ...p, photoPath: undefined, photoPreviewUrl: undefined, photoError: undefined };
+      });
+      return next;
+    });
+  };
+
+  /** Slot foto yang WAJIB terisi saat ini: 1 slot bila "semua pcs sama", N slot bila berbeda per pcs. */
+  const requiredSatuanPhotoSlots = () =>
+    satuanNotesSame ? satuanPieceNotes.slice(0, 1) : satuanPieceNotes.slice(0, Number(inputSatuanQty) || 1);
+
+  const resetSatuanPiecePhotos = () => {
+    setSatuanPieceNotes((prev) => {
+      prev.forEach((p) => {
+        if (p.photoPreviewUrl) {
+          try {
+            URL.revokeObjectURL(p.photoPreviewUrl);
+          } catch {
+            /* ignore */
+          }
+        }
+      });
+      return prev;
+    });
+  };
+
   useEffect(() => {
     const n = Math.max(1, Math.min(12, Number(inputSatuanQty) || 1));
     setSatuanPieceNotes((prev) => {
@@ -1588,24 +1902,59 @@ function CustomerDashboardPage() {
   }, [inputSatuanQty, satuanNotesSame]);
 
   const handleAddSatuanToCart = () => {
-    if (!selectedSatuanSvc) return;
-    const basePrice = getServiceUnitPrice(selectedSatuanSvc);
+    setSatuanFormError('');
+    if (!selectedSatuanSvc) {
+      setSatuanFormError('Pilih item satuan dulu.');
+      return;
+    }
     const qty = Number(inputSatuanQty) || 1;
+    if (satuanPhotoRequired && !satuanPhoto) {
+      setSatuanFormError('Memuat pengaturan foto. Coba lagi sebentar.');
+      return;
+    }
+    if (satuanPhotoRequired && !satuanPhoto?.canUpload) {
+      setSatuanFormError(SATUAN_PHOTO_NEEDS_VERIFIED_LOGIN);
+      return;
+    }
+    // Wajib foto: minimal 1 slot (mode sama) atau N slot (mode beda per pcs)
+    // sudah punya foto yang BERHASIL diunggah — tidak sedang mengunggah, dan
+    // tidak gagal. Tidak pernah menganggap unggahan yang gagal/belum selesai
+    // sebagai cukup untuk lanjut.
+    const slots = satuanPhotoRequired ? requiredSatuanPhotoSlots() : [];
+    const missingIdx = slots.findIndex((p) => !p.photoPath || p.photoUploading || p.photoError);
+    if (missingIdx !== -1) {
+      const slot = slots[missingIdx];
+      setSatuanFormError(
+        slot?.photoUploading
+          ? 'Tunggu sampai foto selesai diunggah sebelum menambahkan item.'
+          : slot?.photoError
+          ? `Foto ${satuanNotesSame ? '' : `Pcs ${missingIdx + 1} `}gagal diunggah: ${slot.photoError}`
+          : `Unggah foto ${satuanNotesSame ? 'item ini' : `untuk Pcs ${missingIdx + 1}`} dulu — wajib sebelum item bisa ditambahkan.`
+      );
+      return;
+    }
+    const basePrice = getServiceUnitPrice(selectedSatuanSvc);
     const mult = getDurationMultiplier(satuanInputDuration);
     const finalPrice = Math.round(basePrice * mult);
-    const pieces = (satuanNotesSame
+    const pieces: SatuanPieceRecord[] = (satuanNotesSame
       ? Array.from({ length: qty }, () => ({ ...(satuanPieceNotes[0] || emptySatuanPiece()) }))
       : satuanPieceNotes.slice(0, qty)
-    ).map((p) => ({ merk: p.merk.trim(), warna: p.warna.trim(), corak: p.corak.trim() }));
+    ).map((p) => ({
+      merk: p.merk.trim(),
+      warna: p.warna.trim(),
+      corak: p.corak.trim(),
+      photo_path: satuanPhotoRequired ? p.photoPath : undefined
+    }));
 
-    setCartSatuan([...cartSatuan, { 
-      name: selectedSatuanSvc, 
-      basePrice, 
-      price: finalPrice, 
-      qty, 
+    setCartSatuan([...cartSatuan, {
+      name: selectedSatuanSvc,
+      basePrice,
+      price: finalPrice,
+      qty,
       duration: satuanInputDuration,
       pieces
     }]);
+    resetSatuanPiecePhotos();
     setInputSatuanQty('1');
     setSatuanNotesSame(true);
     setSatuanPieceNotes([emptySatuanPiece()]);
@@ -1617,12 +1966,12 @@ function CustomerDashboardPage() {
 
   const kiloanBaseUnitPrice = getServiceUnitPrice(selectedKiloanSvc);
   const kiloanActiveUnitPrice = Math.round(kiloanBaseUnitPrice * getDurationMultiplier(kiloanDuration));
-  const kiloanLines = cartKiloan.length
-    ? cartKiloan
-    : isKiloanChecked
-    ? [{ name: selectedKiloanSvc, kg: Math.max(3, Number(kiloanEstKg) || 3), qty: Math.max(1, Number(kiloanQty) || 1), duration: kiloanDuration, price: kiloanActiveUnitPrice }]
-    : [];
+  // Kiloan HANYA masuk hitungan setelah ditekan "Tambah Paket Kiloan Ini" —
+  // tidak ada lagi fallback implisit dari form yang belum di-commit (form
+  // sekarang berisi rincian per kategori, bukan sekadar kg/pcs tunggal).
+  const kiloanLines = cartKiloan;
   const kiloanSubtotal = kiloanLines.reduce((sum, line) => sum + kiloanLineTotal(line.price, line.kg), 0);
+  const kiloanTotalKg = kiloanOrderKgOf(kiloanLines);
 
   let satuanSubtotal = 0;
   if (isSatuanChecked) {
@@ -1667,31 +2016,90 @@ function CustomerDashboardPage() {
     return handleClaimPromo(found);
   };
 
+  // Validasi per langkah form pesanan. Aturan sama dengan validasi submit lama,
+  // hanya dipindah ke langkah terkait agar pesan muncul lebih awal.
+  const orderStepError = (step: 1 | 2 | 3): string => {
+    if (step === 1) {
+      if (!customerAddress || customerAddress.trim().length < 5) return 'Cari dan pilih nama jalan / lokasi penjemputan dulu.';
+      if (!isValidHouseNumber(houseNumber)) return 'Isi nomor rumah / blok. Boleh lengkap, contoh: 117, 12A, B-3, atau rumah no.117.';
+      if (!userCoords) return 'Pasang titik di peta dulu: pilih saran, tekan GPS, atau geser peta ke gerbang.';
+      if (!selectedOutlet || !orderOutlets.some((o) => String(o.id) === String(selectedOutlet))) {
+        return orderOutlets.length ? 'Pilih outlet yang melayani alamat Anda.' : 'Belum ada cabang terdekat yang bisa menerima pesanan dari titik ini.';
+      }
+      if (pickupLater) {
+        const sched = parsePickupSchedule(pickupDate, pickupTime);
+        if (!sched) return 'Isi tanggal dan jam jemput yang valid (contoh 03/09/2026 dan 09.00).';
+        if (sched.at.getTime() <= Date.now()) return 'Jadwal jemput harus di masa depan.';
+      }
+      if (courierType === 'INTERNAL' && !internalDriverOnDuty) {
+        return 'Driver internal cabang ini sedang tidak bertugas. Silakan pilih kurir instan/antar mandiri.';
+      }
+      return '';
+    }
+    if (step === 2) {
+      if (!isKiloanChecked && !kiloanLines.length && (!isSatuanChecked || cartSatuan.length === 0)) {
+        return 'Pilih minimal 1 paket Kiloan atau Satuan!';
+      }
+      if (isKiloanChecked && kiloanLines.length === 0) {
+        return 'Tekan "Tambah Paket Kiloan Ini" untuk memasukkan kiloan, atau hapus centang Paket Laundry Kiloan.';
+      }
+      if (kiloanLines.length > 0 && kiloanOrderKgOf(kiloanLines) < KILOAN_MIN_ORDER_KG) {
+        return `Total kiloan minimal ${KILOAN_MIN_ORDER_KG} kg (saat ini ~${kiloanOrderKgOf(kiloanLines)} kg). Tambah cucian kiloan lagi.`;
+      }
+      if (isSatuanChecked && cartSatuan.length === 0) {
+        return 'Tekan "Tambah Item Satuan Ini" untuk memasukkan item satuan, atau hapus centang Items Satuan.';
+      }
+      if (satuanPhotoRequired && isSatuanChecked && cartSatuan.some((it) => !satuanItemHasRequiredPhotos(it))) {
+        return 'Setiap item satuan wajib punya foto. Lengkapi foto pada item yang belum sebelum lanjut.';
+      }
+      return '';
+    }
+    if (!customerName.trim()) return 'Isi nama lengkap pemesan.';
+    if (!agreedNoValuables) return 'Centang pernyataan tidak ada barang berharga / selain cucian di saku atau tas.';
+    if (!agreedTerms) return 'Centang persetujuan Syarat & Ketentuan untuk melanjutkan pesanan.';
+    return '';
+  };
+
+  const goOrderStep = (target: 1 | 2 | 3) => {
+    // Maju hanya jika langkah sebelumnya valid; mundur selalu boleh.
+    for (let st = 1 as 1 | 2 | 3; st < target; st = (st + 1) as 1 | 2 | 3) {
+      const msg = orderStepError(st);
+      if (msg) {
+        setOrderStep(st);
+        setOrderFormError(msg);
+        return false;
+      }
+    }
+    setOrderFormError('');
+    setOrderStep(target);
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+    return true;
+  };
+
   const handleOrderSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Cegah pesanan ganda: kunci sinkron sebelum state React sempat diperbarui.
+    if (orderSubmitLockRef.current) return;
     if (!customerPhone) return alert('Login terlebih dahulu!');
-    if (!customerAddress || customerAddress.trim().length < 5) {
-      return alert('Cari dan pilih nama jalan / lokasi penjemputan dulu.');
+    for (const st of [1, 2, 3] as const) {
+      const msg = orderStepError(st);
+      if (msg) {
+        setOrderStep(st);
+        setOrderFormError(msg);
+        return;
+      }
     }
-    if (!isValidHouseNumber(houseNumber)) {
-      return alert('Isi nomor rumah / blok. Boleh lengkap, contoh: 117, 12A, B-3, atau rumah no.117.');
+    setOrderFormError('');
+    orderSubmitLockRef.current = true;
+    try {
+      await submitValidatedOrder();
+    } finally {
+      orderSubmitLockRef.current = false;
+      setIsSubmitting(false);
     }
-    if (!userCoords) {
-      return alert('Pasang titik di peta dulu: pilih saran, tekan GPS, atau geser peta ke gerbang.');
-    }
-    if (!isKiloanChecked && !kiloanLines.length && (!isSatuanChecked || cartSatuan.length === 0)) {
-      return alert('Pilih minimal 1 paket Kiloan atau Satuan!');
-    }
-    if (courierType === 'INTERNAL' && !internalDriverOnDuty) {
-      alert('Driver internal cabang ini sedang tidak bertugas. Silakan pilih kurir instan/antar mandiri.');
-      return;
-    }
-    if (!agreedNoValuables) {
-      return alert('Centang pernyataan tidak ada barang berharga / selain cucian di saku atau tas.');
-    }
-    if (!agreedTerms) {
-      return alert('Centang persetujuan Syarat & Ketentuan untuk melanjutkan pesanan.');
-    }
+  };
+
+  const submitValidatedOrder = async () => {
     // PENGAMAN: Blokir total pembayaran COD
     if ((typeof paymentMethod !== 'undefined' && paymentMethod === 'COD') || (typeof paymentMethod !== 'undefined' && paymentMethod === 'Cash on Delivery')) {
       alert('Mohon maaf, Laundrivery saat ini hanya melayani pembayaran cashless / transfer online. Pembayaran COD tidak tersedia.');
@@ -1724,7 +2132,10 @@ function CustomerDashboardPage() {
       : `Satuan (${cartSatuan.length} Item)`;
     const pickupFull = composePickupAddress(customerAddress, houseNumber, pickupLandmark);
     const notesCombined = `Alamat: ${pickupFull} | Detail: ${detailLines.join(' | ')}${notes ? ` | Catatan: ${notes}` : ''}`;
-    const autoOrderNo = `ORD-${Date.now().toString().slice(-8)}`;
+    // Nomor order dibuat sekali per draf dan dipakai ulang saat kirim ulang setelah
+    // gagal jaringan, sehingga percobaan ulang tidak membuat pesanan kedua.
+    if (!draftOrderNoRef.current) draftOrderNoRef.current = `ORD-${Date.now().toString().slice(-8)}`;
+    const autoOrderNo = draftOrderNoRef.current;
 
     const schedule = pickupLater ? parsePickupSchedule(pickupDate, pickupTime) : null;
     if (pickupLater && !schedule) {
@@ -1738,8 +2149,19 @@ function CustomerDashboardPage() {
     const isFuturePickup = !!schedule;
 
     const hasKiloanOrder = kiloanLines.length > 0;
+    // bagCount/washProcess di state hanya berlaku untuk kantong yang SEDANG
+    // diisi (di-reset tiap kali "Tambah Paket Kiloan Ini" ditekan). Nilai yang
+    // dikirim ke payload harus mencerminkan HASIL AKHIR keranjang kiloan:
+    // berapa paket kiloan terpisah yang benar-benar jadi, bukan status form
+    // yang sudah direset.
+    const finalKiloanBagCount = hasKiloanOrder ? kiloanLines.length : 1;
+    const finalKiloanWashProcess = hasKiloanOrder
+      ? kiloanLines.length > 1
+        ? 'Pisah Perkantong'
+        : 'Gabung Semua'
+      : '';
     const detailInfo = hasKiloanOrder
-      ? `[INFO CUCIAN] Kantong: ${bagCount || '-'} | Cuci: ${washProcess || '-'} | Luntur: ${hasFading || '-'}`
+      ? `[INFO CUCIAN] Kantong: ${finalKiloanBagCount} | Cuci: ${finalKiloanWashProcess || '-'} | Luntur: ${hasFading || '-'}`
       : '';
     const statementNote = '[PERNYATAAN] Tidak ada barang berharga / selain cucian pada saku atau tas';
     const termsNote = '[S&K] Disetujui';
@@ -1760,13 +2182,17 @@ function CustomerDashboardPage() {
           notes: formatSatuanPiecesNotes(i.pieces)
         }))
       : [];
+    // bag_category_counts dikirim terstruktur (per kategori pakaian) supaya
+    // POS/kasir bisa melihat rincian yang customer isi, bukan hanya kg total —
+    // lihat "Data Penjemputan Terisi Otomatis" di app/pos/page.tsx.
     const kiloanItems = kiloanLines.map((k) => ({
       name: k.name,
       qty: Number(k.qty) || 1,
-      weight: Number(k.kg) || 3,
+      weight: Number(k.kg) || 0,
       price: Number(k.price) || 0,
       duration: k.duration || 'Reguler (3 Hari)',
-      type: 'kg' as const
+      type: 'kg' as const,
+      bag_category_counts: k.bagDetail || null
     }));
     const itemsPayload = [...kiloanItems, ...satuanItems];
 
@@ -1787,14 +2213,18 @@ function CustomerDashboardPage() {
         return /^[0-9a-f-]{36}$/i.test(id) ? id : null;
       })(),
       duration: kiloanDuration || 'Reguler (3 Hari)',
-      bag_count: hasKiloanOrder ? (Number(bagCount) || 1) : 1,
-      wash_process: hasKiloanOrder ? (washProcess || 'Pisah') : '',
+      bag_count: finalKiloanBagCount,
+      wash_process: finalKiloanWashProcess,
       has_fading: hasKiloanOrder && hasFading === 'Ya',
       has_valuables: false,
       items: itemsPayload,
       delivery_fee: Number(finalOngkir) || 0,
       notes: finalNotes,
-      pickup_date: isFuturePickup && schedule ? schedule.date : null,
+      // "Jemput sekarang": pickup_date wajib diisi (kolom NOT NULL) — pakai
+      // tanggal hari ini di zona waktu lokal pelanggan, tanpa pickup_time
+      // eksplisit, supaya order tetap terklasifikasi "Berlangsung" (bukan
+      // "Terjadwal") — lihat isScheduledOrder di lib/customerActivity.ts.
+      pickup_date: isFuturePickup && schedule ? schedule.date : localDateISO(),
       pickup_time: isFuturePickup && schedule ? schedule.time : null,
       scheduled_at: isFuturePickup && schedule ? schedule.iso : null,
       pickup_at: isFuturePickup && schedule ? schedule.iso : null,
@@ -1802,17 +2232,33 @@ function CustomerDashboardPage() {
       courier_type: isFuturePickup ? null : courierType || 'INTERNAL'
     };
 
-    const { data: insertedData, error } = await insertPickupOrder(payload);
+    // Pesanan dibuat SERVER (/api/customer/order/create): validasi isi, nomor dari
+    // sesi, status/tanggal, wajib foto item satuan, dan tugas driver/CS. Browser
+    // tidak lagi menulis pickup_orders/system_tasks sendiri. Idempoten per
+    // order_number, jadi ketukan ulang/retry tidak membuat pesanan ganda.
+    let insertedData: { id: string }[] | null = null;
+    let error: { message: string; userFacing?: boolean } | null = null;
+    try {
+      const res = await fetch('/api/customer/order/create', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(payload)
+      });
+      const out = await res.json().catch(() => ({}));
+      if (res.ok && out?.id) {
+        insertedData = [{ id: String(out.id) }];
+        if (!out.duplicate) {
+          notifyStaffNewOrder({ outletId: selectedOutlet || null, customerName: payload.customer_name, service: payload.service_type });
+        }
+      } else {
+        error = res.status < 500 && out?.error ? { message: String(out.error), userFacing: true } : { message: String(out?.detail || out?.error || `HTTP ${res.status}`) };
+      }
+    } catch (e) {
+      error = { message: String((e as Error)?.message || 'Failed to fetch') };
+    }
 
     if (!error && insertedData && insertedData.length > 0) {
-      if (!isFuturePickup) {
-        await createPickupRoleTasks({
-          id: insertedData[0].id,
-          customer_name: payload.customer_name as string,
-          customer_phone: normPhone,
-          outlet_id: selectedOutlet
-        });
-      }
       if (userCoords && customerAddress) {
         const match = savedAddresses.find(
           (a) => a.full_address === pickupFull || splitHouseNumber(a.full_address).street === customerAddress
@@ -1859,24 +2305,40 @@ function CustomerDashboardPage() {
       setNotes('');
       setClaimedPromo(null);
       setLoyaltyRedeem(0);
-      setKiloanEstKg('3');
-      setKiloanQty('1');
       setKiloanDuration('Reguler (3 Hari)');
+      setKiloanBagForms([emptyKiloanBagForm()]);
+      setKiloanFormError('');
       setIsKiloanChecked(false);
       setIsSatuanChecked(false);
       setSatuanNotesSame(true);
       setSatuanPieceNotes([{ merk: '', warna: '', corak: '' }]);
-      setBagCount('');
-      setWashProcess('');
+      resetSatuanPiecePhotos();
+      setBagCount('1');
+      setWashProcess('Gabung Semua');
       setHasFading('');
       setAgreedNoValuables(false);
       setAgreedTerms(false);
       setPickupLater(false);
+      setOrderStep(1);
+      draftOrderNoRef.current = '';
 
       goActivity(isFuturePickup ? 'terjadwal' : 'berlangsung');
       fetchCustomerProfile(normPhone);
     } else {
-      alert('Gagal membuat pesanan: ' + (error?.message || 'Koneksi bermasalah'));
+      // Jangan tampilkan pesan error database mentah ke pelanggan — tampilkan
+      // pesan yang bisa dipahami, dan kirim detail teknisnya untuk diperiksa
+      // lewat Diagnosa Sistem (Owner).
+      if (error?.userFacing) {
+        toast(error.message, 'err');
+        setIsSubmitting(false);
+        return;
+      }
+      toast(friendlyPickupOrderError(error?.message), 'err');
+      void reportPickupOrderError(error?.message, {
+        isFuturePickup,
+        kiloanLines: kiloanLines.length,
+        satuanLines: cartSatuan.length
+      });
     }
     setIsSubmitting(false);
   };
@@ -1986,7 +2448,7 @@ function CustomerDashboardPage() {
 
       {!customerData ? (
         <form onSubmit={handleLogin} className="bg-white border border-slate-200 p-6 rounded-3xl space-y-4 shadow-sm my-6">
-          <div className="w-14 h-14 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
+          <div className="w-14 h-14 bg-brand-50 text-brand-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
             <Phone className="w-6 h-6" />
           </div>
           <div className="text-center">
@@ -1998,16 +2460,22 @@ function CustomerDashboardPage() {
               </p>
             ) : null}
           </div>
-          <input
-            type="tel"
-            placeholder="Contoh: 08123456789"
-            value={customerPhone}
-            onChange={(e) => setCustomerPhone(e.target.value)}
-            className="w-full bg-slate-50 border border-slate-300 rounded-2xl px-4 py-3.5 text-sm font-bold text-slate-900 focus:outline-none focus:border-blue-600 focus:bg-white transition"
-            required
-          />
-          <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-4 rounded-2xl text-xs uppercase shadow-lg shadow-blue-200 transition">
-            Lanjutkan
+          {inlinePhoneLoginAllowed ? (
+            <input
+              type="tel"
+              placeholder="Contoh: 08123456789"
+              value={customerPhone}
+              onChange={(e) => setCustomerPhone(e.target.value)}
+              className="w-full bg-slate-50 border border-slate-300 rounded-2xl px-4 py-3.5 text-sm font-bold text-slate-900 focus:outline-none focus:border-brand-600 focus:bg-white transition"
+              required
+            />
+          ) : null}
+          <button
+            type="submit"
+            disabled={!authState}
+            className="w-full bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white font-extrabold py-4 rounded-2xl text-xs uppercase shadow-lg shadow-brand-200 transition"
+          >
+            {inlinePhoneLoginAllowed || !authState ? 'Lanjutkan' : 'Masuk dengan WhatsApp'}
           </button>
         </form>
       ) : null}
@@ -2087,7 +2555,7 @@ function CustomerDashboardPage() {
                 <button
                   type="button"
                   onClick={() => setActiveTab('order')}
-                  className="bg-white border border-slate-200 p-3 rounded-3xl flex flex-col gap-2 hover:border-blue-500 transition shadow-sm text-left min-w-0"
+                  className="bg-white border border-slate-200 p-3 rounded-3xl flex flex-col gap-2 hover:border-brand-500 transition shadow-sm text-left min-w-0"
                 >
                   <IconBadge icon={Truck} tone="blue" size="lg" />
                   <div className="min-w-0">
@@ -2109,6 +2577,28 @@ function CustomerDashboardPage() {
                   </div>
                 </button>
               </div>
+
+              <details className="group bg-white border border-slate-200 rounded-2xl px-4 py-2.5 shadow-sm text-[11px]">
+                <summary className="cursor-pointer list-none font-extrabold text-slate-700 inline-flex items-center gap-1.5">
+                  <Info className="w-3.5 h-3.5 text-brand-600" /> Arti Pesan Express, poin & deposit
+                  <ChevronRight className="w-3.5 h-3.5 transition group-open:rotate-90" />
+                </summary>
+                <ul className="mt-2 space-y-1.5 text-slate-600 leading-relaxed">
+                  <li>
+                    <b className="text-slate-800">Pesan Express</b> — pesan jemput cucian ke alamat Anda lewat aplikasi, lalu
+                    diantar kembali. Durasi cuci (Reguler, Oneday, Express 6 jam, Quick 3 jam) dipilih di langkah Layanan.
+                  </li>
+                  <li>
+                    <b className="text-slate-800">Poin loyalty</b> — cashback poin dari transaksi sesuai level Anda
+                    ({cashbackCopy(loyaltyProfile?.tier_level || 'Standard', loyaltySettings).replace(/^Level [^:]+:\s*/, '')}). 1 poin = Rp1,
+                    bisa ditukar sebagai potongan {redeemableAmounts(loyaltySettings).map((n) => idr(n)).join(' / ')} saat memesan atau di kasir.
+                  </li>
+                  <li>
+                    <b className="text-slate-800">Saldo deposit</b> — saldo prabayar dari top up (bonus saldo sesuai paket). Dipakai untuk
+                    membayar tagihan cucian di kasir outlet.
+                  </li>
+                </ul>
+              </details>
 
               <NearbyOutlets
                 items={nearbyItems}
@@ -2155,42 +2645,78 @@ function CustomerDashboardPage() {
           )}
 
           {activeTab === 'order' && (
-            <form onSubmit={handleOrderSubmit} className="space-y-4 pb-32">
-              <div className="bg-white border border-slate-200 p-5 rounded-3xl space-y-4 shadow-sm">
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-extrabold text-slate-500 uppercase">Alamat Penjemputan *</label>
-                  {savedAddresses.length > 0 && (
-                    <div className="space-y-1">
-                      <div className="flex flex-wrap gap-1.5">
-                        {savedAddresses.map((addr) => {
-                          const parts = splitHouseNumber(addr.full_address);
-                          return (
-                          <button
-                            key={addr.id}
-                            type="button"
-                            onClick={() => {
-                              setCustomerAddress(parts.street);
-                              setHouseNumber(parts.house);
-                              pickupPinLockedRef.current = Boolean(addr.latitude && addr.longitude);
-                              if (addr.latitude != null && addr.longitude != null) {
-                                setUserCoords({ lat: Number(addr.latitude), lon: Number(addr.longitude) });
-                              } else {
-                                setUserCoords(null);
-                              }
-                            }}
-                            className={`text-[10px] font-extrabold px-2.5 py-1.5 rounded-lg border ${
-                              customerAddress === parts.street
-                                ? 'bg-blue-600 text-white border-blue-600'
-                                : 'bg-white text-slate-600 border-slate-200'
-                            }`}
-                          >
-                            {addr.label}{addr.is_primary ? ' · Utama' : ''}
-                          </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
+            <form onSubmit={handleOrderSubmit} className="space-y-4 pb-48" noValidate>
+              <div className="bg-white border border-slate-200 rounded-2xl p-1.5 grid grid-cols-3 gap-1 shadow-sm" role="tablist" aria-label="Langkah pemesanan">
+                {([
+                  [1, 'Alamat & Jemput'],
+                  [2, 'Layanan'],
+                  [3, 'Periksa & Pesan']
+                ] as const).map(([n, label]) => (
+                  <button
+                    key={n}
+                    type="button"
+                    role="tab"
+                    aria-selected={orderStep === n}
+                    onClick={() => goOrderStep(n)}
+                    className={`rounded-xl px-1.5 py-2 text-left transition ${
+                      orderStep === n ? 'bg-brand-600 text-white shadow-sm' : orderStep > n ? 'bg-brand-50 text-brand-800' : 'text-slate-500'
+                    }`}
+                  >
+                    <span className="block text-[9px] font-black uppercase tracking-wide opacity-80">Langkah {n}</span>
+                    <span className="block text-[11px] font-extrabold leading-tight">{label}</span>
+                  </button>
+                ))}
+              </div>
+              {orderStep === 1 && (
+                <>
+              <div className="bg-white border border-slate-200 p-4 rounded-3xl space-y-3 shadow-sm">
+                <h3 className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wide">Alamat penjemputan *</h3>
+                {savedAddresses.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {savedAddresses.map((addr) => {
+                      const parts = splitHouseNumber(addr.full_address);
+                      const active = selectedAddressId ? selectedAddressId === addr.id : customerAddress === parts.street;
+                      return (
+                        <button
+                          key={addr.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedAddressId(addr.id);
+                            setCustomerAddress(parts.street);
+                            setHouseNumber(parts.house);
+                            pickupPinLockedRef.current = Boolean(addr.latitude && addr.longitude);
+                            if (addr.latitude != null && addr.longitude != null) {
+                              setUserCoords({ lat: Number(addr.latitude), lon: Number(addr.longitude) });
+                            } else {
+                              setUserCoords(null);
+                            }
+                          }}
+                          className={`text-[10px] font-extrabold px-2.5 py-1.5 rounded-lg border max-w-full truncate ${
+                            active ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-slate-600 border-slate-200'
+                          }`}
+                        >
+                          {addressDisplayLabel(addr, savedAddresses)}{addr.is_primary ? ' · Utama' : ''}
+                        </button>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedAddressId('NEW');
+                        setCustomerAddress('');
+                        setHouseNumber('');
+                        setPickupLandmark('');
+                        pickupPinLockedRef.current = false;
+                        setUserCoords(null);
+                      }}
+                      className={`text-[10px] font-extrabold px-2.5 py-1.5 rounded-lg border ${
+                        selectedAddressId === 'NEW' ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-brand-700 border-brand-200'
+                      }`}
+                    >
+                      + Alamat baru
+                    </button>
+                  </div>
+                )}
                   <PickupLocationPicker
                     street={customerAddress}
                     houseNo={houseNumber}
@@ -2208,179 +2734,176 @@ function CustomerDashboardPage() {
                       if (streetLabel) setCustomerAddress(splitHouseNumber(streetLabel).street);
                     }}
                   />
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Pilih Outlet</label>
-                  {!userCoords ? (
-                    <p className="text-[11px] font-semibold text-slate-500 bg-slate-50 border border-slate-200 rounded-2xl px-3 py-2.5">
-                      Isi alamat dan pasang pin dulu. Nanti muncul 3 cabang terdekat yang bisa menerima semua durasi.
-                    </p>
-                  ) : orderOutlets.length === 0 ? (
-                    <p className="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-100 rounded-2xl px-3 py-2.5">
-                      Belum ada cabang terdekat yang bisa menerima pesanan (penuh / overload).
-                    </p>
-                  ) : (
+              </div>
+              <div className="bg-white border border-slate-200 p-4 rounded-3xl space-y-3 shadow-sm">
+                <h3 className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wide">Outlet yang melayani</h3>
+                {!userCoords ? (
+                  <p className="text-[11px] font-semibold text-slate-500 bg-slate-50 border border-slate-200 rounded-2xl px-3 py-2.5">
+                    Isi alamat dan pasang pin dulu. Nanti muncul 3 cabang terdekat yang bisa menerima semua durasi.
+                  </p>
+                ) : orderOutlets.length === 0 ? (
+                  <p className="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-100 rounded-2xl px-3 py-2.5">
+                    Belum ada cabang terdekat yang bisa menerima pesanan (penuh / overload).
+                  </p>
+                ) : (
+                  <>
                     <select
                       value={selectedOutlet}
                       onChange={(e) => chooseOutlet(e.target.value, { clearQuery: true })}
-                      className="w-full bg-slate-50 border border-slate-300 rounded-2xl px-3.5 py-3 text-xs font-bold text-slate-800"
+                      aria-label="Pilih outlet"
+                      className="w-full bg-slate-50 border border-slate-300 rounded-2xl px-3.5 py-3 text-sm font-bold text-slate-800"
                     >
                       {orderOutlets.map((o) => (
                         <option key={o.id} value={o.id}>{o.name}</option>
                       ))}
                     </select>
-                  )}
+                    <p className="text-[10px] text-slate-500 font-medium">
+                      {distanceLoading
+                        ? 'Menghitung jarak ke outlet…'
+                        : distanceKm != null
+                        ? `Jarak jalan ±${distanceKm.toFixed(1)} km dari titik jemput.`
+                        : 'Outlet terdekat dari titik jemput Anda.'}
+                    </p>
+                  </>
+                )}
+              </div>
+              <div className="bg-white border border-slate-200 p-4 rounded-3xl space-y-3 shadow-sm">
+                <h3 className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wide">Waktu & metode penjemputan</h3>
+                <div className="grid grid-cols-2 gap-1 bg-slate-100 p-1 rounded-2xl">
+                  {([
+                    [false, 'Jemput sekarang'],
+                    [true, 'Jadwalkan']
+                  ] as const).map(([later, label]) => (
+                    <button
+                      key={label}
+                      type="button"
+                      onClick={() => setPickupLater(later)}
+                      aria-pressed={pickupLater === later}
+                      className={`py-2 rounded-xl text-[11px] font-extrabold inline-flex items-center justify-center gap-1 ${
+                        pickupLater === later ? 'bg-white text-brand-700 shadow-sm' : 'text-slate-500'
+                      }`}
+                    >
+                      {later ? <Calendar className="w-3.5 h-3.5" /> : <Clock className="w-3.5 h-3.5" />} {label}
+                    </button>
+                  ))}
                 </div>
-
-                <div>
-                  <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Nama Lengkap Pemesan</label>
-                  <input
-                    type="text"
-                    placeholder="Nama Anda"
-                    value={customerName}
-                    onChange={(e) => setCustomerName(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-2xl px-4 py-3 text-xs font-semibold text-slate-800"
-                    required
-                  />
-                </div>
-
-                {loyaltyProfile && (
-                  <div className="bg-emerald-50 border border-emerald-200 p-3.5 rounded-2xl space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="font-extrabold text-emerald-900 text-[11px]">Klaim poin loyalty</p>
-                      <p className="text-[10px] font-bold text-emerald-700">
-                        {Math.round(Number(loyaltyProfile.loyalty_points) || 0).toLocaleString('id-ID')} poin
-                      </p>
+                {pickupLater && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 mb-1">Tanggal</label>
+                      <input
+                        type="date"
+                        min={localDateISO()}
+                        value={pickupDate}
+                        onChange={(e) => setPickupDate(e.target.value)}
+                        className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-2 text-sm font-bold text-slate-800"
+                      />
                     </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {redeemableAmounts(loyaltySettings).map((amt) => {
-                        const ok = Number(loyaltyProfile.loyalty_points) >= amt && basketAfterPromo >= amt;
-                        return (
-                          <button
-                            key={amt}
-                            type="button"
-                            disabled={!ok}
-                            onClick={() => setLoyaltyRedeem((prev) => (prev === amt ? 0 : amt))}
-                            className={`px-2.5 py-1.5 rounded-xl text-[10px] font-black ${
-                              loyaltyRedeem === amt
-                                ? 'bg-emerald-600 text-white'
-                                : ok
-                                ? 'bg-white border border-emerald-200 text-emerald-800'
-                                : 'bg-white/60 border border-emerald-100 text-emerald-300'
-                            }`}
-                          >
-                            {idr(amt)}
-                          </button>
-                        );
-                      })}
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 mb-1">Jam</label>
+                      <input
+                        type="time"
+                        value={pickupTime}
+                        onChange={(e) => setPickupTime(e.target.value)}
+                        className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-2 text-sm font-bold text-slate-800"
+                      />
                     </div>
+                    <p className="col-span-2 text-[10px] text-slate-500">
+                      Driver baru ditugaskan mendekati jadwal. Pesanan tampil di tab Terjadwal.
+                    </p>
                   </div>
                 )}
+                <label className="text-[10px] font-extrabold text-slate-500 uppercase block">Metode penjemputan</label>
+                  <div className="grid grid-cols-1 gap-2.5">
+                    <button
+                      type="button"
+                      disabled={!internalDriverOnDuty}
+                      onClick={() => {
+                        if (!internalDriverOnDuty) return;
+                        setCourierType('INTERNAL');
+                      }}
+                      className={`p-3.5 rounded-2xl border text-left transition ${
+                        !internalDriverOnDuty
+                          ? 'bg-slate-100 border-slate-200 opacity-60 cursor-not-allowed'
+                          : courierType === 'INTERNAL' 
+                          ? 'bg-emerald-50 border-emerald-400 ring-2 ring-emerald-100' 
+                          : 'bg-slate-50 border-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="text-xs font-black text-slate-900 inline-flex items-center gap-1">
+                          <Truck className="w-3.5 h-3.5" /> Driver Internal
+                        </span>
+                        {internalDriverOnDuty ? (
+                          <span className="bg-emerald-100 text-emerald-700 border border-emerald-200 text-[9px] font-black uppercase px-2 py-0.5 rounded-full">
+                            FREE
+                          </span>
+                        ) : (
+                          <span className="bg-slate-200 text-slate-600 text-[9px] font-black uppercase px-2 py-0.5 rounded-full">
+                            Tidak bertugas
+                          </span>
+                        )}
+                      </div>
+                      {internalDriverOnDuty ? (
+                        <p className="text-[10px] text-slate-500 font-semibold leading-relaxed">
+                          {queueCount} Antrean • Est. Penjemputan ~{estimatedPickupMinutes} Menit
+                        </p>
+                      ) : (
+                        <p className="text-[10px] text-rose-600 font-bold leading-relaxed">
+                          Driver internal cabang ini sedang tidak bertugas. Silakan pilih kurir instan/antar mandiri.
+                        </p>
+                      )}
+                    </button>
 
-                <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200/80 p-3.5 rounded-2xl flex justify-between items-center text-xs">
-                  <div>
-                    <p className="font-extrabold text-amber-900 text-[11px] inline-flex items-center gap-1">
-                      <Gift className="w-3.5 h-3.5" />
-                      {claimedPromo ? claimedPromo.title : 'Gunakan Voucher Promo'}
-                    </p>
-                    <p className="text-[9px] text-amber-700">
-                      {claimedPromo ? `Diskon Terpasang: -Rp ${promoDiscountVal.toLocaleString('id-ID')}` : 'Hemat ongkir dan cuci kiloan'}
-                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setCourierType('THIRD_PARTY')}
+                      className={`p-3.5 rounded-2xl border text-left transition ${
+                        courierType === 'THIRD_PARTY' 
+                          ? 'bg-amber-50 border-amber-400 ring-2 ring-amber-100' 
+                          : 'bg-slate-50 border-slate-200'
+                      }`}
+                    >
+                      <span className="text-xs font-black text-slate-900 inline-flex items-center gap-1">
+                        <Package className="w-3.5 h-3.5" /> Instan (Gojek / Grab / Lalamove)
+                      </span>
+                      <p className="text-[10px] text-slate-500 font-semibold leading-relaxed mt-1">
+                        {distanceLoading
+                          ? 'Menghitung estimasi ongkir…'
+                          : deliveryFee !== null
+                          ? `Estimasi ongkir antar-jemput Rp ${Number(deliveryFee).toLocaleString('id-ID')}${distanceKm != null ? ` (±${distanceKm.toFixed(1)} km)` : ''}`
+                          : 'Ongkir muncul setelah alamat & pin diisi'}{' '}
+                        • Waktu tunggu 20–30 menit • Dipesankan oleh CS
+                      </p>
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowPromoModal(true)}
-                    className="bg-amber-500 hover:bg-amber-600 text-white font-extrabold px-3 py-1.5 rounded-xl text-[10px] shadow-sm transition"
-                  >
-                    {claimedPromo ? 'Ganti' : 'Pilih Promo'}
-                  </button>
-                </div>
-
-                <div className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100 space-y-3">
+                <input
+                  type="text"
+                  placeholder="Catatan penjemputan (misal: titip di satpam)"
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3.5 text-sm text-slate-800 font-medium"
+                />
+              </div>
+                </>
+              )}
+              {orderStep === 2 && (
+                <>
+                <div className="bg-brand-50/50 p-4 rounded-2xl border border-brand-100 space-y-3">
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
                       type="checkbox"
                       checked={isKiloanChecked}
                       onChange={(e) => setIsKiloanChecked(e.target.checked)}
-                      className="w-4 h-4 accent-blue-600 rounded"
+                      className="w-4 h-4 accent-brand-600 rounded"
                     />
-                    <span className="text-xs font-extrabold text-blue-900 inline-flex items-center gap-1.5">
+                    <span className="text-xs font-extrabold text-brand-900 inline-flex items-center gap-1.5">
                       <img src="/assets/icons/washing-machine.svg" alt="" className="w-7 h-7" /> Paket Laundry Kiloan
                     </span>
                   </label>
 
                   {isKiloanChecked && (
-                    <div className="space-y-2.5 pt-2 border-t border-blue-100">
-                      <div>
-                        <label className="block text-[10px] text-slate-500 font-bold mb-1">Pilih Jenis Kiloan</label>
-                        <select
-                          value={selectedKiloanSvc}
-                          onChange={(e) => setSelectedKiloanSvc(e.target.value)}
-                          className="w-full bg-white border border-blue-200 rounded-xl p-2.5 text-xs font-bold text-slate-800"
-                        >
-                          {kiloanServicesList.map((svc, i) => (
-                            <option key={i} value={svc.name}>{svc.name}</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <label className="text-[10px] text-slate-500 font-bold mb-1 inline-flex items-center gap-1">
-                            Durasi Kiloan <SlaBadge duration={kiloanDuration} />
-                          </label>
-                          <select
-                            value={kiloanDuration}
-                            onChange={(e) => setKiloanDuration(e.target.value)}
-                            className="w-full bg-amber-50 border border-amber-300 rounded-xl p-2 text-xs font-extrabold text-amber-800"
-                          >
-                            <option value="Reguler (3 Hari)">Reguler 3 Hari</option>
-                            <option value="Oneday">Oneday 24jam</option>
-                            <option value="Express">Express 6 Jam</option>
-                            <option value="Quick">Quick 3 Jam</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label className="block text-[10px] text-slate-500 font-bold mb-1">Estimasi (Kg)</label>
-                          <div className="flex items-center gap-1">
-                            <StepperBtn
-                              variant="minus"
-                              disabled={Number(kiloanEstKg) <= 3}
-                              onClick={() => setKiloanEstKg(String(Math.max(3, (Number(kiloanEstKg) || 3) - 1)))}
-                            />
-                            <input
-                              type="number"
-                              min="3"
-                              value={kiloanEstKg}
-                              onChange={(e) => setKiloanEstKg(String(Math.max(3, Number(e.target.value) || 3)))}
-                              className="w-full bg-white border border-blue-200 rounded-xl p-2 text-xs font-extrabold text-blue-700 text-center"
-                            />
-                            <StepperBtn
-                              variant="plus"
-                              onClick={() => setKiloanEstKg(String((Number(kiloanEstKg) || 3) + 1))}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                      <div>
-                        <label className="block text-[10px] text-slate-500 font-bold mb-1">Jumlah Pcs</label>
-                        <div className="flex items-center gap-1">
-                          <StepperBtn variant="minus" disabled={Number(kiloanQty) <= 1} onClick={() => setKiloanQty(String(Math.max(1, (Number(kiloanQty) || 1) - 1)))} />
-                          <input type="number" min="1" value={kiloanQty} onChange={(e) => setKiloanQty(String(Math.max(1, Number(e.target.value) || 1)))} className="w-full bg-white border border-blue-200 rounded-xl p-2 text-xs font-extrabold text-center" />
-                          <StepperBtn variant="plus" onClick={() => setKiloanQty(String((Number(kiloanQty) || 1) + 1))} />
-                        </div>
-                      </div>
-                      <p className="text-[10px] text-slate-400 font-medium">
-                        Jumlah Pcs hanya catatan kasir (contoh: 4 Kg berisi 10 Pcs), tidak mengubah harga.
-                      </p>
-                      <p className="text-[10px] bg-blue-50 border border-blue-100 text-blue-800 rounded-xl px-2.5 py-1.5 font-semibold">
-                        Info: Minimal 3kg per order (1 Mesin Cuci = 1 Customer, pakaian tidak dicampur)
-                      </p>
-                      <p className="text-[10px] text-blue-600 font-bold text-right">
-                        Harga: Rp {kiloanActiveUnitPrice.toLocaleString('id-ID')}/Kg · Total Rp {kiloanLineTotal(kiloanActiveUnitPrice, Math.max(3, Number(kiloanEstKg) || 3)).toLocaleString('id-ID')}
-                      </p>
-
+                    <div className="space-y-2.5 pt-2 border-t border-brand-100">
                       <div className="bg-slate-800/80 border border-slate-700/80 p-3.5 rounded-2xl space-y-3">
                         <h3 className="text-[10px] font-black tracking-wider uppercase text-cyan-400 flex items-center gap-2">
                           <ClipboardList className="w-3.5 h-3.5" /> Informasi Detail Cucian Kiloan
@@ -2388,35 +2911,50 @@ function CustomerDashboardPage() {
 
                         <div className="space-y-3 text-xs text-slate-200">
                           <div className="flex justify-between items-center">
-                            <span className="font-semibold text-slate-300">1. Jumlah Kantong:</span>
-                            <select
-                              value={bagCount}
-                              onChange={(e) => setBagCount(e.target.value)}
-                              className="bg-slate-900 border border-slate-700 text-cyan-400 font-extrabold rounded-xl px-3 py-1.5 focus:outline-none"
-                            >
-                              <option value="">-- Pilih Jumlah Kantong --</option>
-                              <option value="1 Kantong">1 Kantong</option>
-                              <option value="2 Kantong">2 Kantong</option>
-                              <option value="3 Kantong">3 Kantong</option>
-                              <option value="4+ Kantong">4+ Kantong</option>
-                            </select>
+                            <span className="font-semibold text-slate-300">Jumlah Kantong</span>
+                            <div className="flex items-center gap-1">
+                              <StepperBtn
+                                variant="minus"
+                                disabled={Number(bagCount) <= 1}
+                                onClick={() => applyKiloanBagLayout((Number(bagCount) || 1) - 1, washProcess)}
+                              />
+                              <span className="w-8 text-center font-extrabold text-cyan-400">{bagCount}</span>
+                              <StepperBtn
+                                variant="plus"
+                                disabled={Number(bagCount) >= MAX_KILOAN_BAGS}
+                                onClick={() => applyKiloanBagLayout((Number(bagCount) || 1) + 1, washProcess)}
+                              />
+                            </div>
                           </div>
 
                           <div className="flex justify-between items-center">
-                            <span className="font-semibold text-slate-300">2. Proses Cuci:</span>
-                            <select
-                              value={washProcess}
-                              onChange={(e) => setWashProcess(e.target.value)}
-                              className="bg-slate-900 border border-slate-700 text-cyan-400 font-extrabold rounded-xl px-3 py-1.5 focus:outline-none"
-                            >
-                              <option value="">-- Pilih Proses Cuci --</option>
-                              <option value="Gabung Semua">Gabung Semua</option>
-                              <option value="Pisah Perkantong">Pisah Perkantong</option>
-                            </select>
+                            <span className="font-semibold text-slate-300">Proses Cuci</span>
+                            <div className="flex gap-2">
+                              <button
+                                type="button"
+                                onClick={() => applyKiloanBagLayout(Number(bagCount) || 1, 'Gabung Semua')}
+                                className={`px-3 py-1 rounded-xl font-extrabold text-xs transition ${washProcess === 'Gabung Semua' ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
+                              >
+                                Dicampur
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => applyKiloanBagLayout(Number(bagCount) || 1, 'Pisah Perkantong')}
+                                disabled={Number(bagCount) <= 1}
+                                className={`px-3 py-1 rounded-xl font-extrabold text-xs transition disabled:opacity-40 ${washProcess === 'Pisah Perkantong' ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
+                              >
+                                Dipisah
+                              </button>
+                            </div>
                           </div>
+                          {isSplitKiloanBags && (
+                            <p className="text-[10px] text-cyan-300 font-medium">
+                              {bagCount} kantong dipisah — isi layanan, durasi, dan rincian jumlah untuk setiap kantong di bawah.
+                            </p>
+                          )}
 
                           <div className="flex justify-between items-center">
-                            <span className="font-semibold text-slate-300">3. Ada Pakaian Luntur?</span>
+                            <span className="font-semibold text-slate-300">Ada Pakaian Luntur?</span>
                             <div className="flex gap-2">
                               <button
                                 type="button"
@@ -2437,20 +2975,136 @@ function CustomerDashboardPage() {
                         </div>
                       </div>
 
-                      <button type="button" onClick={handleAddKiloanToCart} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-sm inline-flex items-center justify-center gap-1.5">
+                      {!isSplitKiloanBags ? (
+                        <div className="space-y-2.5">
+                          <div>
+                            <label className="block text-[10px] text-slate-500 font-bold mb-1">Pilih Jenis Kiloan</label>
+                            <select
+                              value={selectedKiloanSvc}
+                              onChange={(e) => setSelectedKiloanSvc(e.target.value)}
+                              className="w-full bg-white border border-brand-200 rounded-xl p-2.5 text-xs font-bold text-slate-800"
+                            >
+                              {kiloanServicesList.map((svc, i) => (
+                                <option key={i} value={svc.name}>{svc.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-slate-500 font-bold mb-1 inline-flex items-center gap-1">
+                              Durasi Kiloan <SlaBadge duration={kiloanDuration} />
+                            </label>
+                            <select
+                              value={kiloanDuration}
+                              onChange={(e) => setKiloanDuration(e.target.value)}
+                              className="w-full bg-amber-50 border border-amber-300 rounded-xl p-2 text-xs font-extrabold text-amber-800"
+                            >
+                              <option value="Reguler (3 Hari)">Reguler 3 Hari</option>
+                              <option value="Oneday">Oneday 24jam</option>
+                              <option value="Express">Express 6 Jam</option>
+                              <option value="Quick">Quick 3 Jam</option>
+                            </select>
+                          </div>
+                          <p className="text-[10px] text-slate-500 font-bold uppercase">Jumlah per kategori pakaian</p>
+                          {renderKiloanBagCategoryInputs(0, kiloanBagForms[0]?.categories || emptyBagCategoryCounts())}
+                          {(() => {
+                            const { pcs, kg } = summarizeBagWeight(kiloanBagForms[0]?.categories || emptyBagCategoryCounts());
+                            return (
+                              <p className="text-[10px] text-brand-700 font-bold bg-brand-50 border border-brand-100 rounded-xl px-2.5 py-1.5">
+                                Estimasi: {pcs} pcs · ~{kg} Kg · Rp {kiloanUnitPriceFor(selectedKiloanSvc, kiloanDuration).toLocaleString('id-ID')}/Kg
+                              </p>
+                            );
+                          })()}
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {kiloanBagForms.map((form, bagIdx) => {
+                            const { pcs, kg } = summarizeBagWeight(form.categories);
+                            return (
+                              <div key={bagIdx} className="bg-white border border-brand-200 rounded-2xl p-3 space-y-2.5">
+                                <p className="text-[11px] font-black text-brand-800">Kantong {bagIdx + 1}</p>
+                                <div>
+                                  <label className="block text-[10px] text-slate-500 font-bold mb-1">Jenis Kiloan</label>
+                                  <select
+                                    value={form.serviceName}
+                                    onChange={(e) => patchKiloanBagField(bagIdx, 'serviceName', e.target.value)}
+                                    className="w-full bg-slate-50 border border-brand-200 rounded-xl p-2 text-xs font-bold text-slate-800"
+                                  >
+                                    <option value="">-- Pilih --</option>
+                                    {kiloanServicesList.map((svc, i) => (
+                                      <option key={i} value={svc.name}>{svc.name}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="text-[10px] text-slate-500 font-bold mb-1 inline-flex items-center gap-1">
+                                    Durasi <SlaBadge duration={form.duration} />
+                                  </label>
+                                  <select
+                                    value={form.duration}
+                                    onChange={(e) => patchKiloanBagField(bagIdx, 'duration', e.target.value)}
+                                    className="w-full bg-amber-50 border border-amber-300 rounded-xl p-2 text-xs font-extrabold text-amber-800"
+                                  >
+                                    <option value="Reguler (3 Hari)">Reguler 3 Hari</option>
+                                    <option value="Oneday">Oneday 24jam</option>
+                                    <option value="Express">Express 6 Jam</option>
+                                    <option value="Quick">Quick 3 Jam</option>
+                                  </select>
+                                </div>
+                                <p className="text-[10px] text-slate-500 font-bold uppercase">Jumlah per kategori pakaian</p>
+                                {renderKiloanBagCategoryInputs(bagIdx, form.categories)}
+                                <p className="text-[10px] text-brand-700 font-bold bg-brand-50 border border-brand-100 rounded-xl px-2.5 py-1.5">
+                                  Estimasi Kantong {bagIdx + 1}: {pcs} pcs · ~{kg} Kg
+                                  {form.serviceName ? ` · Rp ${kiloanUnitPriceFor(form.serviceName, form.duration).toLocaleString('id-ID')}/Kg` : ''}
+                                </p>
+                              </div>
+                            );
+                          })}
+                          <p className="text-[10px] text-brand-800 font-black text-right">
+                            Total semua kantong: ~
+                            {kiloanBagForms.reduce((s, f) => s + summarizeBagWeight(f.categories).kg, 0).toFixed(2)} Kg
+                          </p>
+                        </div>
+                      )}
+
+                      <p className="text-[10px] text-slate-400 font-medium">
+                        Jumlah pcs & estimasi kg dihitung otomatis dari isian di atas — tidak perlu diisi ulang.
+                      </p>
+                      <p className="text-[10px] bg-brand-50 border border-brand-100 text-brand-800 rounded-xl px-2.5 py-1.5 font-semibold">
+                        Berat & harga di atas adalah ESTIMASI. Kasir akan menimbang ulang cucian di outlet dan mengonfirmasi tagihan final.
+                      </p>
+                      <p className="text-[10px] bg-amber-50 border border-amber-100 text-amber-800 rounded-xl px-2.5 py-1.5 font-semibold">
+                        Info: Total kiloan minimal {KILOAN_MIN_ORDER_KG} kg per order (1 Mesin Cuci = 1 Customer, pakaian tidak dicampur dengan pelanggan lain).
+                      </p>
+
+                      {kiloanFormError && (
+                        <p className="text-[11px] font-bold text-rose-700 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2" role="alert">
+                          {kiloanFormError}
+                        </p>
+                      )}
+                      <button type="button" onClick={handleAddKiloanToCart} className="w-full bg-brand-600 hover:bg-brand-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-sm inline-flex items-center justify-center gap-1.5">
                         Tambah Paket Kiloan Ini
                       </button>
                       {cartKiloan.length > 0 && (
                         <div className="space-y-1.5">
+                          {kiloanTotalKg < KILOAN_MIN_ORDER_KG && (
+                            <p className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-100 rounded-xl px-2.5 py-1.5">
+                              Total kiloan saat ini ~{kiloanTotalKg} Kg, masih di bawah minimal {KILOAN_MIN_ORDER_KG} Kg. Tambah kantong/paket lagi.
+                            </p>
+                          )}
                           {cartKiloan.map((item, idx) => (
-                            <div key={idx} className="bg-white p-2.5 rounded-xl flex justify-between items-center text-xs border border-blue-100">
-                              <div>
-                                <span className="font-bold text-slate-800 block">{item.name} · {item.kg} Kg</span>
-                                <span className="text-[9px] text-slate-500 font-semibold">{item.qty} Pcs (catatan)</span>
+                            <div key={idx} className="bg-white p-2.5 rounded-xl flex justify-between items-center text-xs border border-brand-100">
+                              <div className="min-w-0">
+                                <span className="font-bold text-slate-800 block">{item.name} · ~{item.kg} Kg</span>
+                                <span className="text-[9px] text-slate-500 font-semibold">{item.qty} Pcs (estimasi)</span>
                                 <span className="text-[9px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-bold ml-1">{item.duration}</span>
+                                {item.bagDetail && (
+                                  <span className="block text-[9px] text-slate-400 mt-0.5">
+                                    {BAG_CATEGORY_ORDER.map((k) => `${BAG_CATEGORY_LABELS[k].split(' ')[0]} ${item.bagDetail?.[k] || 0}`).join(' · ')}
+                                  </span>
+                                )}
                               </div>
-                              <div className="flex items-center gap-2">
-                                <span className="font-extrabold text-blue-600">Rp {kiloanLineTotal(item.price, item.kg).toLocaleString('id-ID')}</span>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <span className="font-extrabold text-brand-600">Rp {kiloanLineTotal(item.price, item.kg).toLocaleString('id-ID')}</span>
                                 <button type="button" onClick={() => handleRemoveKiloan(idx)} className="text-rose-500 p-1 rounded-full hover:bg-rose-50" aria-label="Hapus">
                                   <X className="w-4 h-4" />
                                 </button>
@@ -2576,13 +3230,94 @@ function CustomerDashboardPage() {
                               />
                             </div>
                           </div>
+                          {satuanPhotoRequired && (
+                          <div>
+                            <label className="block text-[10px] text-slate-500 font-bold mb-1">
+                              Foto {satuanNotesSame ? 'Item' : `Pcs ${idx + 1}`} <span className="text-rose-600">*wajib</span>
+                            </label>
+                            {satuanPhoto && !satuanPhoto.canUpload ? (
+                              <p className="text-[10px] text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-2 py-1.5 font-semibold">
+                                {SATUAN_PHOTO_NEEDS_VERIFIED_LOGIN}
+                              </p>
+                            ) : piece?.photoPreviewUrl ? (
+                              <div className="relative w-24 h-24">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={piece.photoPreviewUrl}
+                                  alt={`Foto ${satuanNotesSame ? 'item satuan' : `pcs ${idx + 1}`}`}
+                                  className="w-24 h-24 object-cover rounded-xl border border-slate-200"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveSatuanPiecePhoto(idx)}
+                                  aria-label="Hapus foto"
+                                  className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-rose-600 text-white rounded-full flex items-center justify-center shadow"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                                <label className="absolute bottom-0 inset-x-0 bg-black/50 text-white text-[9px] font-bold text-center py-0.5 rounded-b-xl cursor-pointer">
+                                  Ganti
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    capture="environment"
+                                    className="hidden"
+                                    aria-label={`Ganti foto ${satuanNotesSame ? 'item satuan' : `pcs ${idx + 1}`}`}
+                                    onChange={(e) => {
+                                      const file = e.target.files?.[0] || null;
+                                      e.target.value = '';
+                                      void handleSatuanPiecePhotoSelect(idx, file);
+                                    }}
+                                  />
+                                </label>
+                              </div>
+                            ) : (
+                              <label
+                                className={`flex flex-col items-center justify-center w-24 h-24 rounded-xl border-2 border-dashed cursor-pointer text-slate-400 ${
+                                  piece?.photoError ? 'border-rose-300 bg-rose-50' : 'border-slate-300 bg-slate-50'
+                                }`}
+                              >
+                                {piece?.photoUploading ? (
+                                  <Loader2 className="w-5 h-5 animate-spin text-brand-600" />
+                                ) : (
+                                  <Camera className="w-5 h-5" />
+                                )}
+                                <span className="text-[9px] font-bold mt-1 text-center px-1">
+                                  {piece?.photoUploading ? 'Mengunggah…' : 'Ambil / Unggah'}
+                                </span>
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  capture="environment"
+                                  className="hidden"
+                                  disabled={piece?.photoUploading}
+                                  aria-label={`Unggah foto ${satuanNotesSame ? 'item satuan' : `pcs ${idx + 1}`}`}
+                                  onChange={(e) => {
+                                    const file = e.target.files?.[0] || null;
+                                    e.target.value = '';
+                                    void handleSatuanPiecePhotoSelect(idx, file);
+                                  }}
+                                />
+                              </label>
+                            )}
+                            {piece?.photoError && (
+                              <p className="text-[10px] text-rose-600 font-semibold mt-1" role="alert">{piece.photoError}</p>
+                            )}
+                          </div>
+                          )}
                         </div>
                       ))}
 
+                      {satuanFormError && (
+                        <p className="text-[11px] font-bold text-rose-700 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2" role="alert">
+                          {satuanFormError}
+                        </p>
+                      )}
                       <button
                         type="button"
                         onClick={handleAddSatuanToCart}
-                        className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl text-xs shadow-sm"
+                        disabled={requiredSatuanPhotoSlots().some((p) => p.photoUploading)}
+                        className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-bold py-2.5 rounded-xl text-xs shadow-sm"
                       >
                         Tambah Item Satuan Ini
                       </button>
@@ -2599,7 +3334,7 @@ function CustomerDashboardPage() {
                                 {extra && <span className="block text-[9px] text-slate-500 font-semibold mt-0.5">{extra}</span>}
                               </div>
                               <div className="flex items-center gap-2">
-                                <span className="font-extrabold text-blue-600">Rp {(item.price * item.qty).toLocaleString('id-ID')}</span>
+                                <span className="font-extrabold text-brand-600">Rp {(item.price * item.qty).toLocaleString('id-ID')}</span>
                                 <button type="button" onClick={() => handleRemoveSatuan(idx)} className="text-rose-500 p-1 rounded-full hover:bg-rose-50" aria-label="Hapus">
                                   <X className="w-4 h-4" />
                                 </button>
@@ -2613,54 +3348,140 @@ function CustomerDashboardPage() {
                   )}
                 </div>
 
-                <div className="bg-indigo-50/70 border border-indigo-100 rounded-2xl p-3.5 space-y-3">
-                  <label className="flex items-center justify-between gap-3 cursor-pointer">
-                    <span className="text-xs font-extrabold text-slate-800 inline-flex items-center gap-1.5">
-                      <Calendar className="w-3.5 h-3.5 text-indigo-600" /> Jadwalkan jemput
-                    </span>
-                    <input
-                      type="checkbox"
-                      checked={pickupLater}
-                      onChange={(e) => setPickupLater(e.target.checked)}
-                      className="w-4 h-4 accent-indigo-600 rounded"
-                    />
-                  </label>
-                  {pickupLater && (
-                    <div className="grid grid-cols-2 gap-2 pt-1 border-t border-indigo-100">
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-500 mb-1">Tanggal</label>
-                        <input
-                          type="date"
-                          min={new Date().toISOString().split('T')[0]}
-                          value={pickupDate}
-                          onChange={(e) => setPickupDate(e.target.value)}
-                          className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-2 text-xs font-bold text-slate-800"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-bold text-slate-500 mb-1">Jam</label>
-                        <input
-                          type="time"
-                          value={pickupTime}
-                          onChange={(e) => setPickupTime(e.target.value)}
-                          className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-2 text-xs font-bold text-slate-800"
-                        />
-                      </div>
-                      <p className="col-span-2 text-[10px] text-slate-500">
-                        Driver baru ditugaskan mendekati jadwal. Pesanan tampil di tab Terjadwal.
-                      </p>
-                    </div>
-                  )}
+              <div className="bg-white border border-slate-200 p-4 rounded-3xl space-y-3 shadow-sm">
+                <h3 className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wide">Voucher & poin loyalty</h3>
+                <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200/80 p-3.5 rounded-2xl flex justify-between items-center text-xs">
+                  <div>
+                    <p className="font-extrabold text-amber-900 text-[11px] inline-flex items-center gap-1">
+                      <Gift className="w-3.5 h-3.5" />
+                      {claimedPromo ? claimedPromo.title : 'Gunakan Voucher Promo'}
+                    </p>
+                    <p className="text-[9px] text-amber-700">
+                      {claimedPromo ? `Diskon Terpasang: -Rp ${promoDiscountVal.toLocaleString('id-ID')}` : 'Hemat ongkir dan cuci kiloan'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowPromoModal(true)}
+                    className="bg-amber-500 hover:bg-amber-600 text-white font-extrabold px-3 py-1.5 rounded-xl text-[10px] shadow-sm transition"
+                  >
+                    {claimedPromo ? 'Ganti' : 'Pilih Promo'}
+                  </button>
                 </div>
 
+                {loyaltyProfile && (
+                  <div className="bg-emerald-50 border border-emerald-200 p-3.5 rounded-2xl space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-extrabold text-emerald-900 text-[11px]">Klaim poin loyalty</p>
+                      <p className="text-[10px] font-bold text-emerald-700">
+                        {Math.round(Number(loyaltyProfile.loyalty_points) || 0).toLocaleString('id-ID')} poin
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {redeemableAmounts(loyaltySettings).map((amt) => {
+                        const ok = Number(loyaltyProfile.loyalty_points) >= amt && basketAfterPromo >= amt;
+                        return (
+                          <button
+                            key={amt}
+                            type="button"
+                            disabled={!ok}
+                            onClick={() => setLoyaltyRedeem((prev) => (prev === amt ? 0 : amt))}
+                            className={`px-2.5 py-1.5 rounded-xl text-[10px] font-black ${
+                              loyaltyRedeem === amt
+                                ? 'bg-emerald-600 text-white'
+                                : ok
+                                ? 'bg-white border border-emerald-200 text-emerald-800'
+                                : 'bg-white/60 border border-emerald-100 text-emerald-300'
+                            }`}
+                          >
+                            {idr(amt)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+              </div>
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-xs flex justify-between font-bold text-slate-700">
+                <span>Subtotal layanan</span>
+                <span>Rp {rawSubtotal.toLocaleString('id-ID')}</span>
+              </div>
+                </>
+              )}
+              {orderStep === 3 && (
+                <>
+              <div className="bg-white border border-slate-200 rounded-3xl p-4 space-y-3 shadow-sm text-xs">
+                <div className="flex justify-between items-start gap-2">
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-extrabold text-slate-500 uppercase">Alamat & outlet</p>
+                    <p className="font-bold text-slate-900 mt-0.5 break-words">{composePickupAddress(customerAddress, houseNumber, pickupLandmark) || '-'}</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">
+                      {userCoords ? 'Pin gerbang terpasang' : 'Pin belum dipasang'} · Outlet: <b className="text-slate-700">{currentOutletObj?.name || '-'}</b>
+                    </p>
+                  </div>
+                  <button type="button" onClick={() => goOrderStep(1)} className="text-[10px] font-extrabold text-brand-700 inline-flex items-center gap-0.5"><Pencil className="w-3 h-3" /> Ubah</button>
+                </div>
+                <div className="flex justify-between items-start gap-2 border-t border-slate-100 pt-3">
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-extrabold text-slate-500 uppercase">Penjemputan</p>
+                    <p className="font-bold text-slate-900 mt-0.5">
+                      {pickupLater
+                        ? `Terjadwal ${(() => {
+                            const sc = parsePickupSchedule(pickupDate, pickupTime);
+                            return sc
+                              ? sc.at.toLocaleString('id-ID', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+                              : '-';
+                          })()}`
+                        : 'Jemput sekarang'}
+                      {' · '}
+                      {isInternalDriver ? 'Driver Internal' : 'Instan (Gojek / Grab / Lalamove)'}
+                    </p>
+                    {!pickupLater && isInternalDriver && (
+                      <p className="text-[10px] text-slate-500">{queueCount} antrean · est. dijemput ~{estimatedPickupMinutes} menit</p>
+                    )}
+                    {notes ? <p className="text-[10px] text-slate-500 mt-0.5">Catatan: {notes}</p> : null}
+                  </div>
+                  <button type="button" onClick={() => goOrderStep(1)} className="text-[10px] font-extrabold text-brand-700 inline-flex items-center gap-0.5"><Pencil className="w-3 h-3" /> Ubah</button>
+                </div>
+                <div className="flex justify-between items-start gap-2 border-t border-slate-100 pt-3">
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <p className="text-[10px] font-extrabold text-slate-500 uppercase">Layanan</p>
+                    {kiloanLines.map((k, i) => (
+                      <p key={`k-${i}`} className="flex justify-between gap-2 font-semibold text-slate-800">
+                        <span className="min-w-0">{k.name} · {k.kg} Kg · {k.duration}</span>
+                        <span className="shrink-0">Rp {kiloanLineTotal(k.price, k.kg).toLocaleString('id-ID')}</span>
+                      </p>
+                    ))}
+                    {isSatuanChecked &&
+                      cartSatuan.map((it, i) => (
+                        <p key={`s-${i}`} className="flex justify-between gap-2 font-semibold text-slate-800">
+                          <span className="min-w-0">{it.name} ×{it.qty} · {it.duration}</span>
+                          <span className="shrink-0">Rp {(it.price * it.qty).toLocaleString('id-ID')}</span>
+                        </p>
+                      ))}
+                    {kiloanLines.length > 0 && (bagCount || washProcess || hasFading) ? (
+                      <p className="text-[10px] text-slate-500">
+                        Kantong: {bagCount || '-'} · Cuci: {washProcess || '-'} · Luntur: {hasFading || '-'}
+                      </p>
+                    ) : null}
+                    {claimedPromo ? <p className="text-[10px] text-emerald-700 font-bold">Promo: {claimedPromo.title}</p> : null}
+                    {loyaltyDiscountVal > 0 ? <p className="text-[10px] text-emerald-700 font-bold">Poin loyalty: -{idr(loyaltyDiscountVal)}</p> : null}
+                  </div>
+                  <button type="button" onClick={() => goOrderStep(2)} className="text-[10px] font-extrabold text-brand-700 inline-flex items-center gap-0.5"><Pencil className="w-3 h-3" /> Ubah</button>
+                </div>
+              </div>
+
+              <div className="bg-white border border-slate-200 p-4 rounded-3xl shadow-sm">
+                <label className="block text-[10px] font-extrabold text-slate-500 uppercase mb-1">Nama lengkap pemesan *</label>
                 <input
                   type="text"
-                  placeholder="Catatan Penjemputan (misal: Tolong ambil jam 2)"
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-300 rounded-2xl p-3.5 text-xs text-slate-800 font-medium"
+                  placeholder="Nama Anda"
+                  value={customerName}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-2xl px-4 py-3 text-sm font-semibold text-slate-800"
                 />
-
+              </div>
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-1.5 text-xs">
                   <div className="flex justify-between text-slate-500 font-medium"><span>Subtotal Kiloan:</span><span>Rp {kiloanSubtotal.toLocaleString('id-ID')}</span></div>
                   <div className="flex justify-between text-slate-500 font-medium"><span>Subtotal Satuan:</span><span>Rp {satuanSubtotal.toLocaleString('id-ID')}</span></div>
@@ -2691,13 +3512,13 @@ function CustomerDashboardPage() {
                     </div>
                   )}
 
-                  <div className="flex justify-between items-center font-black text-blue-600 text-sm border-t border-slate-200 pt-2 mt-1">
+                  <div className="flex justify-between items-center font-black text-brand-600 text-sm border-t border-slate-200 pt-2 mt-1">
                     <div className="flex items-center gap-1.5">
                       <span>ESTIMASI TOTAL:</span>
                       <button
                         type="button"
                         onClick={() => setShowEstimateInfoModal(true)}
-                        className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 hover:bg-blue-200 flex items-center justify-center border border-blue-200"
+                        className="w-5 h-5 rounded-full bg-brand-100 text-brand-700 hover:bg-brand-200 flex items-center justify-center border border-brand-200"
                         title="Informasi Estimasi Harga"
                       >
                         <Info className="w-3 h-3" />
@@ -2708,75 +3529,12 @@ function CustomerDashboardPage() {
                 </div>
 
                 <div className="bg-white border border-slate-200 p-4 rounded-2xl space-y-3">
-                  <label className="text-xs font-extrabold text-slate-700 block">Pilih Metode Penjemputan</label>
-                  
-                  <div className="grid grid-cols-1 gap-2.5">
-                    <button
-                      type="button"
-                      disabled={!internalDriverOnDuty}
-                      onClick={() => {
-                        if (!internalDriverOnDuty) return;
-                        setCourierType('INTERNAL');
-                      }}
-                      className={`p-3.5 rounded-2xl border text-left transition ${
-                        !internalDriverOnDuty
-                          ? 'bg-slate-100 border-slate-200 opacity-60 cursor-not-allowed'
-                          : courierType === 'INTERNAL' 
-                          ? 'bg-emerald-50 border-emerald-400 ring-2 ring-emerald-100' 
-                          : 'bg-slate-50 border-slate-200'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2 mb-1">
-                        <span className="text-xs font-black text-slate-900 inline-flex items-center gap-1">
-                          <Truck className="w-3.5 h-3.5" /> Driver Internal
-                        </span>
-                        {internalDriverOnDuty ? (
-                          <span className="bg-emerald-100 text-emerald-700 border border-emerald-200 text-[9px] font-black uppercase px-2 py-0.5 rounded-full">
-                            FREE
-                          </span>
-                        ) : (
-                          <span className="bg-slate-200 text-slate-600 text-[9px] font-black uppercase px-2 py-0.5 rounded-full">
-                            Tidak bertugas
-                          </span>
-                        )}
-                      </div>
-                      {internalDriverOnDuty ? (
-                        <p className="text-[10px] text-slate-500 font-semibold leading-relaxed">
-                          {queueCount} Antrean • Est. Penjemputan ~{estimatedPickupMinutes} Menit
-                        </p>
-                      ) : (
-                        <p className="text-[10px] text-rose-600 font-bold leading-relaxed">
-                          Driver internal cabang ini sedang tidak bertugas. Silakan pilih kurir instan/antar mandiri.
-                        </p>
-                      )}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setCourierType('THIRD_PARTY')}
-                      className={`p-3.5 rounded-2xl border text-left transition ${
-                        courierType === 'THIRD_PARTY' 
-                          ? 'bg-amber-50 border-amber-400 ring-2 ring-amber-100' 
-                          : 'bg-slate-50 border-slate-200'
-                      }`}
-                    >
-                      <span className="text-xs font-black text-slate-900 inline-flex items-center gap-1">
-                        <Package className="w-3.5 h-3.5" /> Instan (Gojek / Grab / Lalamove)
-                      </span>
-                      <p className="text-[10px] text-slate-500 font-semibold leading-relaxed mt-1">
-                        Ongkos mulai dari Rp 20.000 (Sudah Pickup & Delivery) • Waktu Tunggu 20–30 Menit • Dipesankan oleh CS
-                      </p>
-                    </button>
-                  </div>
-                </div>
-
-                <div className="bg-white border border-slate-200 p-4 rounded-2xl space-y-3">
                   <label className="flex items-start gap-2.5 cursor-pointer">
                     <input
                       type="checkbox"
                       checked={agreedNoValuables}
                       onChange={(e) => setAgreedNoValuables(e.target.checked)}
-                      className="mt-0.5 w-4 h-4 accent-blue-600 rounded shrink-0"
+                      className="mt-0.5 w-4 h-4 accent-brand-600 rounded shrink-0"
                     />
                     <span className="text-[11px] font-semibold text-slate-700 leading-relaxed">
                       Saya pastikan tidak ada barang berharga atau barang selain cucian pada saku atau tas cucian saya.
@@ -2787,7 +3545,7 @@ function CustomerDashboardPage() {
                       type="checkbox"
                       checked={agreedTerms}
                       onChange={(e) => setAgreedTerms(e.target.checked)}
-                      className="mt-0.5 w-4 h-4 accent-blue-600 rounded shrink-0"
+                      className="mt-0.5 w-4 h-4 accent-brand-600 rounded shrink-0"
                     />
                     <span className="text-[11px] font-semibold text-slate-700 leading-relaxed">
                       Dengan melanjutkan pesan sekarang, saya menyetujui{' '}
@@ -2798,7 +3556,7 @@ function CustomerDashboardPage() {
                           e.stopPropagation();
                           setShowTermsModal(true);
                         }}
-                        className="text-blue-600 font-extrabold underline underline-offset-2"
+                        className="text-brand-600 font-extrabold underline underline-offset-2"
                       >
                         S&amp;K
                       </button>
@@ -2807,13 +3565,53 @@ function CustomerDashboardPage() {
                   </label>
                 </div>
 
-                <button
-                  type="submit"
-                  disabled={isSubmitting || !agreedNoValuables || !agreedTerms}
-                  className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:hover:bg-blue-600 text-white font-extrabold py-4 rounded-2xl text-xs uppercase shadow-lg shadow-blue-200 transition inline-flex items-center justify-center gap-2"
-                >
-                  <Truck className="w-4 h-4" /> Pesan Sekarang
-                </button>
+                </>
+              )}
+              <div
+                className="fixed inset-x-0 z-40 max-w-md mx-auto px-3"
+                style={{ bottom: 'calc(4rem + env(safe-area-inset-bottom))' }}
+              >
+                <div className="bg-white/95 backdrop-blur-md border border-slate-200 rounded-2xl shadow-[0_-6px_24px_rgba(15,23,42,0.10)] p-2.5 space-y-2">
+                  {/* Pesan dihitung ulang dari isi form, sehingga hilang begitu masalahnya diperbaiki. */}
+                  {orderFormError && orderStepError(orderStep) && (
+                    <p className="text-[11px] font-bold text-rose-700 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2" role="alert">
+                      {orderStepError(orderStep)}
+                    </p>
+                  )}
+                  <div className="flex items-center gap-2">
+                    {orderStep > 1 ? (
+                      <button
+                        type="button"
+                        onClick={() => goOrderStep((orderStep - 1) as 1 | 2)}
+                        className="shrink-0 w-11 h-11 rounded-xl border border-slate-200 text-slate-600 flex items-center justify-center"
+                        aria-label="Kembali ke langkah sebelumnya"
+                      >
+                        <ArrowLeft className="w-4 h-4" />
+                      </button>
+                    ) : null}
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[9px] font-bold text-slate-500 uppercase leading-none">Estimasi total</p>
+                      <p className="text-sm font-black text-slate-900 leading-tight">Rp {grandTotalEstimate.toLocaleString('id-ID')}</p>
+                    </div>
+                    {orderStep < 3 ? (
+                      <button
+                        type="button"
+                        onClick={() => goOrderStep((orderStep + 1) as 2 | 3)}
+                        className="shrink-0 bg-brand-600 hover:bg-brand-700 text-white font-extrabold text-xs px-4 h-11 rounded-xl inline-flex items-center gap-1 shadow-md shadow-brand-600/20"
+                      >
+                        Lanjut <ChevronRight className="w-4 h-4" />
+                      </button>
+                    ) : (
+                      <button
+                        type="submit"
+                        disabled={isSubmitting}
+                        className="shrink-0 bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white font-extrabold text-xs px-4 h-11 rounded-xl inline-flex items-center gap-1.5 shadow-md shadow-brand-600/20"
+                      >
+                        <Truck className="w-4 h-4" /> {isSubmitting ? 'Memproses…' : 'Pesan Sekarang'}
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
             </form>
           )}
@@ -2866,7 +3664,7 @@ function CustomerDashboardPage() {
                 <button
                   type="button"
                   onClick={() => openCustomerChat('GENERAL_CS')}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-2xl text-xs shadow inline-flex items-center justify-center gap-2"
+                  className="w-full bg-brand-600 hover:bg-brand-700 text-white font-bold py-3 px-4 rounded-2xl text-xs shadow inline-flex items-center justify-center gap-2"
                 >
                   <Headphones className="w-4 h-4" />
                   <span>Bantuan Customer Service (Live Chat)</span>
@@ -2952,6 +3750,10 @@ function CustomerDashboardPage() {
                       </div>
                     )}
                     {ongoingOrders.map((order: any) => {
+                      const progress = customerProgressOf(order, workLogsByTx[String(order.id)]);
+                      const payment = customerPaymentOf(order);
+                      const price = priceBreakdownOf(order);
+                      const outletName = outletsList.find((o) => String(o.id) === String(order.outlet_id))?.name;
                       return (
                         <div
                           key={order.id}
@@ -2963,9 +3765,24 @@ function CustomerDashboardPage() {
                               <p className="text-[11px] font-black text-slate-800">
                                 ID Transaksi: {formatTrxId(order)}
                               </p>
+                              <p className="text-[11px] font-semibold text-slate-700 truncate">{serviceSummaryOf(order)}</p>
+                              <p className="text-[10px] text-slate-500 truncate">
+                                {outletName ? `${outletName} · ` : ''}
+                                {order.created_at
+                                  ? new Date(order.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })
+                                  : ''}
+                              </p>
                             </div>
-                            <StatusPill status={order.status || 'Menunggu Kurir'} />
+                            <PaymentBadge payment={payment} />
                           </div>
+
+                          <ProgressBar progress={progress} />
+                          <p className="text-[10px] text-slate-500 -mt-1">
+                            Estimasi selesai:{' '}
+                            <b className="text-slate-700">
+                              {isTransactionRow(order) ? formatEstSelesai(order) : 'dihitung setelah diterima outlet'}
+                            </b>
+                          </p>
 
                           <div className="flex justify-between items-center">
                             <div className="pr-2">
@@ -2982,10 +3799,17 @@ function CustomerDashboardPage() {
                               </button>
                             </div>
                             <div className="text-right whitespace-nowrap">
-                              <span className="text-[10px] text-slate-400 block font-normal">Total Estimasi</span>
-                              <span className="font-extrabold text-slate-900 text-sm">
-                                Rp {(order.amount || order.total_amount || order.estimated_price || 0).toLocaleString('id-ID')}
+                              <span className="text-[10px] text-slate-500 block font-normal">
+                                {price.isEstimate ? 'Estimasi total' : 'Total tagihan'}
                               </span>
+                              <span className="font-extrabold text-slate-900 text-sm">
+                                Rp {price.total.toLocaleString('id-ID')}
+                              </span>
+                              {price.discounts.length > 0 && (
+                                <span className="block text-[10px] text-emerald-700 font-bold">
+                                  Hemat Rp {price.discounts.reduce((a, d) => a + d.amount, 0).toLocaleString('id-ID')}
+                                </span>
+                              )}
                             </div>
                           </div>
 
@@ -3016,23 +3840,23 @@ function CustomerDashboardPage() {
 
                           {order.status === 'Driver Menuju Lokasi' && order.driver_lat && (
                             <div
-                              className="bg-blue-50/80 border border-blue-100 p-3 rounded-xl space-y-1.5 text-xs mt-1"
+                              className="bg-brand-50/80 border border-brand-100 p-3 rounded-xl space-y-1.5 text-xs mt-1"
                               onClick={(e) => e.stopPropagation()}
                             >
                               <div className="flex justify-between items-center">
-                                <span className="font-bold text-blue-900 flex items-center gap-1 text-[11px]">
+                                <span className="font-bold text-brand-900 flex items-center gap-1 text-[11px]">
                                   <MapPin className="w-3.5 h-3.5" /> Driver Sedang Menuju Lokasi
                                 </span>
                                 <a
                                   href={`https://maps.google.com/?q=${order.driver_lat},${order.driver_lon}`}
                                   target="_blank"
                                   rel="noreferrer"
-                                  className="bg-blue-600 text-white font-bold text-[10px] px-2.5 py-1 rounded-lg shadow-sm inline-flex items-center gap-1"
+                                  className="bg-brand-600 text-white font-bold text-[10px] px-2.5 py-1 rounded-lg shadow-sm inline-flex items-center gap-1"
                                 >
                                   Buka Peta Live <ChevronRight className="w-3 h-3" />
                                 </a>
                               </div>
-                              <p className="text-[10px] text-blue-600">Posisi driver diperbarui secara otomatis.</p>
+                              <p className="text-[10px] text-brand-600">Posisi driver diperbarui secara otomatis.</p>
                             </div>
                           )}
                         </div>
@@ -3076,7 +3900,7 @@ function CustomerDashboardPage() {
                             <div className="grid grid-cols-2 gap-2 bg-slate-50 border border-slate-100 rounded-xl p-2.5">
                               <input
                                 type="date"
-                                min={new Date().toISOString().split('T')[0]}
+                                min={localDateISO()}
                                 value={editScheduleDate}
                                 onChange={(e) => setEditScheduleDate(e.target.value)}
                                 className="bg-white border border-slate-300 rounded-lg px-2 py-1.5 text-[11px] font-bold"
@@ -3165,7 +3989,7 @@ function CustomerDashboardPage() {
                           </div>
                           <div className="flex justify-between items-center pt-2 border-t border-slate-100 text-[10px]">
                             <span className="text-slate-400 font-medium">{new Date(item.date).toLocaleDateString('id-ID')}</span>
-                            <span className="font-black text-blue-600 text-xs">
+                            <span className="font-black text-brand-600 text-xs">
                               {item.receipt_number ? 'Total' : 'Ongkir'}: Rp {Number(item.price || item.amount || 0).toLocaleString('id-ID')}
                             </span>
                           </div>
@@ -3177,7 +4001,7 @@ function CustomerDashboardPage() {
                           <button
                             type="button"
                             onClick={() => setActiveTab('order')}
-                            className="bg-blue-50 text-blue-700 text-[10px] font-extrabold py-2 rounded-xl border border-blue-100"
+                            className="bg-brand-50 text-brand-700 text-[10px] font-extrabold py-2 rounded-xl border border-brand-100"
                           >
                             Pesan lagi
                           </button>
@@ -3223,8 +4047,17 @@ function CustomerDashboardPage() {
                 </div>
                 <div>
                   <span className="text-[10px] text-slate-400 uppercase font-extrabold block">Nomor WhatsApp</span>
-                  <p className="font-mono text-blue-600 font-extrabold mt-0.5">{customerPhone}</p>
+                  <p className="font-mono text-brand-600 font-extrabold mt-0.5">{customerPhone}</p>
                 </div>
+
+                <BackupEmailCard
+                  auth={authState}
+                  onLinked={() => {
+                    void fetchCustomerAuthState().then(setAuthState);
+                    toast('Email cadangan terverifikasi dan tertaut.', 'ok');
+                  }}
+                  onRelogin={goToLogin}
+                />
 
                 <div className="pt-2 border-t border-slate-100">
                   <AddressManager
@@ -3254,6 +4087,21 @@ function CustomerDashboardPage() {
 
       <PromoBannerDetailModal
         slide={selectedBanner}
+        eligibility={
+          selectedBanner?.kind === 'promo'
+            ? {
+                outletNames: (() => {
+                  const ids = selectedBanner.targetOutletIds || [];
+                  if (!ids.length || ids.some((id) => id.toUpperCase() === 'ALL')) return null;
+                  return ids.map((id) => outletsList.find((o) => String(o.id) === id)?.name).filter(Boolean) as string[];
+                })(),
+                voucher:
+                  findPromoByCode(availablePromos, selectedBanner.promoCode || '') ||
+                  availablePromos.find((p) => String(p.title || '').toLowerCase() === String(selectedBanner.title || '').toLowerCase()) ||
+                  null
+              }
+            : null
+        }
         claimed={
           !!claimedPromo &&
           selectedBanner?.kind === 'promo' &&
@@ -3303,7 +4151,7 @@ function CustomerDashboardPage() {
                 setAgreedTerms(true);
                 setShowTermsModal(false);
               }}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-3 rounded-2xl text-xs uppercase shadow-md transition"
+              className="w-full bg-brand-600 hover:bg-brand-700 text-white font-extrabold py-3 rounded-2xl text-xs uppercase shadow-md transition"
             >
               Saya Setuju
             </button>
@@ -3315,7 +4163,7 @@ function CustomerDashboardPage() {
       {showEstimateInfoModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[90] flex items-center justify-center p-4" onClick={() => setShowEstimateInfoModal(false)}>
           <div className="bg-white rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl text-center" onClick={(e) => e.stopPropagation()}>
-            <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
+            <div className="w-12 h-12 bg-brand-50 text-brand-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
               <Info className="w-6 h-6" />
             </div>
             <div>
@@ -3326,7 +4174,7 @@ function CustomerDashboardPage() {
             </div>
             <button
               onClick={() => setShowEstimateInfoModal(false)}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-3 rounded-2xl text-xs uppercase shadow-md transition"
+              className="w-full bg-brand-600 hover:bg-brand-700 text-white font-extrabold py-3 rounded-2xl text-xs uppercase shadow-md transition"
             >
               Saya Mengerti
             </button>
@@ -3674,15 +4522,20 @@ function CustomerDashboardPage() {
       <div className="p-4 overflow-y-auto space-y-4 text-xs text-slate-700">
         <div className="bg-indigo-50 p-3 rounded-xl border border-indigo-100 space-y-1.5">
           <p className="font-black text-slate-900 text-sm">ID Transaksi: {formatTrxId(detailOrder)}</p>
-          <p className="text-[11px] font-semibold text-indigo-800">Estimasi Selesai: {formatEstSelesai(detailOrder)}</p>
           <p className="text-[11px] font-semibold text-indigo-800">
-            Status Cucian: {displayStatusLabel(detailOrder.status, detailOrder) || 'Menunggu'}
-            {detailOrder.is_paid || ['paid', 'lunas'].includes(String(detailOrder.payment_status || '').toLowerCase())
-              ? ' · LUNAS'
-              : isPaymentLocked(detailOrder)
-                ? ' · Menunggu Pembayaran'
-                : ''}
+            Estimasi Selesai:{' '}
+            {isTransactionRow(detailOrder) ? formatEstSelesai(detailOrder) : 'dihitung setelah cucian diterima outlet'}
           </p>
+          {(() => {
+            const outletName = outletsList.find((o) => String(o.id) === String(detailOrder.outlet_id))?.name;
+            return outletName ? <p className="text-[11px] font-semibold text-indigo-800">Outlet: {outletName}</p> : null;
+          })()}
+          <div className="pt-1 space-y-1.5">
+            <ProgressBar progress={customerProgressOf(detailOrder, detailWorkLogs)} />
+            <p className="text-[11px] font-semibold text-slate-700 inline-flex items-center gap-1.5">
+              Pembayaran: <PaymentBadge payment={customerPaymentOf(detailOrder)} />
+            </p>
+          </div>
           {isPaymentLocked(detailOrder) ? (
             <div className="mt-2 space-y-2">
               <p className="text-[10px] text-amber-800 font-semibold">
@@ -3755,56 +4608,61 @@ function CustomerDashboardPage() {
             <Package className="w-3.5 h-3.5" /> Rincian Item & Harga
           </h4>
           {(() => {
-            const items = Array.isArray(detailOrder.items)
-              ? detailOrder.items
-              : safeParse(detailOrder.items, []);
-            if (Array.isArray(items) && items.length > 0) {
-              return (
-                <div className="space-y-1.5">
-                  {items.map((it: any, idx: number) => (
-                    <div key={idx} className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 flex justify-between items-center gap-2">
-                      <div>
-                        <span className="font-bold text-slate-800 block">{it.name || it.service_type || 'Item Cucian'}</span>
-                        <span className="text-[10px] text-slate-500">
-                          {it.weight ? `${it.weight} Kg` : ''} {it.qty ? `${it.qty} Pcs` : ''}
-                          {it.duration ? ` · ${it.duration}` : ''}
-                        </span>
+            const bd = priceBreakdownOf(detailOrder);
+            return (
+              <>
+                {bd.items.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {bd.items.map((it, idx) => (
+                      <div key={idx} className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 flex justify-between items-center gap-2">
+                        <div className="min-w-0">
+                          <span className="font-bold text-slate-800 block">{it.name}</span>
+                          {it.detail && <span className="text-[10px] text-slate-500">{it.detail}</span>}
+                        </div>
+                        <span className="font-black text-slate-900 shrink-0">Rp {it.amount.toLocaleString('id-ID')}</span>
                       </div>
-                      <div className="text-right">
-                        <span className="font-black text-slate-900 block">
-                          Rp {displayItemAmount(it).toLocaleString('id-ID')}
-                        </span>
-                        <span className="px-2 py-0.5 bg-slate-200 text-slate-700 font-bold text-[10px] rounded-md">
-                          {displayStatusLabel(it.status || detailOrder.status, detailOrder) || 'Proses'}
-                        </span>
-                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                    <p className="text-slate-600 font-medium">
+                      {detailOrder.notes || 'Detail item telah dicatat oleh kasir/driver.'}
+                    </p>
+                  </div>
+                )}
+                <div className="bg-white border border-slate-200 rounded-xl p-3 space-y-1.5">
+                  <div className="flex justify-between text-[11px] text-slate-600">
+                    <span>Subtotal layanan</span>
+                    <span>Rp {bd.subtotal.toLocaleString('id-ID')}</span>
+                  </div>
+                  {bd.discounts.map((d, i) => (
+                    <div key={i} className="flex justify-between text-[11px] font-bold text-emerald-700">
+                      <span>{d.label}</span>
+                      <span>- Rp {d.amount.toLocaleString('id-ID')}</span>
                     </div>
                   ))}
+                  {bd.deliveryFee > 0 && (
+                    <div className="flex justify-between text-[11px] text-slate-600">
+                      <span>Ongkir antar-jemput</span>
+                      <span>Rp {bd.deliveryFee.toLocaleString('id-ID')}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between font-black text-slate-900 border-t border-slate-100 pt-1.5">
+                    <span>{bd.isEstimate ? 'Estimasi total' : 'Total bayar'}</span>
+                    <span>Rp {bd.total.toLocaleString('id-ID')}</span>
+                  </div>
+                  {bd.promoNote && <p className="text-[10px] text-emerald-700 font-semibold">{bd.promoNote}</p>}
+                  {bd.isEstimate ? (
+                    <p className="text-[10px] text-slate-500">
+                      Estimasi dari form pesanan. Tagihan final dihitung kasir outlet setelah cucian ditimbang.
+                    </p>
+                  ) : bd.items.length > 0 && bd.itemsTotal !== bd.subtotal ? (
+                    <p className="text-[10px] text-slate-500">Subtotal mengikuti nota kasir (termasuk penyesuaian durasi/layanan).</p>
+                  ) : null}
                 </div>
-              );
-            }
-            return (
-              <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                <p className="text-slate-600 font-medium">
-                  {detailOrder.notes || 'Detail item telah dicatat oleh kasir/driver.'}
-                </p>
-              </div>
+              </>
             );
           })()}
-          <div className="bg-white border border-slate-100 rounded-xl p-2.5 space-y-1">
-            {Number(detailOrder.delivery_fee) > 0 && (
-              <div className="flex justify-between text-[10px] text-slate-500">
-                <span>Ongkir</span>
-                <span>Rp {Number(detailOrder.delivery_fee).toLocaleString('id-ID')}</span>
-              </div>
-            )}
-            <div className="flex justify-between font-black text-slate-900">
-              <span>Total</span>
-              <span>
-                Rp {Number(detailOrder.amount || detailOrder.price || detailOrder.estimated_price || 0).toLocaleString('id-ID')}
-              </span>
-            </div>
-          </div>
         </div>
 
         {(detailOrder.rack_location || detailOrder.rack_number || detailOrder.package_count || detailOrder.bag_count || detailOrder.rack_notes) && (

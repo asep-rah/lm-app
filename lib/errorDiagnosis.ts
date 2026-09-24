@@ -13,7 +13,7 @@ export const DIAGNOSIS_RULES: DiagnosisRule[] = [
     code: 'WEBHOOK_SIGNATURE',
     title: 'Signature / token webhook tidak cocok',
     solution:
-      'Cek MAYAR_WEBHOOK_TOKEN / MAYAR_WEBHOOK_SECRET / PAYMENT_GATEWAY_SERVER_KEY / XENDIT_WEBHOOK_VERIFICATION_TOKEN di Vercel Environment Variables, lalu redeploy.'
+      'Cek MAYAR_WEBHOOK_TOKEN / MAYAR_WEBHOOK_SECRET / PAYMENT_GATEWAY_SERVER_KEY di Vercel Environment Variables, lalu redeploy.'
   },
   {
     match: /amount.?mismatch|nominal|total_amount/i,
@@ -34,7 +34,7 @@ export const DIAGNOSIS_RULES: DiagnosisRule[] = [
     code: 'API_TIMEOUT',
     title: 'API Payment Gateway timeout',
     solution:
-      'Cek status Mayar/Xendit. Gunakan tombol Re-sync / Cek Status Pembayaran, atau jalankan cron /api/cron/sync-payments.'
+      'Cek status Mayar. Gunakan tombol Re-sync / Cek Status Pembayaran, atau jalankan cron /api/cron/sync-payments.'
   },
   {
     match: /tidak ditemukan|not found|404/i,

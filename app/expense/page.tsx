@@ -1,17 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '@/lib/supabaseClient';
 import Link from 'next/link';
 import RoleTaskInbox from '@/components/RoleTaskInbox';
 import { getStaffSession, isAdminOpsRole, isOwnerRole } from '@/lib/staffSession';
 import { toast } from '@/lib/toast';
 import { EXPENSE_COA_GROUPS, EXPENSE_COA_OPTIONS, expenseCoaLabel } from '@/lib/pnlReport';
 
-const supabase = createClient(
-  'https://qlgbjvzabnfqmfnjdkmo.supabase.co',
-  'sb_publishable_kDa38BSHh4SR6tMla6gphA_qiepy3Xs'
-);
 
 export default function ExpensePage() {
   const [session, setSession] = useState({ name: 'Karyawan', role: 'kasir', outletId: '' });
