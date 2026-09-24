@@ -80,9 +80,39 @@ export async function decrementCustomerDeposit(db: any, phone: string, amount: n
   return { balance: next, error: null };
 }
 
-export async function creditCustomerDeposit(db: any, phone: string, amount: number, paymentId: string) {
+/**
+ * Pastikan baris pelanggan ada sebelum kredit. Di produksi `customers.registered_by`
+ * NOT NULL tanpa default, sehingga RPC `credit_customer_deposit` (yang membuat
+ * pelanggan baru tanpa kolom itu) dan fallback di bawah gagal untuk nomor baru.
+ * Pelanggan baru dibuat dengan `registered_by` = petugas yang melakukan top-up
+ * (sama dengan POS); tanpa petugas, nomor baru ditolak.
+ */
+async function ensureDepositCustomer(db: Db, phone: string, registeredBy?: string) {
+  const variants = phonesOf(phone);
+  const { data: existing, error } = await db.from('customers').select('phone').in('phone', variants.length ? variants : [phone]).limit(1);
+  if (error) return { message: error.message };
+  if (existing?.[0]) return null;
+  const by = String(registeredBy || '').trim();
+  if (!by) return { message: 'Pelanggan belum terdaftar; top-up untuk nomor baru harus dicatat oleh petugas' };
+  const ins = await db
+    .from('customers')
+    .insert([{ phone: normalizeCustomerPhone(phone) || phone, name: 'Pelanggan', registered_by: by, deposit_balance: 0 }]);
+  // 23505: dibuat bersamaan oleh permintaan lain — baris sudah ada.
+  if (ins.error && ins.error.code !== '23505') return { message: ins.error.message };
+  return null;
+}
+
+export async function creditCustomerDeposit(
+  db: any,
+  phone: string,
+  amount: number,
+  paymentId: string,
+  opts: { registeredBy?: string } = {}
+) {
   const pay = Number(amount) || 0;
   if (pay <= 0) return { balance: null as number | null, error: { message: 'Nominal kredit deposit tidak valid' }, already: false };
+  const missing = await ensureDepositCustomer(db, phone, opts.registeredBy);
+  if (missing) return { balance: null, error: missing, already: false };
   if (db.rpc) {
     const { data, error } = await db.rpc('credit_customer_deposit', {
       p_phone: phone,
@@ -110,8 +140,7 @@ export async function creditCustomerDeposit(db: any, phone: string, amount: numb
     if (error) return { balance: null, error: { message: error.message }, already: false };
   } else if (phone) {
     const ins = await insertAttempts(db, 'customers', [
-      { phone, name: 'Pelanggan', deposit_balance: nextBal },
-      { phone, deposit_balance: nextBal }
+      { phone, name: 'Pelanggan', registered_by: String(opts.registeredBy || '').trim() || null, deposit_balance: nextBal }
     ]);
     if (ins.error) return { balance: null, error: ins.error, already: false };
   }

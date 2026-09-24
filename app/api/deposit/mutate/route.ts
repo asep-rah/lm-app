@@ -63,7 +63,7 @@ export async function POST(req: Request) {
     }
 
     const pid = paymentId || `pos-credit-${phone}-${Date.now()}`;
-    const out = await creditCustomerDeposit(db, phone, amount, pid);
+    const out = await creditCustomerDeposit(db, phone, amount, pid, { registeredBy: auth.agentName });
     if (out.error) {
       return NextResponse.json({ error: out.error.message }, { status: 400 });
     }

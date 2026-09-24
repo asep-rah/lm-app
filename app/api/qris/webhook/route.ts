@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { serverSupabase } from '@/lib/supabaseServer';
 import { markGatewayPaid } from '@/lib/paymentVerify';
+import { creditCustomerDeposit } from '@/lib/depositTopup';
 import {
   amountsMatch,
   insertErrorLog,
@@ -24,7 +25,9 @@ export async function POST(req: Request) {
 
   const token = req.headers.get('x-callback-token');
   const expected = process.env.XENDIT_WEBHOOK_VERIFICATION_TOKEN || process.env.PAYMENT_GATEWAY_SERVER_KEY || '';
-  const sigOk = !expected || verifySharedSecret(token, expected);
+  // Fail closed: without a configured token no request is trusted (previously an
+  // empty token accepted every request, i.e. anyone could mark payments paid).
+  const sigOk = verifySharedSecret(token, expected);
 
   await insertWebhookLog({
     gateway: 'xendit',
@@ -38,7 +41,15 @@ export async function POST(req: Request) {
   });
 
   try {
-    if (expected && !sigOk) {
+    if (!expected) {
+      await insertErrorLog({
+        source: 'qris_webhook',
+        code: 'WEBHOOK_NOT_CONFIGURED',
+        message: 'XENDIT_WEBHOOK_VERIFICATION_TOKEN belum diisi; webhook Xendit ditolak'
+      });
+      return NextResponse.json({ error: 'Webhook not configured' }, { status: 503 });
+    }
+    if (!sigOk) {
       await insertErrorLog({
         source: 'qris_webhook',
         code: 'WEBHOOK_SIGNATURE',
@@ -55,29 +66,33 @@ export async function POST(req: Request) {
       const refId = external_id || body?.data?.qr_code?.reference_id || body?.data?.reference_id;
 
       if (type === 'deposit' && customerPhone) {
-        const { data: customer } = await supabase
-          .from('customers')
-          .select('deposit_balance')
-          .eq('phone', customerPhone)
-          .single();
-
-        const currentBalance = customer?.deposit_balance || 0;
-        const newBalance = Number(currentBalance) + Number(amount || 0);
-
-        await supabase
-          .from('customers')
-          .update({ deposit_balance: newBalance, updated_at: new Date().toISOString() })
-          .eq('phone', customerPhone);
-
-        await supabase.from('membership_logs').insert([
-          {
-            customer_phone: customerPhone,
-            amount: Number(amount || 0),
-            type: 'topup_xendit',
-            description: `Top-up Saldo via Xendit (${refId})`,
-            created_at: new Date().toISOString()
-          }
-        ]);
+        // Same atomic, idempotent credit as the POS (RPC credit_customer_deposit keyed
+        // by payment id): a retried or replayed webhook never credits twice.
+        const credit = Number(amount || 0);
+        if (!refId || !(credit > 0)) {
+          await insertErrorLog({ source: 'qris_webhook', code: 'DEPOSIT_INVALID', message: 'Webhook deposit Xendit tanpa referensi/nominal valid' });
+          return NextResponse.json({ error: 'Invalid deposit payload' }, { status: 400 });
+        }
+        const out = await creditCustomerDeposit(supabase, String(customerPhone), credit, `xendit:${refId}`);
+        if (out.error) {
+          await insertErrorLog({
+            source: 'qris_webhook',
+            code: 'DEPOSIT_CREDIT_FAILED',
+            message: `Top-up Xendit ${refId} belum masuk saldo: ${out.error.message}`
+          });
+          return NextResponse.json({ error: 'Deposit credit failed' }, { status: 500 });
+        }
+        if (!out.already) {
+          await supabase.from('membership_logs').insert([
+            {
+              customer_phone: customerPhone,
+              amount: credit,
+              type: 'topup_xendit',
+              description: `Top-up Saldo via Xendit (${refId})`,
+              created_at: new Date().toISOString()
+            }
+          ]);
+        }
       } else if (refId) {
         const { data: tx } = await supabase
           .from('transactions')

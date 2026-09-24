@@ -120,6 +120,9 @@ async function main() {
 
   const CUSTOMER_AUTH_SECRET = randomBytes(32).toString('hex');
   const STAFF_SESSION_SECRET = randomBytes(32).toString('hex');
+  // Per-run secrets for the payment endpoints under test (never real gateway secrets).
+  const XENDIT_TOKEN = randomBytes(24).toString('hex');
+  const PAYMENT_OPS_SECRET = randomBytes(24).toString('hex');
   const app: ChildProcess = spawn('npx', ['next', 'start', '-p', String(PORT)], {
     cwd: ROOT,
     stdio: 'ignore',
@@ -129,7 +132,10 @@ async function main() {
       SUPABASE_SERVICE_ROLE_KEY: s.serviceKey,
       CUSTOMER_AUTH_SECRET,
       STAFF_SESSION_SECRET,
-      SATUAN_ITEM_PHOTO_ENABLED: 'true'
+      SATUAN_ITEM_PHOTO_ENABLED: 'true',
+      XENDIT_WEBHOOK_VERIFICATION_TOKEN: XENDIT_TOKEN,
+      PAYMENT_GATEWAY_SERVER_KEY: '',
+      PAYMENT_OPS_SECRET
     }
   });
   const stop = (code: number) => {
@@ -531,6 +537,59 @@ async function main() {
       assert.fail(`no error_logs row; same row via service role: ${probe}`);
     }
     for (const leaked of [SYN.customer, 'jl uji', 'Pelanggan Uji']) assert.ok(!row.includes(leaked), `leaked ${leaked}`);
+  });
+
+  // --- 7. deposit: Xendit webhook + POS credit ------------------------------
+  const runId = Date.now().toString(36);
+  const NEW_PHONE = '080000000099';
+  const xendit = (token: string | null, body: unknown) =>
+    fetch(APP + '/api/qris/webhook', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...(token ? { 'x-callback-token': token } : {}) },
+      body: JSON.stringify(body)
+    });
+  const depositBody = (id: string, phone: string, amount: number) => ({ status: 'PAID', amount, external_id: id, metadata: { type: 'deposit', customerPhone: phone } });
+  const balanceOf = async (phone: string) => {
+    const { data, error } = await service.from('customers').select('deposit_balance').eq('phone', phone).maybeSingle();
+    assert.ifError(error);
+    return Number(data?.deposit_balance ?? 0);
+  };
+  await step('Xendit webhook: missing or forged token → 403, balance unchanged', async () => {
+    const before = await balanceOf(SYN.customer);
+    const body = depositBody(`stg-forged-${runId}`, SYN.customer, 12345);
+    assert.equal((await xendit(null, body)).status, 403);
+    assert.equal((await xendit('forged-token', body)).status, 403);
+    assert.equal(await balanceOf(SYN.customer), before);
+  });
+  await step('Xendit webhook: valid deposit credits once; the same webhook again does not double-credit', async () => {
+    const before = await balanceOf(SYN.customer);
+    const body = depositBody(`stg-dep-${runId}`, SYN.customer, 20000);
+    const r1 = await xendit(XENDIT_TOKEN, body);
+    assert.equal(r1.status, 200, await r1.text());
+    const r2 = await xendit(XENDIT_TOKEN, body);
+    assert.equal(r2.status, 200, await r2.text());
+    assert.equal(await balanceOf(SYN.customer), before + 20000);
+  });
+  await step('Xendit webhook: unknown number is not auto-created without a staff member', async () => {
+    assert.equal((await xendit(XENDIT_TOKEN, depositBody(`stg-unknown-${runId}`, NEW_PHONE, 10000))).status, 500);
+    const { data, error } = await service.from('customers').select('phone').eq('phone', NEW_PHONE);
+    assert.ifError(error);
+    assert.equal(data?.length, 0);
+  });
+  await step('POS deposit credit for a new number: registered_by = kasir, repeated request credits once', async () => {
+    const call = () =>
+      fetch(APP + '/api/deposit/mutate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${PAYMENT_OPS_SECRET}` },
+        body: JSON.stringify({ action: 'credit', phone: NEW_PHONE, amount: 50000, paymentId: `stg-pos-${runId}`, staffId: staffId.kasirA })
+      });
+    const a = await call();
+    assert.equal(a.status, 200, await a.text());
+    const b = await call();
+    assert.equal(b.status, 200, await b.text());
+    const { data, error } = await service.from('customers').select('registered_by, deposit_balance').eq('phone', NEW_PHONE).maybeSingle();
+    assert.ifError(error);
+    assert.deepEqual({ registered_by: data?.registered_by, deposit_balance: Number(data?.deposit_balance) }, { registered_by: '[STAGING] Kasir A', deposit_balance: 50000 });
   });
 
   await step('No browser request reached the production database host', async () => {

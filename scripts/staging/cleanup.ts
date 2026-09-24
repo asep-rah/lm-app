@@ -17,6 +17,8 @@ const all = args.includes('--all');
 const selftest = args.includes('--selftest-local');
 
 const PHONES = "('080000000001','080000000002')";
+/** Created by the E2E deposit test (not part of the seed). */
+const TEST_PHONES = "('080000000001','080000000002','080000000099')";
 const USERNAMES = "('stg_kasir_a','stg_kasir_b','stg_cs','stg_driver_a')";
 /** Synthetic staff ids as text (employees.id is bigint in production). */
 const STAFF = `(select id::text from employees where username in ${USERNAMES})`;
@@ -46,7 +48,8 @@ async function main() {
     system_tasks: sql(`select count(*) from system_tasks where source_id::text in (${ORDERS})`),
     pickup_orders: sql(`select count(*) from pickup_orders where customer_phone in ${PHONES}`),
     audit_logs: sql(`select count(*) from audit_logs where user_id::text in ${STAFF}`),
-    error_logs: sql("select count(*) from error_logs where source = 'customer_order_form'")
+    error_logs: sql("select count(*) from error_logs where source = 'customer_order_form'"),
+    deposit_credits: sql(`select count(*) from deposit_payment_credits where customer_phone in ${TEST_PHONES}`)
   };
   const service = createClient(s.url, s.serviceKey, { auth: { persistSession: false } });
   const photos: string[] = [];
@@ -69,6 +72,14 @@ async function main() {
     delete from pickup_orders where customer_phone in ${PHONES};
     delete from audit_logs where user_id::text in ${STAFF};
     delete from error_logs where source = 'customer_order_form';
+    delete from deposit_payment_credits where customer_phone in ${TEST_PHONES};
+    do $$ begin
+      if to_regclass('public.membership_logs') is not null then
+        delete from membership_logs where customer_phone in ${TEST_PHONES};
+      end if;
+    end $$;
+    delete from customers where phone = '080000000099';
+    update customers set deposit_balance = 0 where phone in ${PHONES};
     ${all ? `delete from driver_attendance where driver_id::text in ${STAFF};
     delete from employees where username in ${USERNAMES};
     delete from customer_addresses where customer_phone in ${PHONES};
