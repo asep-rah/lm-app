@@ -134,6 +134,18 @@ export function deliveryTaskAttempts(
       source_id: order.id,
       outlet_id: order.outlet_id || null
     },
+    // Same without outlet_id (column absent in some schemas) — keeps source_type.
+    {
+      title,
+      description: desc,
+      assigned_to_role: role,
+      sla_hours: 4,
+      due_date: due.toISOString(),
+      kpi_penalty_points: 5,
+      status: 'pending',
+      source_type: 'CUSTOMER_DELIVERY',
+      source_id: order.id
+    },
     { title, description: desc, assigned_to_role: role, due_date: due.toISOString(), status: 'pending', source_id: order.id },
     { title, description: desc, assigned_to_role: role, status: 'pending' }
   ];

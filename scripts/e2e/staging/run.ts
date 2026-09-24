@@ -639,9 +639,11 @@ async function main() {
     assert.equal(again.already, true);
     const { data: row } = await service.from('pickup_orders').select('status').eq('id', String(instant?.id)).single();
     assert.equal(row?.status, 'Siap Diantar');
-    const tasks = await anon.from('system_tasks').select('assigned_to_role, source_type').eq('source_id', String(instant?.id));
+    // The order itself already has its pickup tasks (same source_id); the delivery tasks have their own titles.
+    const tasks = await anon.from('system_tasks').select('assigned_to_role, title').eq('source_id', String(instant?.id));
     assert.ifError(tasks.error);
-    assert.deepEqual((tasks.data || []).filter((t) => t.source_type === 'CUSTOMER_DELIVERY').map((t) => t.assigned_to_role).sort(), ['admin_ops', 'cs', 'driver']);
+    const delivery = (tasks.data || []).filter((t) => /Pengantaran/.test(String(t.title)));
+    assert.deepEqual(delivery.map((t) => t.assigned_to_role).sort(), ['admin_ops', 'cs', 'driver']);
     const other = await deliveryApi({ kind: 'pickup', orderId: String(instant?.id), customerPhone: SYN.otherCustomer }, `ldrv_cust_session=${customerCookie(SYN.otherCustomer)}`);
     assert.equal(other.status, 404);
   });
