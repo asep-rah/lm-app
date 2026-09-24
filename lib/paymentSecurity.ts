@@ -114,7 +114,7 @@ export async function insertErrorLog(row: {
   const db = serviceClient();
   const hint = row.hint || diagnosisHintOf(row.code || row.message);
   try {
-    await db.from('error_logs').insert([
+    const { error } = await db.from('error_logs').insert([
       {
         source: row.source,
         code: row.code || null,
@@ -125,6 +125,8 @@ export async function insertErrorLog(row: {
         transaction_id: row.transaction_id || null
       }
     ]);
+    // supabase-js returns (does not throw) insert errors; surface them in server logs.
+    if (error) console.warn('error_logs insert failed:', error.code, error.message);
   } catch (err) {
     console.warn('error_logs insert failed:', err);
   }
@@ -144,7 +146,7 @@ export async function insertAuditLog(row: {
 }) {
   const db = serviceClient();
   try {
-    await db.from('audit_logs').insert([
+    const { error } = await db.from('audit_logs').insert([
       {
         user_id: row.user_id || null,
         user_name: row.user_name || null,
@@ -157,6 +159,7 @@ export async function insertAuditLog(row: {
         ip_address: row.ip_address || null
       }
     ]);
+    if (error) console.warn('audit_logs insert failed:', error.code, error.message);
   } catch (err) {
     console.warn('audit_logs insert failed:', err);
   }

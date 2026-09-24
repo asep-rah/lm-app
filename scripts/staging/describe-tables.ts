@@ -3,6 +3,7 @@
  * dump + PR migrations) defines them. No database.
  *
  *   npx tsx scripts/staging/describe-tables.ts ~/lm-staging/staging-schema.dump.sql pickup_orders system_tasks error_logs audit_logs
+ *   npx tsx scripts/staging/describe-tables.ts ~/lm-staging/staging-schema.dump.sql --service-role-gaps
  *
  * Per table: columns (type, NOT NULL, kind of DEFAULT — never its value),
  * RLS on/off, policies (name, command, roles — no expressions), table grants,
@@ -13,6 +14,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { qualify, unquote } from './columnNotNull';
 import { PR_MIGRATION_FILES } from './prMigrations';
+import { APPLY_ROLE } from './privileges';
 import { splitSqlStatements } from './sqlLexer';
 import { describeColumns, modelFromSql } from './tableColumns';
 
@@ -56,6 +58,22 @@ export function tableMeta(sqls: string[]): TableMeta {
       if (s.kind !== 'sql') continue;
       const t = s.text;
       let m: RegExpExecArray | null;
+      // Default privileges of the apply role (postgres) reach tables/sequences created AFTER them,
+      // e.g. tables added by the PR migrations on top of the dump.
+      if ((m = /^ALTER\s+DEFAULT\s+PRIVILEGES\s+(?:FOR\s+(?:ROLE|USER)\s+("?[\w$]+"?)\s+)?(?:IN\s+SCHEMA\s+"?public"?\s+)?(GRANT|REVOKE)\s+([\s\S]+?)\s+ON\s+(TABLES|SEQUENCES)\s+(?:TO|FROM)\s+([\s\S]+?)\s*;?$/i.exec(t))) {
+        if (!m[1] || unquote(m[1]) === APPLY_ROLE) {
+          const kind = m[4].toUpperCase() === 'TABLES' ? 'TABLE' : 'SEQUENCE';
+          const key = `DEFAULT ${kind}`;
+          grant(key, roleNames(m[5]), privList(m[3]), m[2].toUpperCase() === 'GRANT');
+        }
+        continue;
+      }
+      const created = /^CREATE\s+(?:UNLOGGED\s+)?(TABLE|SEQUENCE)\s+(?:IF\s+NOT\s+EXISTS\s+)?([\w."$]+)/i.exec(t);
+      if (created) {
+        const kind = created[1].toUpperCase();
+        for (const [role, privs] of acl.get(`DEFAULT ${kind}`) || []) grant(`${kind} ${qualify(created[2])}`, [role], [...privs], true);
+        continue;
+      }
       if ((m = /^GRANT\s+([\s\S]+?)\s+ON\s+(?:(TABLE|SEQUENCE)\s+)?([\w."$]+)\s+TO\s+([\s\S]+?)\s*;?$/i.exec(t)) && !/^(FUNCTION|SCHEMA|ALL)\b/i.test(m[3])) {
         grant(`${(m[2] || 'TABLE').toUpperCase()} ${qualify(m[3])}`, roleNames(m[4]), privList(m[1]), true);
       } else if ((m = /^REVOKE\s+([\s\S]+?)\s+ON\s+(?:(TABLE|SEQUENCE)\s+)?([\w."$]+)\s+FROM\s+([\s\S]+?)\s*(?:CASCADE|RESTRICT)?\s*;?$/i.exec(t)) && !/^(FUNCTION|SCHEMA|ALL)\b/i.test(m[3])) {
@@ -79,6 +97,17 @@ export function tableMeta(sqls: string[]): TableMeta {
   return { acl, rls, policies };
 }
 
+/** Tables where service_role has no privilege; shows anon's privileges and RLS (names only). */
+export function serviceRoleGaps(model: Map<string, unknown>, meta: TableMeta): string[] {
+  return [...model.keys()]
+    .sort()
+    .filter((t) => !meta.acl.get(`TABLE ${t}`)?.get('service_role')?.size)
+    .map((t) => {
+      const anon = meta.acl.get(`TABLE ${t}`)?.get('anon');
+      return `${t} — anon: ${anon?.size ? [...anon].join(',') : 'none'}; RLS ${meta.rls.has(t) ? 'on' : 'off'}`;
+    });
+}
+
 const aclLine = (byRole: Map<string, Set<string>> | undefined) =>
   byRole && byRole.size ? [...byRole].map(([r, p]) => `${r}: ${[...p].join(',')}`).join('; ') : 'none (owner only)';
 
@@ -92,6 +121,12 @@ function main() {
   const sqls = [readFileSync(dump, 'utf8'), ...PR_MIGRATION_FILES.map((m) => readFileSync(join(root, 'supabase/migrations', m), 'utf8'))];
   const model = modelFromSql(...sqls);
   const meta = tableMeta(sqls);
+  if (names[0] === '--service-role-gaps') {
+    const gaps = serviceRoleGaps(model, meta);
+    console.log(`tables without any service_role privilege: ${gaps.length} of ${model.size}`);
+    gaps.forEach((g) => console.log(`   · ${g}`));
+    return;
+  }
   for (const name of names) {
     const t = qualify(name);
     const cols = model.get(t);

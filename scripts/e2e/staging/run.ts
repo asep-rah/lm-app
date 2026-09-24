@@ -361,7 +361,10 @@ async function main() {
       assert.ok((data?.size || 0) > 0);
     });
     await step('Exactly one driver task and one CS task for the order', async () => {
-      const { data } = await service.from('system_tasks').select('assigned_to_role').eq('source_id', String(instant?.id));
+      // Read like the CS/driver dashboards do (anon client): in the production ACL
+      // service_role has no privileges on system_tasks.
+      const { data, error: readErr } = await anon.from('system_tasks').select('assigned_to_role').eq('source_id', String(instant?.id));
+      assert.ifError(readErr);
       const roles = (data || []).map((t) => t.assigned_to_role).sort();
       if (roles.join() !== 'cs,driver') {
         // Why: the app inserts the full task with the ANON client and silently falls back to
@@ -370,7 +373,7 @@ async function main() {
           title: 'Pickup online — [STAGING] probe', description: '[STAGING] probe', assigned_to_role: 'cs', sla_hours: 2,
           due_date: new Date().toISOString(), kpi_penalty_points: 5, status: 'pending', source_type: 'PICKUP', source_id: instant?.id
         });
-        const unlinked = await service.from('system_tasks').select('*').ilike('title', '%[STAGING] Pelanggan Uji%').limit(5);
+        const unlinked = await anon.from('system_tasks').select('*').ilike('title', '%[STAGING] Pelanggan Uji%').limit(5);
         const shape = (unlinked.data || []).map((r) => `${r.assigned_to_role}:source_id=${r.source_id ?? 'null'}`).join(',') || unlinked.error?.message || 'none';
         assert.fail(`tasks linked to order ${instant?.id}: [${roles}]; full-payload insert (anon): ${probe}; tasks by title: ${shape}`);
       }
