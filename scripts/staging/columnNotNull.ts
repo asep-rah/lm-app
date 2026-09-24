@@ -27,17 +27,17 @@ export type NotNullFinding = {
   line: number | null;
 };
 
-const unquote = (s: string) => s.replace(/"/g, '').toLowerCase();
+export const unquote = (s: string) => s.replace(/"/g, '').toLowerCase();
 
 /** Blank out string literals, dollar bodies and comments (length preserved). */
-const maskLiterals = (s: string) =>
+export const maskLiterals = (s: string) =>
   s
     .replace(/'(?:[^']|'')*'/g, (m) => ' '.repeat(m.length))
     .replace(/\$([A-Za-z_]\w*)?\$[\s\S]*?\$\1\$/g, (m) => ' '.repeat(m.length))
     .replace(/--[^\n]*/g, (m) => ' '.repeat(m.length));
 
 /** Replace everything inside nested parentheses with spaces. */
-const maskParens = (s: string) => {
+export const maskParens = (s: string) => {
   let depth = 0;
   let out = '';
   for (const c of s) {
@@ -53,7 +53,7 @@ const maskParens = (s: string) => {
 };
 
 /** Split the parenthesised body of CREATE TABLE into top-level elements. */
-const tableElements = (text: string): string[] | null => {
+export const tableElements = (text: string): string[] | null => {
   const masked = maskLiterals(text);
   const open = masked.indexOf('(');
   if (open < 0) return null;
@@ -77,11 +77,11 @@ const tableElements = (text: string): string[] | null => {
   return null;
 };
 
-const TABLE_NAME = /^CREATE\s+(?:(?:GLOBAL|LOCAL)\s+)?(?:TEMP(?:ORARY)?\s+|UNLOGGED\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?((?:"[^"]+"|[\w$]+)\.(?:"[^"]+"|[\w$]+)|"[^"]+"|[\w$]+)/i;
-const ALTER_TABLE = /^ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?((?:"[^"]+"|[\w$]+)\.(?:"[^"]+"|[\w$]+)|"[^"]+"|[\w$]+)\s+([\s\S]*)$/i;
-const IDENT = /^("(?:[^"]|"")+"|[\w$]+)/;
+export const TABLE_NAME = /^CREATE\s+(?:(?:GLOBAL|LOCAL)\s+)?(?:TEMP(?:ORARY)?\s+|UNLOGGED\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?((?:"[^"]+"|[\w$]+)\.(?:"[^"]+"|[\w$]+)|"[^"]+"|[\w$]+)/i;
+export const ALTER_TABLE = /^ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?((?:"[^"]+"|[\w$]+)\.(?:"[^"]+"|[\w$]+)|"[^"]+"|[\w$]+)\s+([\s\S]*)$/i;
+export const IDENT = /^("(?:[^"]|"")+"|[\w$]+)/;
 
-const qualify = (name: string) => {
+export const qualify = (name: string) => {
   const n = unquote(name);
   return n.includes('.') ? n : `public.${n}`;
 };

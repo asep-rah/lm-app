@@ -15,12 +15,15 @@
  *  5b. read-only preflight on staging: no transaction control in the files;
  *     every role they name exists and the apply role may act for every
  *     OWNER TO / FOR ROLE role
+ *  5c. seed.sql fits the schema it will meet (dump + PR migrations, or the
+ *     live staging columns when the dump is already applied): tables and
+ *     columns exist, NOT NULL columns without default are supplied
  *  6. PR #5 migrations, each applied once
  *  7. synthetic seed (scripts/staging/seed.sql)
  *  8. PostgREST schema reload + API verification
  *
- * --dry-run: steps 1–5b only, writes nothing.
- * --rehearse: steps 1–5b, then applies every pending file in ONE transaction
+ * --dry-run: steps 1–5c only, writes nothing.
+ * --rehearse: steps 1–5c, then applies every pending file in ONE transaction
  *   that ends in ROLLBACK (no marker, nothing kept) to prove the real run
  *   will succeed; errors name file, line and the statement's first keywords.
  *
@@ -41,6 +44,8 @@ import { inspectSchemaDump, needsReview } from './schemaDump';
 import { APPLY_ROLE, rolePreflight, rolesUsed } from './privileges';
 import { describeApplyError, rehearsalScript, transactionControl } from './applySql';
 import { splitSqlStatements } from './sqlLexer';
+import { PR_MIGRATION_FILES } from './prMigrations';
+import { applyToModel, CATALOG_QUERY, checkSeed, describeColumns, modelFromCatalog, modelFromSql, seedInserts } from './tableColumns';
 
 const ROOT = join(__dirname, '..', '..');
 const args = process.argv.slice(2);
@@ -50,8 +55,7 @@ const argValue = (f: string) => {
   return i >= 0 ? args[i + 1] : '';
 };
 
-/** Migrations introduced by PR #5 (git diff origin/main -- supabase/migrations). */
-export const PR_MIGRATIONS = ['20260923_customer_verified_login.sql', '20260924_satuan_item_photos.sql'];
+export const PR_MIGRATIONS = PR_MIGRATION_FILES;
 
 const selftest = flag('--selftest-local');
 const dryRun = flag('--dry-run');
@@ -226,6 +230,27 @@ async function main() {
     log(false, `5b. role preflight failed: ${(e as Error).message}`);
     process.exit(2);
   }
+
+  // 5c. seed vs schema, before anything is written.
+  const inserts = seedInserts(readFileSync(join(ROOT, 'scripts/staging/seed.sql'), 'utf8'));
+  const pendingMigrations = files.filter((f) => PR_MIGRATIONS.includes(f.step)).map((f) => readFileSync(f.path, 'utf8'));
+  const model = files.some((f) => f.step === 'schema-dump')
+    ? modelFromSql(dumpSql, ...pendingMigrations)
+    : pendingMigrations.reduce(
+        (m, sqlText) => applyToModel(m, splitSqlStatements(sqlText)),
+        modelFromCatalog(sql(CATALOG_QUERY([...new Set(inserts.map((i) => i.table))])).split('\n').filter(Boolean))
+      );
+  const seedIssues = checkSeed(model, inserts);
+  if (seedIssues.length) {
+    log(false, `5c. scripts/staging/seed.sql does not fit the staging schema (${seedIssues.length} problem(s)) — refusing:`);
+    seedIssues.forEach((i) => console.log(`     seed.sql:${i.line} ${i.table}: ${i.problem}`));
+    for (const t of new Set(seedIssues.map((i) => i.table))) {
+      const cols = model.get(t);
+      if (cols) console.log(`     columns of ${t}: ${describeColumns(cols).join('; ')}`);
+    }
+    process.exit(2);
+  }
+  log(true, `5c. seed.sql fits the staging schema (${inserts.length} INSERTs into ${[...new Set(inserts.map((i) => i.table))].join(', ')})`);
 
   const plan = files.map((f) => f.step);
   if (dryRun) {

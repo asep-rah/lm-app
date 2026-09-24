@@ -40,6 +40,7 @@ repo (mode 600, `*.dump.sql` diabaikan git). Periksa dengan
 ```bash
 npx tsx scripts/staging/sanitize-dump.ts ~/lm-staging/prod-schema.dump.sql ~/lm-staging/staging-schema.dump.sql
 npx tsx scripts/staging/review-staging-copy.ts ~/lm-staging/prod-schema.dump.sql ~/lm-staging/staging-schema.dump.sql
+npx tsx scripts/staging/check-seed.ts ~/lm-staging/staging-schema.dump.sql                             # seed vs skema (offline)
 scripts/staging/run-staging.sh prepare --schema-dump ~/lm-staging/staging-schema.dump.sql --dry-run   # cek saja
 scripts/staging/run-staging.sh prepare --schema-dump ~/lm-staging/staging-schema.dump.sql --rehearse  # gladi: satu transaksi + ROLLBACK
 scripts/staging/run-staging.sh prepare --schema-dump ~/lm-staging/staging-schema.dump.sql

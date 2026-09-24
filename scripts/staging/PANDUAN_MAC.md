@@ -268,7 +268,7 @@ tetapi probe tertentu gagal.
 ## 6. Dry run dan gladi persiapan staging
 
 ```bash
-# 6a. tanpa menulis: validasi salinan + cek peran (read-only) di staging
+# 6a. tanpa menulis: validasi salinan + cek peran (read-only) + cek seed vs skema
 STAGING_DB_HOST=<HOST_POOLER_STAGING> scripts/staging/run-staging.sh prepare \
   --schema-dump ~/lm-staging/staging-schema.dump.sql --dry-run
 
@@ -277,6 +277,18 @@ STAGING_DB_HOST=<HOST_POOLER_STAGING> scripts/staging/run-staging.sh prepare \
   --schema-dump ~/lm-staging/staging-schema.dump.sql --rehearse
 ```
 
+Sebelum 6a, seed bisa dicek offline tanpa koneksi. Outputnya hanya nama
+tabel/kolom dan tipe, aman dibagikan:
+
+```bash
+npx tsx scripts/staging/check-seed.ts ~/lm-staging/staging-schema.dump.sql
+```
+
+- `5c. seed.sql fits the staging schema` memastikan setiap `INSERT` di
+  `scripts/staging/seed.sql` cocok dengan skema yang akan ditemuinya (salinan
+  staging + migrasi PR, atau kolom staging yang sudah ada): tabel dan kolom
+  ada, dan kolom `NOT NULL` tanpa default diisi. Bila tidak, skrip berhenti
+  sebelum menulis dan mencantumkan kolom tabel tersebut.
 - `5b. roles OK on staging` memastikan semua peran yang disebut salinan ada
   di staging dan `postgres` boleh bertindak untuk setiap peran `OWNER TO` /
   `FOR ROLE`. Bila tidak, skrip berhenti sebelum menulis dan menyebut nama

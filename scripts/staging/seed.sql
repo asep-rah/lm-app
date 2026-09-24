@@ -14,10 +14,12 @@ from (values
 ) as v(id, name, city, addr, lat, lon)
 where not exists (select 1 from outlets o where o.id = v.id::uuid);
 
-insert into app_settings (id, dynamic_services, outlet_overrides, receipt_terms, promos_data)
+-- Only the columns the order flow needs. The column list must match the
+-- production schema (not the local E2E schema): prepare.ts / check-seed.ts
+-- verify every INSERT here against the sanitised dump before applying.
+insert into app_settings (id, dynamic_services)
 select 1,
-  '[{"id":"stg1","name":"Cuci Kering Lipat","type":"kg","price":5000},{"id":"stg3","name":"Cuci Setrika","type":"kg","price":6000},{"id":"stg2","name":"Bedcover Single","type":"pcs","price":25000}]',
-  '{}', '[STAGING] S&K uji', '[]'
+  '[{"id":"stg1","name":"Cuci Kering Lipat","type":"kg","price":5000},{"id":"stg3","name":"Cuci Setrika","type":"kg","price":6000},{"id":"stg2","name":"Bedcover Single","type":"pcs","price":25000}]'
 where not exists (select 1 from app_settings where id = 1);
 
 insert into customers (phone, name)
