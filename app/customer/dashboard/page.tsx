@@ -10,13 +10,8 @@ import { findPromoByCode, mapDbPromo, mapSettingsPromo, promoDiscountRp, promoIs
 import { cashbackCopy, DEFAULT_CRM_SETTINGS, idr, type CrmProfile, type CrmSettings } from '@/lib/crm';
 import { loadFreshCrmProfile } from '@/lib/crm-automation';
 import { redeemLoyaltyPoints, redeemableAmounts } from '@/lib/loyaltyRedeem';
-import {
-  createPickupRoleTasks,
-  friendlyPickupOrderError,
-  insertPickupOrder,
-  reportPickupOrderError,
-  requestDriverDelivery
-} from '@/lib/pickupDispatch';
+import { friendlyPickupOrderError, reportPickupOrderError, requestDriverDelivery } from '@/lib/pickupDispatch';
+import { notifyStaffNewOrder } from '@/lib/notifications';
 import { stageKeyOf, type WorkLogRow } from '@/lib/stageTimeline';
 import { laundryFallbackReply } from '@/lib/laundryFaq';
 import {
@@ -2236,24 +2231,33 @@ function CustomerDashboardPage() {
       courier_type: isFuturePickup ? null : courierType || 'INTERNAL'
     };
 
-    const { data: existingDraft } = await supabase
-      .from('pickup_orders')
-      .select('id')
-      .eq('order_number', autoOrderNo)
-      .limit(1);
-    const { data: insertedData, error } = existingDraft?.length
-      ? { data: existingDraft as { id: string }[], error: null }
-      : await insertPickupOrder(payload);
+    // Pesanan dibuat SERVER (/api/customer/order/create): validasi isi, nomor dari
+    // sesi, status/tanggal, wajib foto item satuan, dan tugas driver/CS. Browser
+    // tidak lagi menulis pickup_orders/system_tasks sendiri. Idempoten per
+    // order_number, jadi ketukan ulang/retry tidak membuat pesanan ganda.
+    let insertedData: { id: string }[] | null = null;
+    let error: { message: string; userFacing?: boolean } | null = null;
+    try {
+      const res = await fetch('/api/customer/order/create', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(payload)
+      });
+      const out = await res.json().catch(() => ({}));
+      if (res.ok && out?.id) {
+        insertedData = [{ id: String(out.id) }];
+        if (!out.duplicate) {
+          notifyStaffNewOrder({ outletId: selectedOutlet || null, customerName: payload.customer_name, service: payload.service_type });
+        }
+      } else {
+        error = res.status < 500 && out?.error ? { message: String(out.error), userFacing: true } : { message: String(out?.detail || out?.error || `HTTP ${res.status}`) };
+      }
+    } catch (e) {
+      error = { message: String((e as Error)?.message || 'Failed to fetch') };
+    }
 
     if (!error && insertedData && insertedData.length > 0) {
-      if (!isFuturePickup) {
-        await createPickupRoleTasks({
-          id: insertedData[0].id,
-          customer_name: payload.customer_name as string,
-          customer_phone: normPhone,
-          outlet_id: selectedOutlet
-        });
-      }
       if (userCoords && customerAddress) {
         const match = savedAddresses.find(
           (a) => a.full_address === pickupFull || splitHouseNumber(a.full_address).street === customerAddress
@@ -2323,6 +2327,11 @@ function CustomerDashboardPage() {
       // Jangan tampilkan pesan error database mentah ke pelanggan — tampilkan
       // pesan yang bisa dipahami, dan kirim detail teknisnya untuk diperiksa
       // lewat Diagnosa Sistem (Owner).
+      if (error?.userFacing) {
+        toast(error.message, 'err');
+        setIsSubmitting(false);
+        return;
+      }
       toast(friendlyPickupOrderError(error?.message), 'err');
       void reportPickupOrderError(error?.message, {
         isFuturePickup,

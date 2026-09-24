@@ -102,6 +102,30 @@ async function newScenario(opts = {}) {
         const n = String(uploadUrlRequests.length).padStart(12, '0');
         return route.fulfill({ json: { path: `${'a'.repeat(32)}/2026-09/123e4567-e89b-42d3-a456-${n}.jpg`, token: 'signed-upload-token' } });
       }
+      // The order itself is created by the server (/api/customer/order/create,
+      // service role; validation covered by lib/customerOrderServer.test.ts and
+      // the staging E2E). Stubbed here with the same observable contract:
+      // idempotent per order_number, 2 tasks for instant orders, a 500 with the
+      // row data stripped when the insert fails.
+      if (url.pathname === '/api/customer/order/create') {
+        const body = req.postDataJSON();
+        if (insertFailMessage) {
+          const detail = insertFailMessage.replace(/Failing row contains \([\s\S]*\)\.?/gi, '');
+          return route.fulfill({ status: 500, json: { error: 'Pesanan belum tersimpan. Coba lagi sebentar lagi.', detail } });
+        }
+        if (body.pickup_date == null) {
+          return route.fulfill({ status: 500, json: { error: 'x', detail: 'null value in column "pickup_date" of relation "pickup_orders" violates not-null constraint' } });
+        }
+        const prior = tables.pickup_orders.find((r) => r.order_number === body.order_number);
+        if (prior) return route.fulfill({ json: { id: prior.id, order_number: prior.order_number, duplicate: true } });
+        const row = { id: `new-${inserts.length}-0`, ...body };
+        inserts.push({ table: 'pickup_orders', rows: [row] });
+        tables.pickup_orders.push(row);
+        if (!body.pickup_time) {
+          inserts.push({ table: 'system_tasks', rows: ['driver', 'cs'].map((role) => ({ assigned_to_role: role, source_id: row.id })) });
+        }
+        return route.fulfill({ json: { id: row.id, order_number: row.order_number, status: row.status } });
+      }
       if (url.pathname === '/api/customer/order/report-error') {
         reports.push(req.postData() || '');
         return route.fulfill({ json: { ok: true } });
@@ -417,8 +441,8 @@ const TEST_PHOTO = {
     assert.ok(!String(satuanItems[0].pieces[0].photo_path).startsWith('http'), 'stored as a path, not a public URL');
     assert.match(satuanItems[0].pieces[0].photo_path, /^a{32}\/2026-09\/[0-9a-f-]{36}\.jpg$/, 'server-issued path');
     assert.deepEqual(s.outbound.filter((x) => x.startsWith('UNEXPECTED')), [], 'browser never touches the bucket directly');
-    const tasks = s.inserts.filter((i) => i.table === 'system_tasks');
-    assert.ok(tasks.length >= 2, 'driver + cs tasks created');
+    const tasks = s.inserts.filter((i) => i.table === 'system_tasks').flatMap((i) => i.rows);
+    assert.deepEqual(tasks.map((t) => t.assigned_to_role).sort(), ['cs', 'driver'], 'driver + cs tasks created');
     await page.screenshot({ path: `${OUT}/07-after-order.png`, fullPage: true });
   });
 

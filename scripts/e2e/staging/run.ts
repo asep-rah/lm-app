@@ -561,6 +561,54 @@ async function main() {
     assert.deepEqual({ registered_by: data?.registered_by, deposit_balance: Number(data?.deposit_balance) }, { registered_by: '[STAGING] Kasir A', deposit_balance: 50000 });
   });
 
+  // --- 8. server order endpoint (/api/customer/order/create) ------------------
+  const orderApi = (body: Record<string, unknown>, headers: Record<string, string> = {}) =>
+    fetch(APP + '/api/customer/order/create', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: APP, cookie: `ldrv_cust_session=${customerCookie(SYN.customer)}`, ...headers },
+      body: JSON.stringify(body)
+    });
+  const orderBody = (items: unknown[], extra: Record<string, unknown> = {}) => ({
+    order_number: `ORD-${String(Date.now()).slice(-8)}-${String(Math.floor(1000 + Math.random() * 9000))}`,
+    outlet_id: SYN.outletA,
+    customer_name: '[STAGING] Pelanggan Uji',
+    customer_phone: SYN.customer,
+    address: '[STAGING] jl uji coblong no.1 bandung',
+    items,
+    ...extra
+  });
+  const jas = (paths: Array<string | undefined>) => ({ name: 'Jas', type: 'pcs', qty: paths.length, price: 30000, pieces: paths.map((p) => ({ merk: 'x', photo_path: p })) });
+  const ownPhoto = `${ownerFolder(SYN.customer)}/${month}/${randomUUID()}.jpg`;
+  {
+    const { error } = await service.storage.from(BUCKET).upload(ownPhoto, JPEG, { contentType: 'image/jpeg' });
+    if (!error) uploaded.push(ownPhoto);
+  }
+  await step('Order API: cross-origin 403; other phone than the session 403', async () => {
+    assert.equal((await orderApi(orderBody([jas([ownPhoto])]), { origin: 'https://evil.example' })).status, 403);
+    assert.equal((await orderApi(orderBody([jas([ownPhoto])], { customer_phone: SYN.otherCustomer }))).status, 403);
+  });
+  await step('Order API: satuan without photo / another customer photo / photo never uploaded → 400; no session → 401', async () => {
+    assert.equal((await orderApi(orderBody([jas([undefined])]))).status, 400);
+    assert.equal((await orderApi(orderBody([jas([victimPath])]))).status, 400);
+    assert.equal((await orderApi(orderBody([jas([`${ownerFolder(SYN.customer)}/${month}/${randomUUID()}.jpg`])]))).status, 400);
+    assert.equal((await orderApi(orderBody([jas([ownPhoto])]), { cookie: '' })).status, 401);
+  });
+  await step('Order API: valid order stored by the server (status/date from server, tasks), same order number again → no duplicate', async () => {
+    const body = orderBody([jas([ownPhoto])], { status: 'Selesai', pickup_date: '2020-01-01' });
+    const r1 = await orderApi(body);
+    const j1 = (await r1.json()) as { id?: string; duplicate?: boolean };
+    assert.equal(r1.status, 200, JSON.stringify(j1));
+    const j2 = (await (await orderApi(body)).json()) as { id?: string; duplicate?: boolean };
+    assert.deepEqual([j2.id, j2.duplicate], [j1.id, true]);
+    const { data: row, error } = await service.from('pickup_orders').select('status, pickup_date, customer_phone, items').eq('id', String(j1.id)).single();
+    assert.ifError(error);
+    assert.deepEqual([row.status, String(row.pickup_date).slice(0, 10), row.customer_phone], ['Menunggu Kurir', jakartaToday(), SYN.customer]);
+    assert.equal(JSON.stringify(row.items).includes(ownPhoto), true);
+    const tasks = await anon.from('system_tasks').select('assigned_to_role').eq('source_id', String(j1.id));
+    assert.ifError(tasks.error);
+    assert.deepEqual((tasks.data || []).map((t) => t.assigned_to_role).sort(), ['cs', 'driver']);
+  });
+
   await step('No browser request reached the production database host', async () => {
     assert.deepEqual(prodHits, []);
   });
