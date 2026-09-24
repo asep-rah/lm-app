@@ -33,7 +33,10 @@ CREATE TABLE public.app_settings (
 );
 CREATE SEQUENCE public.app_settings_id_seq;
 ALTER TABLE ONLY public.app_settings ALTER COLUMN id SET DEFAULT nextval('public.app_settings_id_seq'::regclass);
-CREATE TABLE public.customers (phone text NOT NULL, name text, created_at timestamp with time zone DEFAULT now() NOT NULL);
+CREATE TABLE public.customers (
+    phone text NOT NULL, name text NOT NULL, deposit_balance numeric DEFAULT 0,
+    registered_by text NOT NULL, created_at timestamp with time zone DEFAULT now(), address text
+);
 CREATE TABLE public.customer_addresses (
     id bigint NOT NULL, customer_phone text NOT NULL, label_name text, full_address text,
     is_primary boolean DEFAULT false, latitude numeric, longitude numeric
@@ -82,6 +85,11 @@ describe('column model from pg_dump text', () => {
       '3 column "v" is GENERATED ALWAYS (cannot be inserted)',
       '4 INSERT without a column list (cannot be verified)'
     ]);
+  });
+
+  it('the seed without registered_by is caught (staging finding: NOT NULL, no default)', () => {
+    const old = "insert into customers (phone, name)\nselect '080000000001', '[STAGING] Pelanggan Uji';";
+    assert.deepEqual(checkSeed(modelFromSql(PROD_LIKE), seedInserts(old)).map((i) => i.problem), ['required column "registered_by" (text, NOT NULL, no default) is not supplied']);
   });
 
   it('the current staging seed fits a production-like schema + PR migrations', () => {

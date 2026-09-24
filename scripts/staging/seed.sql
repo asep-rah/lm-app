@@ -22,8 +22,11 @@ select 1,
   '[{"id":"stg1","name":"Cuci Kering Lipat","type":"kg","price":5000},{"id":"stg3","name":"Cuci Setrika","type":"kg","price":6000},{"id":"stg2","name":"Bedcover Single","type":"pcs","price":25000}]'
 where not exists (select 1 from app_settings where id = 1);
 
-insert into customers (phone, name)
-select v.phone, v.name
+-- registered_by is NOT NULL in production; the app stores the name of the
+-- employee who registered the customer (POS: employeeName), so the synthetic
+-- customers are registered by the synthetic cashier of outlet A.
+insert into customers (phone, name, registered_by)
+select v.phone, v.name, '[STAGING] Kasir A'
 from (values ('080000000001', '[STAGING] Pelanggan Uji'), ('080000000002', '[STAGING] Pelanggan Lain')) as v(phone, name)
 where not exists (select 1 from customers c where c.phone = v.phone);
 
