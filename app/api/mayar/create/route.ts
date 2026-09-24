@@ -1,7 +1,15 @@
 import { NextResponse } from 'next/server';
 import { serverSupabase } from '@/lib/supabaseServer';
 import { createMayarPayment, isMayarKeyValid } from '@/lib/mayar';
-import { DEPOSIT_PACKAGES, depositIncomeTitle, depositReceiptOf, insertPendingDepositTopup, normalizeCustomerPhone } from '@/lib/depositTopup';
+import {
+  DEPOSIT_NOT_REGISTERED_MESSAGE,
+  DEPOSIT_PACKAGES,
+  depositIncomeTitle,
+  depositReceiptOf,
+  insertPendingDepositTopup,
+  isRegisteredCustomer,
+  normalizeCustomerPhone
+} from '@/lib/depositTopup';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,6 +27,19 @@ export async function POST(req: Request) {
     const amount = depositPkg?.pay || Math.round(Number(body.amount) || 0);
     if (amount < 1000) {
       return NextResponse.json({ error: 'Nominal pembayaran minimal Rp 1.000' }, { status: 400 });
+    }
+
+    // Top-up hanya untuk pelanggan yang sudah terdaftar (didaftarkan kasir).
+    // Dicek SEBELUM invoice Mayar dibuat, jadi tidak ada pembayaran yang
+    // nantinya tidak bisa dikredit ke saldo.
+    if (isDeposit) {
+      const phone = normalizeCustomerPhone(body.mobile || body.customerPhone || '');
+      if (!phone) return NextResponse.json({ error: 'Nomor WhatsApp tidak valid' }, { status: 400 });
+      const reg = await isRegisteredCustomer(supabase, phone);
+      if (reg.error) return NextResponse.json({ error: 'Gagal memeriksa data pelanggan. Coba lagi.' }, { status: 503 });
+      if (!reg.registered) {
+        return NextResponse.json({ error: DEPOSIT_NOT_REGISTERED_MESSAGE, code: 'CUSTOMER_NOT_REGISTERED' }, { status: 409 });
+      }
     }
 
     let apiKey = String(body.apiKey || '').trim();

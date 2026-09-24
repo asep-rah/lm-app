@@ -440,6 +440,7 @@ function CustomerDashboardPage() {
         })
       });
       const data = await res.json().catch(() => ({}));
+      if (data?.code === 'CUSTOMER_NOT_REGISTERED') return alert(data.error);
       if (!res.ok) throw new Error(data?.error || 'Gagal membuat QRIS Mayar');
       setDepositCheckout({
         ...data,

@@ -352,7 +352,8 @@ async function main() {
       const items = instant.items as Array<Record<string, unknown>>;
       const kg = items.filter((i) => i.type === 'kg');
       assert.deepEqual(kg.map((i) => [i.name, i.weight]), [['Cuci Kering Lipat', 1.93], ['Cuci Setrika', 1.2]]);
-      assert.deepEqual(kg[0].bag_category_counts, { bajuRingan: '2', celanaBiasa: '1', celanaJeans: '1', cd: '3', bra: '1' });
+      // The server stores the counts as numbers (lib/customerOrderServer); POS reads them with Number().
+      assert.deepEqual(kg[0].bag_category_counts, { bajuRingan: 2, celanaBiasa: 1, celanaJeans: 1, cd: 3, bra: 1 });
     });
     await step('Satuan photo stored privately under the customer folder', async () => {
       const sat = (instant?.items as Array<{ pieces?: Array<{ photo_path?: string }> }>).find((i) => Array.isArray(i.pieces));
@@ -544,6 +545,18 @@ async function main() {
       const r = await fetch(APP + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: 'PAID', event: 'qr.payment' }) });
       assert.equal(r.status, 404, path);
     }
+  });
+  await step('Self top-up (Mayar) for an unregistered number is refused before any invoice is created', async () => {
+    const r = await fetch(APP + '/api/mayar/create', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'deposit', packageName: 'Silver', amount: 300000, mobile: NEW_PHONE, customerPhone: NEW_PHONE })
+    });
+    const j = (await r.json()) as { code?: string };
+    assert.deepEqual([r.status, j.code], [409, 'CUSTOMER_NOT_REGISTERED']);
+    const { data, error } = await service.from('deposit_topups').select('id').eq('customer_phone', NEW_PHONE);
+    assert.ifError(error);
+    assert.equal(data?.length, 0);
   });
   await step('POS deposit credit for a new number: registered_by = kasir, repeated request credits once', async () => {
     const call = () =>

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { creditCustomerDeposit } from './depositTopup';
+import { creditCustomerDeposit, isRegisteredCustomer } from './depositTopup';
 
 /** Minimal fake of the supabase-js calls creditCustomerDeposit makes. */
 function fakeDb(opts: { customers?: Record<string, { deposit_balance: number; registered_by?: string }>; insertError?: { code?: string; message: string }; rpc?: boolean }) {
@@ -64,7 +64,7 @@ describe('creditCustomerDeposit', () => {
   it('new number without staff (gateway webhook): refused, nothing created or credited', async () => {
     const db = fakeDb({ rpc: true });
     const out = await creditCustomerDeposit(db, '080000000099', 10000, 'mayar:x');
-    assert.match(String(out.error?.message), /petugas/);
+    assert.match(String(out.error?.message), /belum terdaftar/);
     assert.deepEqual(db.log, []);
     assert.deepEqual(db.customers, {});
   });
@@ -87,5 +87,10 @@ describe('creditCustomerDeposit', () => {
     const again = await creditCustomerDeposit(db, '080000000001', 7000, 'pos-3');
     assert.equal(again.already, true);
     assert.equal(db.customers['080000000001'].deposit_balance, 7000);
+  });
+  it('isRegisteredCustomer matches 08/62 variants', async () => {
+    const db = fakeDb({ customers: { '080000000001': { deposit_balance: 0 } } });
+    assert.deepEqual(await isRegisteredCustomer(db, '6280000000001'), { registered: true, error: null });
+    assert.deepEqual(await isRegisteredCustomer(db, '080000000099'), { registered: false, error: null });
   });
 });

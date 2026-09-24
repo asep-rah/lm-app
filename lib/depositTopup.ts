@@ -94,13 +94,26 @@ async function ensureDepositCustomer(db: Db, phone: string, registeredBy?: strin
   if (error) return { message: error.message };
   if (existing?.[0]) return null;
   const by = String(registeredBy || '').trim();
-  if (!by) return { message: 'Pelanggan belum terdaftar; top-up untuk nomor baru harus dicatat oleh petugas' };
+  if (!by) return { message: DEPOSIT_NOT_REGISTERED_MESSAGE };
   const ins = await db
     .from('customers')
     .insert([{ phone: normalizeCustomerPhone(phone) || phone, name: 'Pelanggan', registered_by: by, deposit_balance: 0 }]);
   // 23505: dibuat bersamaan oleh permintaan lain — baris sudah ada.
   if (ins.error && ins.error.code !== '23505') return { message: ins.error.message };
   return null;
+}
+
+/** Pesan untuk nomor yang belum terdaftar (top-up mandiri maupun lewat kasir). */
+export const DEPOSIT_NOT_REGISTERED_MESSAGE =
+  'Nomor ini belum terdaftar sebagai pelanggan. Daftarkan dulu di kasir outlet (nama & nomor WhatsApp), lalu ulangi top-up.';
+
+/** Apakah nomor ini sudah ada di tabel customers (semua varian 08/62/+62)? */
+export async function isRegisteredCustomer(db: Db, phone: string): Promise<{ registered: boolean; error: { message: string } | null }> {
+  const variants = phonesOf(phone);
+  if (!variants.length) return { registered: false, error: null };
+  const { data, error } = await db.from('customers').select('phone').in('phone', variants).limit(1);
+  if (error) return { registered: false, error: { message: error.message } };
+  return { registered: Boolean(data?.[0]), error: null };
 }
 
 export async function creditCustomerDeposit(
