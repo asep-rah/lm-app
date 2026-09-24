@@ -85,7 +85,8 @@ export async function decrementCustomerDeposit(db: any, phone: string, amount: n
  * NOT NULL tanpa default, sehingga RPC `credit_customer_deposit` (yang membuat
  * pelanggan baru tanpa kolom itu) dan fallback di bawah gagal untuk nomor baru.
  * Pelanggan baru dibuat dengan `registered_by` = petugas yang melakukan top-up
- * (sama dengan POS); tanpa petugas, nomor baru ditolak.
+ * (sama dengan POS); tanpa petugas (top-up online Mayar oleh pelanggan) nomor baru
+ * ditolak — top-up tetap PENDING dan tercatat, bukan hilang.
  */
 async function ensureDepositCustomer(db: Db, phone: string, registeredBy?: string) {
   const variants = phonesOf(phone);

@@ -63,15 +63,15 @@ describe('creditCustomerDeposit', () => {
   });
   it('new number without staff (gateway webhook): refused, nothing created or credited', async () => {
     const db = fakeDb({ rpc: true });
-    const out = await creditCustomerDeposit(db, '080000000099', 10000, 'xendit:x');
+    const out = await creditCustomerDeposit(db, '080000000099', 10000, 'mayar:x');
     assert.match(String(out.error?.message), /petugas/);
     assert.deepEqual(db.log, []);
     assert.deepEqual(db.customers, {});
   });
   it('existing customer: no insert; the same payment id twice credits once', async () => {
     const db = fakeDb({ rpc: true, customers: { '080000000001': { deposit_balance: 1000 } } });
-    await creditCustomerDeposit(db, '080000000001', 20000, 'xendit:dup');
-    const again = await creditCustomerDeposit(db, '080000000001', 20000, 'xendit:dup');
+    await creditCustomerDeposit(db, '080000000001', 20000, 'mayar:dup');
+    const again = await creditCustomerDeposit(db, '080000000001', 20000, 'mayar:dup');
     assert.equal(again.balance, 21000);
     assert.ok(!db.log.includes('insert customers'));
   });

@@ -3,7 +3,7 @@ import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import { diagnosisHintOf } from '@/lib/errorDiagnosis';
 import { serverDeployEnv, serverServiceKey, serverSupabaseTarget } from '@/lib/supabaseServer';
 
-export type GatewayName = 'mayar' | 'xendit' | 'manual' | 'cron' | 'check-status';
+export type GatewayName = 'mayar' | 'manual' | 'cron' | 'check-status';
 
 const serviceClient = () => {
   const target = serverSupabaseTarget();

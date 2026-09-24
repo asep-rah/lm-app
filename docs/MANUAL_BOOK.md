@@ -88,7 +88,7 @@ Alur tipikal pelanggan:
 | **Cron** | Webhook hilang / lambat; server poll Mayar per `mayar_payment_id` |
 | **Mark manual** | Override CS/Owner dengan bukti + catatan (audit) |
 
-Alias webhook: `/api/mayar/webhook` mengarah ke handler yang sama. Path legacy `/qris/webhook` juga dialihkan ke logika `markGatewayPaid` agar tidak ada dua jalur bayar yang berbeda.
+Alias webhook: `/api/mayar/webhook` mengarah ke handler yang sama. Gateway pembayaran hanya Mayar; route Xendit lama (`/qris/webhook`, `/api/qris/webhook`, `/api/qris/charge`) sudah dihapus.
 
 ### 1.5 Diagram arsitektur ringkas
 
