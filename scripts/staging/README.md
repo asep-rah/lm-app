@@ -38,13 +38,15 @@ repo (mode 600, `*.dump.sql` diabaikan git). Periksa dengan
 ## 3. Siapkan staging
 
 ```bash
-scripts/staging/run-staging.sh prepare --schema-dump ~/lm-staging/prod-schema.clean.dump.sql --dry-run --dump-reviewed   # cek saja
-scripts/staging/run-staging.sh prepare --schema-dump ~/lm-staging/prod-schema.clean.dump.sql --dump-reviewed
+npx tsx scripts/staging/sanitize-dump.ts ~/lm-staging/prod-schema.dump.sql ~/lm-staging/staging-schema.dump.sql
+npx tsx scripts/staging/review-staging-copy.ts ~/lm-staging/prod-schema.dump.sql ~/lm-staging/staging-schema.dump.sql
+scripts/staging/run-staging.sh prepare --schema-dump ~/lm-staging/staging-schema.dump.sql --dry-run   # cek saja
+scripts/staging/run-staging.sh prepare --schema-dump ~/lm-staging/staging-schema.dump.sql
 ```
 
 Langkah yang dicetak: guard → staging menerima kedua kunci → koneksi DB →
-marker `lm_staging` → validasi dump (tanpa data; HTTP keluar/ref produksi di
-trigger/fungsi dan literal mirip rahasia harus ditinjau lalu `--dump-reviewed`) → dump
+marker `lm_staging` → validasi salinan (wajib hasil `sanitize-dump.ts`:
+tanpa data, webhook dibuang, URL luar dinetralkan, rahasia disensor) → dump
 diterapkan (satu transaksi) → migrasi PR #5
 (`20260923_customer_verified_login.sql`, `20260924_satuan_item_photos.sql`),
 masing-masing sekali → seed sintetis (`seed.sql`) → verifikasi via API

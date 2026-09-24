@@ -112,6 +112,7 @@ CHECK=$?
 set -e
 if [ "$CHECK" -eq 2 ]; then
   rm -P "$OUT_ABS" 2>/dev/null || rm -f "$OUT_ABS"
-  die "dump contained data statements — file deleted"
+  die "dump contained top-level data / non-schema statements — file deleted"
 fi
-[ "$CHECK" -eq 0 ] && ok "dump is clean" || echo "• dump needs review before use (see list above)"
+echo "Next: create the staging copy (the production dump itself is never applied):"
+echo "  npx tsx scripts/staging/sanitize-dump.ts $OUT_ABS $(dirname "$OUT_ABS")/staging-schema.dump.sql"

@@ -155,41 +155,71 @@ Tidak dipakai, karena mengubah produksi: memberi password pada role bawaan
 `supabase_read_only_user`, `ALTER ROLE … SET default_transaction_read_only`,
 atau `supabase db dump --linked` (yang membuat role login sementara).
 
-## 4. Tinjau dan bersihkan dump
+## 4. Periksa dump, buat salinan staging, tinjau
+
+Tiga perintah offline (tanpa koneksi database). Output-nya hanya berisi
+nomor baris, nama objek, dan nama host, tidak pernah isi statement.
 
 ```bash
+# 4a. periksa dump produksi
 npx tsx scripts/staging/check-dump.ts ~/lm-staging/prod-schema.dump.sql
+
+# 4b. buat salinan staging (dump produksi TIDAK pernah diterapkan langsung)
+npx tsx scripts/staging/sanitize-dump.ts ~/lm-staging/prod-schema.dump.sql ~/lm-staging/staging-schema.dump.sql
+
+# 4c. tinjau salinan terhadap dump produksi
+npx tsx scripts/staging/review-staging-copy.ts ~/lm-staging/prod-schema.dump.sql ~/lm-staging/staging-schema.dump.sql
 ```
 
-Output hanya menampilkan nomor baris dan kata kunci/host (aman dibagikan).
-Kode keluar: `0` bersih · `1` perlu ditinjau · `2` berisi data (jangan dipakai).
+**4a. `check-dump`** memecah file per statement tingkat atas; badan fungsi
+`$$ … $$`, string, dan komentar dikenali.
 
-Bila ada temuan, kerjakan di **salinan** (file asli tetap utuh):
+- *top-level data / non-schema statements* **harus 0**. Yang dihitung di sini
+  adalah `INSERT`/`UPDATE`/`DELETE`/`COPY` di tingkat atas, blok data `COPY`,
+  `setval`, `DO`/`WITH`/`CALL`, `SELECT` biasa, serta meta-command psql
+  selain `\restrict`/`\unrestrict`. Bila bukan 0, file tidak boleh dipakai
+  (`dump-prod-schema.sh` langsung menghapusnya).
+- *DML inside function bodies* hanya informasi. Contohnya
+  `credit_customer_deposit → INSERT INTO deposit_payment_credits, INSERT INTO customers`:
+  ini **definisi fungsi**, bukan data. Dua temuan `INSERT` sebelumnya berasal
+  dari sini; pemeriksa lama salah menganggapnya data.
+- *outbound HTTP*, *production ref*, dan *secret-like* ditangani 4b secara
+  otomatis. Literal `'service_role'` di policy/role check tidak lagi dianggap
+  rahasia, sedangkan JWT, `sb_secret_…`, `sk_…`, token `Bearer`, dan nilai
+  key/token tetap dianggap rahasia.
 
-```bash
-cp ~/lm-staging/prod-schema.dump.sql ~/lm-staging/prod-schema.clean.dump.sql
-chmod 600 ~/lm-staging/prod-schema.clean.dump.sql
-open -e ~/lm-staging/prod-schema.clean.dump.sql     # atau editor lain
+**4b. `sanitize-dump`** membuat `staging-schema.dump.sql` (mode 600, tidak
+menimpa, di luar repo, baris pertama `-- lm-staging-sanitized v1`):
+
+- menolak total bila ada data (tidak ada file yang ditulis);
+- membuang trigger **Database Webhook** (`supabase_functions.http_request`,
+  mis. ke n8n) beserta `ALTER TABLE … ENABLE/DISABLE TRIGGER` dan
+  `COMMENT ON TRIGGER`-nya;
+- mengganti host **semua** URL menjadi `staging-disabled.invalid`, termasuk di
+  badan fungsi `net.http_post`, sehingga staging tidak bisa memanggil n8n
+  atau endpoint luar mana pun;
+- menyensor JWT, `sb_secret_`, `sk_…`, token `Bearer`, dan nilai key/token,
+  serta mengganti ref produksi;
+- memeriksa ulang hasilnya, dan menghapusnya bila belum bersih.
+
+Pemanggilan HTTP dengan target **dinamis** (URL dari setting/tabel, bukan
+literal) tidak bisa dinetralkan otomatis. Bila ada, `sanitize-dump` berhenti
+dan menampilkan nomor barisnya. Salinan kemudian perlu keputusan manual.
+
+**4c. `review-staging-copy`** membuktikan salinan identik byte-demi-byte
+dengan hasil sanitizer atas dump produksi yang sama (tidak ada edit manual
+yang terselip), lalu mencantumkan setiap perubahan, misalnya:
+
+```
+✓ staging copy = sanitizer output of this production dump (byte-identical)
+✓ re-check: data 0, outbound HTTP 0, production refs 0, secret-like 0
+• changes (…), line numbers refer to the production dump:
+    line 3134: TRIGGER <nama> ON public.<tabel> — removed (Database Webhook)
+    line …: FUNCTION public.<fungsi> — URL host <host-n8n-anda> → staging-disabled.invalid
 ```
 
-| Temuan | Tindakan di salinan |
-|---|---|
-| `supabase_functions.http_request` (Database Webhook) | Hapus pernyataan `CREATE TRIGGER …` itu. |
-| `net.http_post` / `http_get` di fungsi | Ganti URL-nya dengan `https://staging-disabled.invalid`, atau hapus fungsi dan trigger pemakainya. |
-| URL host produksi (domain app / `qlgbjvzabnfqmfnjdkmo`) | Ganti dengan `https://staging-disabled.invalid`. |
-| `secret-like literals` | Ganti nilainya dengan `'REDACTED'`. Rahasia produksi tidak boleh sampai ke staging. |
-| `grant to non-standard role` | Hapus baris `GRANT` itu, karena role tersebut tidak ada di staging. |
-| `extension …` | Biarkan bila memang tersedia di Supabase. |
-
-Lalu bandingkan dan periksa ulang:
-
-```bash
-diff -u ~/lm-staging/prod-schema.dump.sql ~/lm-staging/prod-schema.clean.dump.sql | less
-npx tsx scripts/staging/check-dump.ts ~/lm-staging/prod-schema.clean.dump.sql
-```
-
-URL yang masih tercatat harus hanya `staging-disabled.invalid`. Setelah Anda
-yakin, langkah 6–7 memakai flag `--dump-reviewed`.
+Untuk melihat sendiri satu statement di Mac (tetap lokal, jangan dikirim ke
+siapa pun): `sed -n '<baris>,+15p' ~/lm-staging/prod-schema.dump.sql`.
 
 ## 5. Cek koneksi staging (read-only)
 
@@ -208,7 +238,7 @@ Pemeriksaan ini tidak menulis apa pun:
 
 ```bash
 STAGING_DB_HOST=<HOST_POOLER_STAGING> scripts/staging/run-staging.sh prepare \
-  --schema-dump ~/lm-staging/prod-schema.clean.dump.sql --dry-run --dump-reviewed
+  --schema-dump ~/lm-staging/staging-schema.dump.sql --dry-run
 ```
 
 Output diakhiri `dry run — would apply: schema-dump, 20260923_customer_verified_login.sql, 20260924_satuan_item_photos.sql, seed`.
@@ -218,7 +248,7 @@ berhenti. Jangan pakai `--adopt-existing` kecuali Anda yakin itu staging.
 ## 7. Setelah disetujui (belum dijalankan sekarang)
 
 ```bash
-STAGING_DB_HOST=<HOST_POOLER_STAGING> scripts/staging/run-staging.sh prepare --schema-dump ~/lm-staging/prod-schema.clean.dump.sql --dump-reviewed
+STAGING_DB_HOST=<HOST_POOLER_STAGING> scripts/staging/run-staging.sh prepare --schema-dump ~/lm-staging/staging-schema.dump.sql
 scripts/staging/run-staging.sh e2e          # build terhadap staging + uji end-to-end (butuh Chrome: CHROMIUM_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 STAGING_DB_HOST=<HOST_POOLER_STAGING> scripts/staging/run-staging.sh cleanup            # hitung
 STAGING_DB_HOST=<HOST_POOLER_STAGING> scripts/staging/run-staging.sh cleanup --execute  # hapus data uji sintetis

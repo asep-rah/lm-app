@@ -3,7 +3,8 @@
  *
  *   npx tsx scripts/staging/check-dump.ts ~/lm-staging/prod-schema.dump.sql
  *
- * Exit 0 = clean, 1 = needs human review, 2 = contains data (never apply).
+ * Exit 0 = clean, 1 = must be neutralised (run sanitize-dump.ts), 2 = contains
+ * data or non-schema statements (never use; dump-prod-schema.sh deletes it).
  * Output shows line numbers + keyword/host only — safe to share.
  */
 import { readFileSync, statSync } from 'node:fs';
@@ -30,7 +31,9 @@ const section = (title: string, items: string[]) => {
   console.log(`${items.length ? '✗' : '✓'} ${title}: ${items.length}`);
   items.slice(0, 40).forEach((l) => console.log(`    ${l}`));
 };
-section('data statements (must be 0)', r.dataStatements);
+section('top-level data / non-schema statements (must be 0)', r.dataStatements);
+console.log(`• DML inside function bodies (definitions, not data): ${r.functionBodyDml.length}`);
+r.functionBodyDml.slice(0, 40).forEach((l) => console.log(`    ${l}`));
 section('outbound HTTP / URLs (review)', r.outboundHttp);
 section('production ref (review)', r.productionRefs);
 section('secret-like literals (review)', r.secretLike);
@@ -38,4 +41,8 @@ console.log(`• notes: ${r.notes.length}`);
 r.notes.slice(0, 40).forEach((l) => console.log(`    ${l}`));
 
 if (r.dataStatements.length) process.exit(2);
-process.exit(needsReview(r) ? 1 : 0);
+if (needsReview(r)) {
+  console.log('→ create the staging copy: npx tsx scripts/staging/sanitize-dump.ts <this file> <staging-schema.dump.sql>');
+  process.exit(1);
+}
+process.exit(0);

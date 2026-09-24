@@ -26,6 +26,7 @@ import { join } from 'node:path';
 import { createClient } from '@supabase/supabase-js';
 import { PRODUCTION_SUPABASE_REF } from '../../lib/supabaseTarget';
 import { log, loadStagingEnv, verifyStagingKeys, type StagingEnv } from './guard';
+import { SANITIZED_HEADER } from './sanitize-dump';
 import { inspectSchemaDump, needsReview } from './schemaDump';
 
 const ROOT = join(__dirname, '..', '..');
@@ -145,20 +146,23 @@ async function main() {
       process.exit(2);
     }
     dumpSql = readFileSync(dumpPath, 'utf8');
+    if (!dumpSql.startsWith(SANITIZED_HEADER + '\n')) {
+      log(false, '5. not a sanitised staging copy — run: npx tsx scripts/staging/sanitize-dump.ts <prod-schema.dump.sql> <staging-schema.dump.sql>');
+      process.exit(2);
+    }
     const report = inspectSchemaDump(dumpSql, PRODUCTION_SUPABASE_REF);
     if (report.dataStatements.length) {
-      log(false, `5. dump contains ${report.dataStatements.length} data statement(s) — refusing (schema only). First: ${report.dataStatements[0]}`);
+      log(false, `5. dump contains ${report.dataStatements.length} data/non-schema statement(s) — refusing. First: ${report.dataStatements[0]}`);
+      process.exit(2);
+    }
+    if (needsReview(report)) {
+      log(false, '5. sanitised copy still has outbound HTTP / production ref / secret-like findings — refusing:');
+      [...report.outboundHttp, ...report.productionRefs, ...report.secretLike].slice(0, 30).forEach((l) => console.log(`     ${l}`));
       process.exit(2);
     }
     report.notes.slice(0, 20).forEach((l) => log(null, `5. note ${l}`));
-    const reviewed = flag('--dump-reviewed') || flag('--outbound-http-reviewed');
-    if (needsReview(report) && !reviewed) {
-      log(false, '5. dump contains items that would run from staging or look like secrets:');
-      [...report.outboundHttp, ...report.productionRefs, ...report.secretLike].slice(0, 30).forEach((l) => console.log(`     ${l}`));
-      console.log('   Review/neutralise them in a cleaned copy, then re-run with --dump-reviewed.');
-      process.exit(2);
-    }
-    log(true, `5. dump validated: schema only (${dumpSql.split('\n').length} lines, no data statements)`);
+    log(null, `5. ${report.functionBodyDml.length} function(s) contain DML in their bodies (definitions, not data)`);
+    log(true, `5. sanitised dump validated: schema only (${dumpSql.split('\n').length} lines), no webhook/URL/secret/production ref`);
   } else {
     log(true, '5. schema dump already applied earlier');
   }
