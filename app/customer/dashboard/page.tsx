@@ -59,7 +59,7 @@ import {
   maybeAutoConfirmOrder,
   readLocalFlag
 } from '@/lib/orderFeedback';
-import { IconBadge, SlaBadge, StarRating, StatusPill, StepperBtn } from '@/components/customer/ui';
+import { IconBadge, StarRating, StatusPill, StepperBtn } from '@/components/customer/ui';
 import { visibleChatText } from '@/components/ChatAttachment';
 import PromoBannerCarousel from '@/components/customer/PromoBannerCarousel';
 import NearbyOutlets from '@/components/customer/NearbyOutlets';
@@ -109,6 +109,8 @@ import { hasOnDutyDriverAtOutlet } from '@/lib/driverAttendance';
 import { isPaymentLocked } from '@/lib/paymentVerify';
 import CheckPaymentStatusButton from '@/components/payment/CheckPaymentStatusButton';
 import { PaymentBadge, ProgressBar } from '@/components/customer/OrderStatusBadges';
+import DriverChatSheet from '@/components/DriverChatSheet';
+import { isDriverChatOpen } from '@/lib/driverChat';
 import {
   customerPaymentOf,
   customerProgressOf,
@@ -150,6 +152,7 @@ import {
   Send,
   Star,
   Truck,
+  MessageCircle,
   User,
   Wallet,
   X
@@ -227,7 +230,7 @@ const calculateDistanceKm = (lat1: number, lon1: number, lat2: number, lon2: num
 
 /** Satu kantong kiloan: isian jumlah per kategori + layanan & durasi (dipakai per-kantong hanya saat mode "Pisah Perkantong"). */
 type KiloanBagForm = { categories: BagCategoryCounts; serviceName: string; duration: string };
-const emptyKiloanBagForm = (serviceName = '', duration = 'Reguler (3 Hari)'): KiloanBagForm => ({
+const emptyKiloanBagForm = (serviceName = '', duration = ''): KiloanBagForm => ({
   categories: emptyBagCategoryCounts(),
   serviceName,
   duration
@@ -350,9 +353,11 @@ function CustomerDashboardPage() {
 
   const [isKiloanChecked, setIsKiloanChecked] = useState(false);
   const [selectedKiloanSvc, setSelectedKiloanSvc] = useState('');
-  const [kiloanDuration, setKiloanDuration] = useState('Reguler (3 Hari)');
+  // Semua pilihan layanan mulai KOSONG: customer memilih sendiri (tidak ada
+  // nilai bawaan yang bisa terkirim tanpa sengaja).
+  const [kiloanDuration, setKiloanDuration] = useState('');
   const [cartKiloan, setCartKiloan] = useState<
-    Array<{ name: string; kg: number; qty: number; duration: string; price: number; bagDetail?: BagCategoryCounts }>
+    Array<{ name: string; kg: number; qty: number; duration: string; price: number; bagDetail?: BagCategoryCounts; bags?: number }>
   >([]);
   // Kg & pcs kiloan SELALU dihitung otomatis dari isian per kategori pakaian
   // (lihat lib/kiloanBagWeights.ts) — tidak ada lagi input kg/pcs manual.
@@ -366,7 +371,7 @@ function CustomerDashboardPage() {
   >([]);
   const [selectedSatuanSvc, setSelectedSatuanSvc] = useState('');
   const [inputSatuanQty, setInputSatuanQty] = useState('1');
-  const [satuanInputDuration, setSatuanInputDuration] = useState('Reguler (3 Hari)');
+  const [satuanInputDuration, setSatuanInputDuration] = useState('');
   const emptySatuanPiece = (): SatuanPieceForm => ({ merk: '', warna: '', corak: '' });
   const [satuanPieceNotes, setSatuanPieceNotes] = useState<SatuanPieceForm[]>([emptySatuanPiece()]);
   const [satuanNotesSame, setSatuanNotesSame] = useState(true);
@@ -457,8 +462,8 @@ function CustomerDashboardPage() {
       setIsSubmitting(false);
     }
   };
-  const [bagCount, setBagCount] = useState('1');
-  const [washProcess, setWashProcess] = useState('Gabung Semua');
+  const [bagCount, setBagCount] = useState('');
+  const [washProcess, setWashProcess] = useState('');
   const [hasFading, setHasFading] = useState('');
   const [thirdPartyVendor, setThirdPartyVendor] = useState('');
 
@@ -481,6 +486,38 @@ function CustomerDashboardPage() {
     fetchQueue();
   }, []);
   const [activeOrders, setActiveOrders] = useState<any[]>([]);
+  // Chat dengan driver (per pesanan jemput/antar yang sedang berjalan).
+  const [driverChat, setDriverChat] = useState<{ id: string; driverName: string; label: string } | null>(null);
+  const [driverChatUnread, setDriverChatUnread] = useState<Record<string, number>>({});
+  const openDriverChatIds = activeOrders
+    .map((o: any) => o.driver_chat_id)
+    .filter(Boolean)
+    .join(',');
+  useEffect(() => {
+    // Tanpa chat terbuka tidak ada yang diambil; tombol chat juga tidak tampil.
+    if (!openDriverChatIds || !customerPhone) return;
+    let cancelled = false;
+    const poll = async () => {
+      if (document.visibilityState !== 'visible') return;
+      try {
+        const res = await fetch('/api/customer/driver-chat?unread=1', {
+          cache: 'no-store',
+          credentials: 'same-origin',
+          headers: { 'x-customer-phone': customerPhone }
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!cancelled && res.ok) setDriverChatUnread(data.counts || {});
+      } catch {
+        /* coba lagi nanti */
+      }
+    };
+    void poll();
+    const t = window.setInterval(poll, 15000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(t);
+    };
+  }, [openDriverChatIds, customerPhone]);
   // Log tahap produksi per transaksi aktif — agar progres di kartu Aktivitas sama
   // dengan timeline di detail pesanan.
   const [workLogsByTx, setWorkLogsByTx] = useState<Record<string, WorkLogRow[]>>({});
@@ -1156,11 +1193,6 @@ function CustomerDashboardPage() {
         const fromSettings = safeParse(dbSettings.promos_data, []).map((p: any, i: number) => mapSettingsPromo(p, i));
         setAvailablePromos(fromTable.length ? fromTable : fromSettings);
 
-        const defaultKiloan = svcs.find((s: any) => s.type !== 'pcs') || svcs[0];
-        const defaultSatuan = svcs.find((s: any) => s.type === 'pcs') || svcs[0];
-
-        if (defaultKiloan) setSelectedKiloanSvc(defaultKiloan.name);
-        if (defaultSatuan) setSelectedSatuanSvc(defaultSatuan.name);
       }
 
       const { data: bannerPromos } = await supabase.from('promotions').select('*').order('created_at', { ascending: false });
@@ -1366,10 +1398,14 @@ function CustomerDashboardPage() {
     const relatedPickup = (t.pickup_id ? pickupMap.get(t.pickup_id) : null) || pickupByTx.get(t.id) || null;
     const overlayStatus =
       relatedPickup && isDeliveryInProgress(relatedPickup) ? relatedPickup.status : t.status;
+    // Chat driver: pesanan jemput/antar yang sedang dijalankan driver untuk nota ini.
+    const chatPickup = [pickupByTx.get(t.id), t.pickup_id ? pickupMap.get(t.pickup_id) : null].find((p) => isDriverChatOpen(p));
     return {
       ...t,
       status: overlayStatus,
       pickup_id: t.pickup_id || relatedPickup?.id,
+      driver_chat_id: chatPickup?.id,
+      driver_chat_name: chatPickup?.driver_name,
       pickup_created_at: relatedPickup?.created_at,
       photo_pickup_url: t.photo_pickup_url || relatedPickup?.photo_pickup_url || relatedPickup?.photo_url,
       photo_outlet_url: t.photo_outlet_url || relatedPickup?.photo_outlet_url,
@@ -1386,6 +1422,8 @@ function CustomerDashboardPage() {
     if (!alreadyInTrx) {
       mergedActive.push({
         ...p,
+        driver_chat_id: isDriverChatOpen(p) ? p.id : undefined,
+        driver_chat_name: isDriverChatOpen(p) ? p.driver_name : undefined,
         photo_pickup_url: p.photo_pickup_url || p.photo_url,
         photo_outlet_url: p.photo_outlet_url,
         photo_delivery_url: p.photo_delivery_url || p.photo_antar_url || p.delivery_photo_url,
@@ -1678,7 +1716,8 @@ function CustomerDashboardPage() {
       if (!ok) return;
     }
     setBagCount(String(count));
-    setWashProcess(count > 1 ? nextWashProcess : 'Gabung Semua');
+    // 1 kantong hanya bisa "Dicampur"; pilihan yang belum dibuat tetap kosong.
+    setWashProcess(count > 1 || !nextWashProcess ? nextWashProcess : 'Gabung Semua');
     setKiloanFormError('');
     setKiloanBagForms((prev) =>
       Array.from({ length: n }, (_, i) => prev[i] || emptyKiloanBagForm(selectedKiloanSvc, kiloanDuration))
@@ -1710,7 +1749,7 @@ function CustomerDashboardPage() {
             type="number"
             min="0"
             inputMode="numeric"
-            placeholder="0"
+            placeholder="Isi"
             aria-label={`${BAG_CATEGORY_LABELS[key]} Kantong ${bagIdx + 1}`}
             value={categories[key]}
             onChange={(e) => patchKiloanBagCategory(bagIdx, key, e.target.value.replace(/[^\d]/g, ''))}
@@ -1730,6 +1769,18 @@ function CustomerDashboardPage() {
    */
   const handleAddKiloanToCart = () => {
     setKiloanFormError('');
+    if (!Number(bagCount)) {
+      setKiloanFormError('Isi jumlah kantong dulu (tekan +).');
+      return;
+    }
+    if (!washProcess) {
+      setKiloanFormError('Pilih proses cuci: Dicampur atau Dipisah.');
+      return;
+    }
+    if (!hasFading) {
+      setKiloanFormError('Pilih apakah ada pakaian luntur: Tidak atau Ya.');
+      return;
+    }
     if (isSplitKiloanBags) {
       const n = Math.max(1, Math.min(MAX_KILOAN_BAGS, Number(bagCount) || 1));
       const forms = kiloanBagForms.slice(0, n);
@@ -1737,6 +1788,10 @@ function CustomerDashboardPage() {
         const f = forms[i];
         if (!f?.serviceName) {
           setKiloanFormError(`Pilih jenis kiloan untuk Kantong ${i + 1}.`);
+          return;
+        }
+        if (!f.duration) {
+          setKiloanFormError(`Pilih durasi untuk Kantong ${i + 1}.`);
           return;
         }
         if (!bagCategoryCountsComplete(f.categories)) {
@@ -1756,13 +1811,18 @@ function CustomerDashboardPage() {
           qty: pcs,
           duration: f.duration,
           price: kiloanUnitPriceFor(f.serviceName, f.duration),
-          bagDetail: { ...f.categories }
+          bagDetail: { ...f.categories },
+          bags: 1
         };
       });
       setCartKiloan((prev) => [...prev, ...newLines]);
     } else {
       if (!selectedKiloanSvc) {
         setKiloanFormError('Pilih jenis kiloan dulu.');
+        return;
+      }
+      if (!kiloanDuration) {
+        setKiloanFormError('Pilih durasi kiloan dulu.');
         return;
       }
       const f = kiloanBagForms[0] || emptyKiloanBagForm();
@@ -1777,11 +1837,21 @@ function CustomerDashboardPage() {
       const { pcs, kg } = summarizeBagWeight(f.categories);
       setCartKiloan((prev) => [
         ...prev,
-        { name: selectedKiloanSvc, kg, qty: pcs, duration: kiloanDuration, price: kiloanActiveUnitPrice, bagDetail: { ...f.categories } }
+        {
+          name: selectedKiloanSvc,
+          kg,
+          qty: pcs,
+          duration: kiloanDuration,
+          price: kiloanActiveUnitPrice,
+          bagDetail: { ...f.categories },
+          // Mode campur: semua kantong jadi satu paket (satu mesin).
+          bags: Math.max(1, Number(bagCount) || 1)
+        }
       ]);
     }
-    setBagCount('1');
-    setWashProcess('Gabung Semua');
+    // Paket berikutnya: jumlah kantong & proses cuci dipilih ulang oleh customer.
+    setBagCount('');
+    setWashProcess('');
     setKiloanBagForms([emptyKiloanBagForm(selectedKiloanSvc, kiloanDuration)]);
   };
 
@@ -1907,6 +1977,10 @@ function CustomerDashboardPage() {
       setSatuanFormError('Pilih item satuan dulu.');
       return;
     }
+    if (!satuanInputDuration) {
+      setSatuanFormError('Pilih durasi item ini dulu.');
+      return;
+    }
     const qty = Number(inputSatuanQty) || 1;
     if (satuanPhotoRequired && !satuanPhoto) {
       setSatuanFormError('Memuat pengaturan foto. Coba lagi sebentar.');
@@ -1970,6 +2044,10 @@ function CustomerDashboardPage() {
   // tidak ada lagi fallback implisit dari form yang belum di-commit (form
   // sekarang berisi rincian per kategori, bukan sekadar kg/pcs tunggal).
   const kiloanLines = cartKiloan;
+  // Hasil akhir keranjang: total kantong (paket campur bisa >1 kantong) dan
+  // proses cuci (lebih dari 1 paket = dicuci terpisah).
+  const kiloanBagTotal = kiloanLines.reduce((sum, k) => sum + Math.max(1, Number(k.bags) || 1), 0);
+  const kiloanWashFinal = kiloanLines.length > 1 ? 'Pisah Perkantong' : 'Gabung Semua';
   const kiloanSubtotal = kiloanLines.reduce((sum, line) => sum + kiloanLineTotal(line.price, line.kg), 0);
   const kiloanTotalKg = kiloanOrderKgOf(kiloanLines);
 
@@ -2154,12 +2232,8 @@ function CustomerDashboardPage() {
     // dikirim ke payload harus mencerminkan HASIL AKHIR keranjang kiloan:
     // berapa paket kiloan terpisah yang benar-benar jadi, bukan status form
     // yang sudah direset.
-    const finalKiloanBagCount = hasKiloanOrder ? kiloanLines.length : 1;
-    const finalKiloanWashProcess = hasKiloanOrder
-      ? kiloanLines.length > 1
-        ? 'Pisah Perkantong'
-        : 'Gabung Semua'
-      : '';
+    const finalKiloanBagCount = hasKiloanOrder ? kiloanBagTotal : 1;
+    const finalKiloanWashProcess = hasKiloanOrder ? kiloanWashFinal : '';
     const detailInfo = hasKiloanOrder
       ? `[INFO CUCIAN] Kantong: ${finalKiloanBagCount} | Cuci: ${finalKiloanWashProcess || '-'} | Luntur: ${hasFading || '-'}`
       : '';
@@ -2212,7 +2286,7 @@ function CustomerDashboardPage() {
         const id = savedAddresses.find((a) => a.full_address === pickupFull || a.full_address === customerAddress)?.id || '';
         return /^[0-9a-f-]{36}$/i.test(id) ? id : null;
       })(),
-      duration: kiloanDuration || 'Reguler (3 Hari)',
+      duration: kiloanLines[0]?.duration || 'Reguler (3 Hari)',
       bag_count: finalKiloanBagCount,
       wash_process: finalKiloanWashProcess,
       has_fading: hasKiloanOrder && hasFading === 'Ya',
@@ -2305,7 +2379,10 @@ function CustomerDashboardPage() {
       setNotes('');
       setClaimedPromo(null);
       setLoyaltyRedeem(0);
-      setKiloanDuration('Reguler (3 Hari)');
+      setKiloanDuration('');
+      setSelectedKiloanSvc('');
+      setSelectedSatuanSvc('');
+      setSatuanInputDuration('');
       setKiloanBagForms([emptyKiloanBagForm()]);
       setKiloanFormError('');
       setIsKiloanChecked(false);
@@ -2313,8 +2390,8 @@ function CustomerDashboardPage() {
       setSatuanNotesSame(true);
       setSatuanPieceNotes([{ merk: '', warna: '', corak: '' }]);
       resetSatuanPiecePhotos();
-      setBagCount('1');
-      setWashProcess('Gabung Semua');
+      setBagCount('');
+      setWashProcess('');
       setHasFading('');
       setAgreedNoValuables(false);
       setAgreedTerms(false);
@@ -2918,11 +2995,13 @@ function CustomerDashboardPage() {
                                 disabled={Number(bagCount) <= 1}
                                 onClick={() => applyKiloanBagLayout((Number(bagCount) || 1) - 1, washProcess)}
                               />
-                              <span className="w-8 text-center font-extrabold text-cyan-400">{bagCount}</span>
+                              <span className="w-8 text-center font-extrabold text-cyan-400" aria-label="Jumlah kantong">
+                                {bagCount || '–'}
+                              </span>
                               <StepperBtn
                                 variant="plus"
                                 disabled={Number(bagCount) >= MAX_KILOAN_BAGS}
-                                onClick={() => applyKiloanBagLayout((Number(bagCount) || 1) + 1, washProcess)}
+                                onClick={() => applyKiloanBagLayout((Number(bagCount) || 0) + 1, washProcess)}
                               />
                             </div>
                           </div>
@@ -2933,6 +3012,7 @@ function CustomerDashboardPage() {
                               <button
                                 type="button"
                                 onClick={() => applyKiloanBagLayout(Number(bagCount) || 1, 'Gabung Semua')}
+                                aria-pressed={washProcess === 'Gabung Semua'}
                                 className={`px-3 py-1 rounded-xl font-extrabold text-xs transition ${washProcess === 'Gabung Semua' ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
                               >
                                 Dicampur
@@ -2940,6 +3020,7 @@ function CustomerDashboardPage() {
                               <button
                                 type="button"
                                 onClick={() => applyKiloanBagLayout(Number(bagCount) || 1, 'Pisah Perkantong')}
+                                aria-pressed={washProcess === 'Pisah Perkantong'}
                                 disabled={Number(bagCount) <= 1}
                                 className={`px-3 py-1 rounded-xl font-extrabold text-xs transition disabled:opacity-40 ${washProcess === 'Pisah Perkantong' ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
                               >
@@ -2959,6 +3040,7 @@ function CustomerDashboardPage() {
                               <button
                                 type="button"
                                 onClick={() => setHasFading('Tidak')}
+                                aria-pressed={hasFading === 'Tidak'}
                                 className={`px-3 py-1 rounded-xl font-extrabold text-xs transition ${hasFading === 'Tidak' ? 'bg-cyan-500 text-slate-950 shadow-md shadow-cyan-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
                               >
                                 Tidak
@@ -2966,6 +3048,7 @@ function CustomerDashboardPage() {
                               <button
                                 type="button"
                                 onClick={() => setHasFading('Ya')}
+                                aria-pressed={hasFading === 'Ya'}
                                 className={`px-3 py-1 rounded-xl font-extrabold text-xs transition ${hasFading === 'Ya' ? 'bg-rose-500 text-white shadow-md shadow-rose-500/20' : 'bg-slate-900 border border-slate-700 text-slate-400'}`}
                               >
                                 Ya
@@ -2984,6 +3067,7 @@ function CustomerDashboardPage() {
                               onChange={(e) => setSelectedKiloanSvc(e.target.value)}
                               className="w-full bg-white border border-brand-200 rounded-xl p-2.5 text-xs font-bold text-slate-800"
                             >
+                              <option value="" disabled>-- Pilih jenis kiloan --</option>
                               {kiloanServicesList.map((svc, i) => (
                                 <option key={i} value={svc.name}>{svc.name}</option>
                               ))}
@@ -2991,13 +3075,14 @@ function CustomerDashboardPage() {
                           </div>
                           <div>
                             <label className="text-[10px] text-slate-500 font-bold mb-1 inline-flex items-center gap-1">
-                              Durasi Kiloan <SlaBadge duration={kiloanDuration} />
+                              Durasi Kiloan
                             </label>
                             <select
                               value={kiloanDuration}
                               onChange={(e) => setKiloanDuration(e.target.value)}
                               className="w-full bg-amber-50 border border-amber-300 rounded-xl p-2 text-xs font-extrabold text-amber-800"
                             >
+                              <option value="" disabled>-- Pilih durasi --</option>
                               <option value="Reguler (3 Hari)">Reguler 3 Hari</option>
                               <option value="Oneday">Oneday 24jam</option>
                               <option value="Express">Express 6 Jam</option>
@@ -3010,7 +3095,10 @@ function CustomerDashboardPage() {
                             const { pcs, kg } = summarizeBagWeight(kiloanBagForms[0]?.categories || emptyBagCategoryCounts());
                             return (
                               <p className="text-[10px] text-brand-700 font-bold bg-brand-50 border border-brand-100 rounded-xl px-2.5 py-1.5">
-                                Estimasi: {pcs} pcs · ~{kg} Kg · Rp {kiloanUnitPriceFor(selectedKiloanSvc, kiloanDuration).toLocaleString('id-ID')}/Kg
+                                Estimasi: {pcs} pcs · ~{kg} Kg
+                                {selectedKiloanSvc && kiloanDuration
+                                  ? ` · Rp ${kiloanUnitPriceFor(selectedKiloanSvc, kiloanDuration).toLocaleString('id-ID')}/Kg`
+                                  : ''}
                               </p>
                             );
                           })()}
@@ -3037,13 +3125,14 @@ function CustomerDashboardPage() {
                                 </div>
                                 <div>
                                   <label className="text-[10px] text-slate-500 font-bold mb-1 inline-flex items-center gap-1">
-                                    Durasi <SlaBadge duration={form.duration} />
+                                    Durasi
                                   </label>
                                   <select
                                     value={form.duration}
                                     onChange={(e) => patchKiloanBagField(bagIdx, 'duration', e.target.value)}
                                     className="w-full bg-amber-50 border border-amber-300 rounded-xl p-2 text-xs font-extrabold text-amber-800"
                                   >
+                                    <option value="">-- Pilih durasi --</option>
                                     <option value="Reguler (3 Hari)">Reguler 3 Hari</option>
                                     <option value="Oneday">Oneday 24jam</option>
                                     <option value="Express">Express 6 Jam</option>
@@ -3054,7 +3143,7 @@ function CustomerDashboardPage() {
                                 {renderKiloanBagCategoryInputs(bagIdx, form.categories)}
                                 <p className="text-[10px] text-brand-700 font-bold bg-brand-50 border border-brand-100 rounded-xl px-2.5 py-1.5">
                                   Estimasi Kantong {bagIdx + 1}: {pcs} pcs · ~{kg} Kg
-                                  {form.serviceName ? ` · Rp ${kiloanUnitPriceFor(form.serviceName, form.duration).toLocaleString('id-ID')}/Kg` : ''}
+                                  {form.serviceName && form.duration ? ` · Rp ${kiloanUnitPriceFor(form.serviceName, form.duration).toLocaleString('id-ID')}/Kg` : ''}
                                 </p>
                               </div>
                             );
@@ -3139,6 +3228,7 @@ function CustomerDashboardPage() {
                           onChange={(e) => setSelectedSatuanSvc(e.target.value)}
                           className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-800"
                         >
+                          <option value="" disabled>-- Pilih item satuan --</option>
                           {satuanServicesList.map((svc, i) => (
                             <option key={i} value={svc.name}>{svc.name}</option>
                           ))}
@@ -3151,13 +3241,14 @@ function CustomerDashboardPage() {
                       <div className="grid grid-cols-2 gap-2">
                         <div>
                           <label className="text-[10px] text-slate-500 font-bold mb-1 inline-flex items-center gap-1">
-                            Durasi Item Ini <SlaBadge duration={satuanInputDuration} />
+                            Durasi Item Ini
                           </label>
                           <select
                             value={satuanInputDuration}
                             onChange={(e) => setSatuanInputDuration(e.target.value)}
                             className="w-full bg-amber-50 border border-amber-300 rounded-xl p-2 text-xs font-extrabold text-amber-800"
                           >
+                            <option value="" disabled>-- Pilih durasi --</option>
                             <option value="Reguler (3 Hari)">Reguler 3 Hari</option>
                             <option value="Oneday (1 Hari / 24 Jam)">Oneday 24jam</option>
                             <option value="Express (6 Jam)">Express 6 Jam</option>
@@ -3460,9 +3551,9 @@ function CustomerDashboardPage() {
                           <span className="shrink-0">Rp {(it.price * it.qty).toLocaleString('id-ID')}</span>
                         </p>
                       ))}
-                    {kiloanLines.length > 0 && (bagCount || washProcess || hasFading) ? (
+                    {kiloanLines.length > 0 ? (
                       <p className="text-[10px] text-slate-500">
-                        Kantong: {bagCount || '-'} · Cuci: {washProcess || '-'} · Luntur: {hasFading || '-'}
+                        Kantong: {kiloanBagTotal} · Cuci: {kiloanWashFinal === 'Pisah Perkantong' ? 'Dipisah' : 'Dicampur'} · Luntur: {hasFading || '-'}
                       </p>
                     ) : null}
                     {claimedPromo ? <p className="text-[10px] text-emerald-700 font-bold">Promo: {claimedPromo.title}</p> : null}
@@ -3812,6 +3903,26 @@ function CustomerDashboardPage() {
                               )}
                             </div>
                           </div>
+
+                          {order.driver_chat_id && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const id = String(order.driver_chat_id);
+                                setDriverChat({ id, driverName: String(order.driver_chat_name || 'Driver'), label: formatTrxId(order) });
+                                setDriverChatUnread((prev) => ({ ...prev, [id]: 0 }));
+                              }}
+                              className="relative w-full bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs py-3 rounded-xl shadow-sm inline-flex items-center justify-center gap-1.5"
+                            >
+                              <MessageCircle className="w-4 h-4" /> Chat Driver {order.driver_chat_name ? `(${order.driver_chat_name})` : ''}
+                              {(driverChatUnread[String(order.driver_chat_id)] || 0) > 0 && (
+                                <span className="absolute -top-1.5 -right-1.5 min-w-5 h-5 px-1 rounded-full bg-rose-500 text-white text-[10px] font-black flex items-center justify-center">
+                                  {driverChatUnread[String(order.driver_chat_id)]}
+                                </span>
+                              )}
+                            </button>
+                          )}
 
                           {isSiapDiambil(order) && !isThirdPartyDelivery(order) && (
                             <button
@@ -4895,6 +5006,16 @@ function CustomerDashboardPage() {
         </div>
       )}
       <PhotoLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
+      {driverChat && (
+        <DriverChatSheet
+          as="customer"
+          orderId={driverChat.id}
+          title={`Chat Driver · ${driverChat.driverName}`}
+          subtitle={driverChat.label}
+          customerPhone={customerPhone}
+          onClose={() => setDriverChat(null)}
+        />
+      )}
     </div>
   );
 }

@@ -10,11 +10,13 @@ import StatusBadge from '@/components/ui/StatusBadge';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 import { toast } from '@/lib/toast';
 import { uploadProofFile } from '@/lib/uploadProof';
-import { Camera, Check } from 'lucide-react';
+import { Camera, Check, MessageCircle } from 'lucide-react';
 import GoogleMapsNavButton from '@/components/GoogleMapsNavButton';
 import DriverAttendancePanel from '@/components/driver/DriverAttendancePanel';
 import type { DriverAttendance } from '@/lib/driverAttendance';
 import { clearStaffServerSession } from '@/lib/staffSession';
+import DriverChatSheet from '@/components/DriverChatSheet';
+import { isDriverChatOpen, sameDriverName } from '@/lib/driverChat';
 
 
 const ACTIVE_STATUSES = [
@@ -57,6 +59,8 @@ export default function DriverDashboard() {
   const [loginRole, setLoginRole] = useState('driver');
   const [driverTab, setDriverTab] = useState<'jobs' | 'inbox' | 'account'>('jobs');
   const [uploadingId, setUploadingId] = useState<string | null>(null);
+  const [chatOrder, setChatOrder] = useState<any | null>(null);
+  const [chatUnread, setChatUnread] = useState<Record<string, number>>({});
   const gpsFailed = useRef(false);
   const driverNameRef = useRef('Driver Internal');
   const outletRef = useRef('');
@@ -135,6 +139,33 @@ export default function DriverDashboard() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Pesan pelanggan yang belum dibaca (badge tombol Chat) pada tugas aktif driver ini.
+  const myOpenChatIds = pickups
+    .filter((p) => isDriverChatOpen(p) && sameDriverName(p.driver_name, driverName))
+    .map((p) => String(p.id))
+    .join(',');
+  useEffect(() => {
+    // Tanpa chat terbuka tidak ada yang diambil; tombol chat juga tidak tampil.
+    if (!myOpenChatIds) return;
+    let cancelled = false;
+    const poll = async () => {
+      if (document.visibilityState !== 'visible') return;
+      try {
+        const res = await fetch('/api/staff/driver-chat?unread=1', { cache: 'no-store', credentials: 'same-origin' });
+        const data = await res.json().catch(() => ({}));
+        if (!cancelled && res.ok) setChatUnread(data.counts || {});
+      } catch {
+        /* coba lagi nanti */
+      }
+    };
+    void poll();
+    const t = window.setInterval(poll, 15000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(t);
+    };
+  }, [myOpenChatIds]);
 
   const handleLogout = () => {
     if (confirm('Apakah Anda yakin ingin keluar dari Portal Driver?')) {
@@ -437,6 +468,23 @@ export default function DriverDashboard() {
 
                 <div className="grid grid-cols-1 gap-2">
                   <GoogleMapsNavButton order={p} address={pickupAddress(p)} />
+                  {isDriverChatOpen(p) && sameDriverName(p.driver_name, driverName) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setChatOrder(p);
+                        setChatUnread((prev) => ({ ...prev, [String(p.id)]: 0 }));
+                      }}
+                      className="relative flex items-center justify-center gap-1.5 bg-emerald-600 text-white font-black p-3 rounded-xl text-xs shadow-sm"
+                    >
+                      <MessageCircle className="w-4 h-4" /> Chat Pelanggan
+                      {(chatUnread[String(p.id)] || 0) > 0 && (
+                        <span className="absolute -top-1.5 -right-1.5 min-w-5 h-5 px-1 rounded-full bg-rose-500 text-white text-[10px] font-black flex items-center justify-center">
+                          {chatUnread[String(p.id)]}
+                        </span>
+                      )}
+                    </button>
+                  )}
                   <div className="grid grid-cols-2 gap-2">
                   <button
                     onClick={() => handleOpenWA(phoneOf(p), isDeliveryJob(p.status))}
@@ -538,6 +586,15 @@ export default function DriverDashboard() {
           </button>
         </nav>
       </div>
+      {chatOrder && (
+        <DriverChatSheet
+          as="driver"
+          orderId={String(chatOrder.id)}
+          title={chatOrder.customer_name || 'Pelanggan'}
+          subtitle={`${chatOrder.order_number || 'Pesanan'} · ${chatOrder.status || ''}`}
+          onClose={() => setChatOrder(null)}
+        />
+      )}
     </div>
   );
 

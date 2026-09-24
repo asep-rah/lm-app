@@ -2,7 +2,6 @@
 
 import type { LucideIcon } from 'lucide-react';
 import {
-  AlertCircle,
   Box,
   CheckCircle2,
   Clock,
@@ -16,7 +15,6 @@ import {
   Truck,
   Wallet,
   Wind,
-  Zap,
   Star
 } from 'lucide-react';
 import { displayStatusLabel } from '@/lib/stageTimeline';
@@ -101,33 +99,6 @@ export function StatusPill({ status }: { status?: string }) {
       {label}
     </span>
   );
-}
-
-export function SlaBadge({ duration, createdAt }: { duration?: string; createdAt?: string }) {
-  const d = String(duration || '');
-  const express = /express|quick|oneday/i.test(d);
-  let slaHours = 72;
-  if (/quick|3 jam/i.test(d)) slaHours = 3;
-  else if (/express|6 jam/i.test(d)) slaHours = 6;
-  else if (/oneday|1 hari/i.test(d)) slaHours = 24;
-  const created = createdAt ? new Date(createdAt).getTime() : 0;
-  const overdue = Boolean(created && Date.now() - created > slaHours * 3_600_000);
-
-  if (overdue) {
-    return (
-      <span className="inline-flex items-center gap-1 text-[9px] font-black text-rose-600 bg-rose-50 border border-rose-100 px-1.5 py-0.5 rounded-full">
-        <AlertCircle className="w-3 h-3 animate-pulse" /> Overdue
-      </span>
-    );
-  }
-  if (express) {
-    return (
-      <span className="inline-flex items-center gap-1 text-[9px] font-black text-amber-700 bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded-full">
-        <Zap className="w-3 h-3" /> Express
-      </span>
-    );
-  }
-  return null;
 }
 
 export function StepperBtn({

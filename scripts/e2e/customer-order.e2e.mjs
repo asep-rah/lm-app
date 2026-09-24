@@ -222,6 +222,26 @@ const CATEGORY_LABELS = {
   bra: 'Bra'
 };
 const asLabeled = (counts) => Object.fromEntries(Object.entries(counts).map(([k, v]) => [CATEGORY_LABELS[k], v]));
+const kiloanServiceSelect = (page) => page.locator('label:has-text("Pilih Jenis Kiloan") + select');
+const kiloanDurationSelect = (page) => page.locator('label:has-text("Durasi Kiloan") + select');
+// Nothing is preselected in the kiloan form: the customer picks every choice.
+// Pass null to leave a choice as it is (e.g. luntur is asked once per order).
+const chooseKiloan = async (
+  page,
+  { bags = 1, wash = 'Dicampur', fading = 'Tidak', service = 'Cuci Kering Lipat', duration = 'Reguler 3 Hari' } = {}
+) => {
+  const plus = page.locator('button[aria-label="Tambah"]').first(); // "Jumlah Kantong" stepper (first on the page)
+  for (let i = 0; i < bags; i++) await plus.click();
+  if (wash) await page.getByRole('button', { name: wash, exact: true }).click();
+  if (fading) await page.getByRole('button', { name: fading, exact: true }).first().click();
+  if (service) await kiloanServiceSelect(page).selectOption({ label: service });
+  if (duration) await kiloanDurationSelect(page).selectOption({ label: duration });
+};
+// Satuan item + its duration also start empty.
+const chooseSatuan = async (page, { item = 'Bedcover Single', duration = 'Reguler 3 Hari' } = {}) => {
+  await page.locator('label:has-text("Pilih Item Satuan") + select').selectOption({ label: item });
+  await page.locator('label:has-text("Durasi Item Ini") + select').selectOption({ label: duration });
+};
 
 // A visible, tiny PNG file for upload — a real image/png so client-side
 // compression (canvas decode) succeeds instead of falling through.
@@ -318,6 +338,31 @@ const TEST_PHOTO = {
     await page.getByRole('button', { name: /Lanjut/ }).click();
     await page.getByRole('alert').filter({ hasText: 'Tambah Paket Kiloan Ini' }).waitFor();
   });
+  await step('Order step 2: nothing is preselected — every kiloan choice is asked for, no "Express" badge', async () => {
+    assert.equal(await page.locator('[aria-label="Jumlah kantong"]').innerText(), '–');
+    assert.equal(await kiloanServiceSelect(page).inputValue(), '');
+    assert.equal(await kiloanDurationSelect(page).inputValue(), '');
+    for (const name of ['Dicampur', 'Dipisah', 'Tidak', 'Ya']) {
+      assert.equal(await page.getByRole('button', { name, exact: true }).first().getAttribute('aria-pressed'), 'false', name);
+    }
+    const add = page.getByRole('button', { name: 'Tambah Paket Kiloan Ini' });
+    const expectAlert = async (text) => {
+      await add.click();
+      await page.getByRole('alert').filter({ hasText: text }).waitFor();
+    };
+    await expectAlert('jumlah kantong');
+    await page.locator('button[aria-label="Tambah"]').first().click();
+    assert.equal(await page.locator('[aria-label="Jumlah kantong"]').innerText(), '1');
+    await expectAlert('proses cuci');
+    await page.getByRole('button', { name: 'Dicampur', exact: true }).click();
+    await expectAlert('pakaian luntur');
+    await page.getByRole('button', { name: 'Tidak', exact: true }).first().click();
+    await expectAlert('Pilih jenis kiloan');
+    await kiloanServiceSelect(page).selectOption({ label: 'Cuci Kering Lipat' });
+    await expectAlert('durasi kiloan');
+    await kiloanDurationSelect(page).selectOption({ label: 'Oneday 24jam' });
+    assert.equal(await page.getByText('Express', { exact: true }).count(), 0, 'no Express badge next to the duration');
+  });
   await step('Order step 2: all 5 category inputs are required (0 allowed, empty is not)', async () => {
     await page.getByRole('button', { name: 'Tambah Paket Kiloan Ini' }).click();
     await page.getByRole('alert').filter({ hasText: 'Lengkapi semua isian' }).waitFor();
@@ -339,6 +384,9 @@ const TEST_PHOTO = {
   });
   await step('Order step 2: adding more kiloan reaches the 3kg minimum and clears the error', async () => {
     // Add a 2nd combined package: 12 × baju ringan (200g) = 2.4kg → total 3.3kg.
+    // Jumlah kantong & proses cuci are chosen again for every package.
+    assert.equal(await page.locator('[aria-label="Jumlah kantong"]').innerText(), '–');
+    await chooseKiloan(page, { fading: null, service: null, duration: null });
     await fillKiloanBag(page, 0, asLabeled({ bajuRingan: 12, celanaBiasa: 0, celanaJeans: 0, cd: 0, bra: 0 }));
     await page.getByRole('button', { name: 'Tambah Paket Kiloan Ini' }).click();
     assert.equal(await page.getByRole('alert').filter({ hasText: 'Total kiloan' }).count(), 0);
@@ -346,6 +394,9 @@ const TEST_PHOTO = {
 
   await step('Order step 2: satuan item is blocked without a photo', async () => {
     await page.getByText('Items Satuan', { exact: false }).click();
+    await page.getByRole('button', { name: 'Tambah Item Satuan Ini' }).click();
+    await page.getByRole('alert').filter({ hasText: 'Pilih item satuan' }).waitFor();
+    await chooseSatuan(page);
     await page.getByRole('button', { name: 'Tambah Item Satuan Ini' }).click();
     await page.getByRole('alert').filter({ hasText: 'wajib' }).waitFor();
   });
@@ -433,6 +484,9 @@ const TEST_PHOTO = {
     const totalKg = kiloanItems.reduce((s2, it) => s2 + Number(it.weight || 0), 0);
     assert.ok(totalKg >= 3, `total kiloan kg ${totalKg} should be >= 3`);
     assert.deepEqual(kiloanItems[0].bag_category_counts, { bajuRingan: '2', celanaBiasa: '1', celanaJeans: '0', cd: '0', bra: '0' });
+    assert.equal(kiloanItems[0].duration, 'Oneday', 'the duration the customer picked, no default');
+    assert.equal(o.bag_count, 2, 'two packages of 1 kantong each');
+    assert.equal(o.has_fading, false, 'luntur answered "Tidak"');
     // Satuan item carries the uploaded photo's storage PATH (not a public URL).
     const satuanItems = o.items.filter((it) => it.type === 'pcs');
     assert.equal(satuanItems.length, 1);
@@ -468,8 +522,10 @@ const TEST_PHOTO = {
   await step('Split bags: increasing Jumlah Kantong to 2 and choosing "Dipisah" renders Kantong 1 & 2', async () => {
     await page.getByRole('button', { name: 'Tambah', exact: false }).count(); // no-op sanity
     const plus = page.locator('button[aria-label="Tambah"]');
+    await plus.first().click(); // bagCount – -> 1
     await plus.first().click(); // bagCount 1 -> 2
     await page.getByRole('button', { name: 'Dipisah' }).click();
+    await page.getByRole('button', { name: 'Tidak', exact: true }).first().click(); // luntur
     await page.getByText('Kantong 1', { exact: true }).waitFor();
     await page.getByText('Kantong 2', { exact: true }).waitFor();
   });
@@ -494,6 +550,11 @@ const TEST_PHOTO = {
     const kantong2 = page.getByText('Kantong 2', { exact: true }).locator('xpath=..');
     await kantong1.getByRole('combobox').first().selectOption({ label: 'Cuci Kering Lipat' });
     await kantong2.getByRole('combobox').first().selectOption({ label: 'Cuci Setrika' });
+    // Durations start empty per kantong too.
+    await page.getByRole('button', { name: 'Tambah Paket Kiloan Ini' }).click();
+    await page.getByRole('alert').filter({ hasText: 'Pilih durasi untuk Kantong 1' }).waitFor();
+    await kantong1.getByRole('combobox').nth(1).selectOption({ label: 'Reguler 3 Hari' });
+    await kantong2.getByRole('combobox').nth(1).selectOption({ label: 'Quick 3 Jam' });
     await fillKiloanBag(page, 0, asLabeled({ bajuRingan: 10, celanaBiasa: 0, celanaJeans: 0, cd: 0, bra: 0 })); // 2kg
     await fillKiloanBag(page, 1, asLabeled({ bajuRingan: 0, celanaBiasa: 2, celanaJeans: 0, cd: 0, bra: 0 })); // 1kg
     await page.getByRole('button', { name: 'Tambah Paket Kiloan Ini' }).click();
@@ -503,6 +564,7 @@ const TEST_PHOTO = {
     await page.getByText('Cuci Setrika · ~1 Kg', { exact: false }).waitFor();
     // Form resets to a single combined bag ready for the next addition.
     assert.equal(await page.getByText('Kantong 1', { exact: true }).count(), 0);
+    assert.equal(await page.locator('[aria-label="Jumlah kantong"]').innerText(), '–');
   });
 
   await step('Split bags: fill required agreements/name and submit — payload carries 2 distinct kiloan lines with per-bag detail', async () => {
@@ -522,6 +584,8 @@ const TEST_PHOTO = {
     assert.equal(kiloanItems.length, 2, 'two separate bags -> two separate kiloan lines');
     assert.equal(kiloanItems[0].name, 'Cuci Kering Lipat');
     assert.equal(kiloanItems[1].name, 'Cuci Setrika');
+    assert.equal(kiloanItems[0].duration, 'Reguler (3 Hari)');
+    assert.equal(kiloanItems[1].duration, 'Quick');
     assert.equal(kiloanItems[0].weight, 2);
     assert.equal(kiloanItems[1].weight, 1);
     assert.deepEqual(kiloanItems[0].bag_category_counts, { bajuRingan: '10', celanaBiasa: '0', celanaJeans: '0', cd: '0', bra: '0' });
@@ -552,6 +616,7 @@ const TEST_PHOTO = {
     await page.getByRole('button', { name: /Lanjut/ }).click();
     await page.getByRole('tab', { name: /Layanan/, selected: true }).waitFor();
     await page.getByText('Paket Laundry Kiloan').click();
+    await chooseKiloan(page, { bags: 2, wash: 'Dicampur' }); // 2 kantong, one wash
     await fillKiloanBag(page, 0, asLabeled({ bajuRingan: 15, celanaBiasa: 0, celanaJeans: 0, cd: 0, bra: 0 })); // 3kg
     await page.getByRole('button', { name: 'Tambah Paket Kiloan Ini' }).click();
     await page.getByRole('button', { name: /Lanjut/ }).click();
@@ -570,6 +635,8 @@ const TEST_PHOTO = {
     assert.ok(o.pickup_time, 'scheduled orders keep an explicit pickup_time');
     assert.ok(o.scheduled_at && o.pickup_at, 'scheduled_at/pickup_at set for the scheduling classification');
     assert.equal(o.status, 'Terjadwal');
+    assert.equal(o.bag_count, 2, 'combined package keeps the chosen number of kantong');
+    assert.equal(o.wash_process, 'Gabung Semua');
   });
 
   await s.close();
@@ -602,6 +669,7 @@ const checkAllAgreements = async (page) => {
   await step('Photo feature off: no upload control and satuan items are not blocked', async () => {
     await page.getByText('Items Satuan', { exact: false }).click();
     await page.getByText('Merk', { exact: false }).first().waitFor();
+    await chooseSatuan(page);
     assert.equal(await page.getByLabel('Unggah foto item satuan').count(), 0);
     await page.getByRole('button', { name: 'Tambah Item Satuan Ini' }).click();
     assert.equal(await page.getByRole('alert').filter({ hasText: 'foto' }).count(), 0);
@@ -623,6 +691,7 @@ const checkAllAgreements = async (page) => {
   await step('Photo required but session unverified: upload hidden, satuan blocked with a clear message', async () => {
     await page.getByText('Items Satuan', { exact: false }).click();
     await page.getByText('verifikasi WhatsApp/email', { exact: false }).first().waitFor();
+    await chooseSatuan(page);
     assert.equal(await page.getByLabel('Unggah foto item satuan').count(), 0);
     await page.getByRole('button', { name: 'Tambah Item Satuan Ini' }).click();
     await page.getByRole('alert').filter({ hasText: 'verifikasi WhatsApp/email' }).waitFor();
@@ -643,6 +712,7 @@ const checkAllAgreements = async (page) => {
   const { page } = s;
   await gotoStep2(page);
   await page.getByText('Paket Laundry Kiloan').click();
+  await chooseKiloan(page);
   await fillKiloanBag(page, 0, asLabeled({ bajuRingan: 15, celanaBiasa: 0, celanaJeans: 0, cd: 0, bra: 0 }));
   await page.getByRole('button', { name: 'Tambah Paket Kiloan Ini' }).click();
   await page.getByRole('button', { name: /Lanjut/ }).click();
