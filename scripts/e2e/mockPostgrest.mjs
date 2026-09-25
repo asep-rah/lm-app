@@ -1,6 +1,6 @@
 // Minimal in-memory PostgREST mock for local E2E of the customer auth routes.
 // Supports: select (all columns), eq/neq/gte/lte/is/not.is/in/ilike filters, or=(…),
-// order, limit, count=exact (HEAD/GET), insert, update (PATCH), upsert on_conflict,
+// order, limit, count=exact (HEAD/GET), insert, update (PATCH), delete, upsert on_conflict,
 // Accept object (single), unique constraints mirroring the migration.
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
@@ -134,6 +134,11 @@ export function startMock(port) {
         if (uniqueViolation(table, next, r)) return send(res, 409, { code: '23505', message: 'duplicate key value violates unique constraint' });
       }
       rows.forEach((r) => Object.assign(r, payload));
+      return prefer.includes('return=representation') ? out(rows) : send(res, 204, undefined);
+    }
+    if (req.method === 'DELETE') {
+      const rows = filterRows(db[table], params);
+      db[table] = db[table].filter((r) => !rows.includes(r));
       return prefer.includes('return=representation') ? out(rows) : send(res, 204, undefined);
     }
     return send(res, 405, { message: 'method' });

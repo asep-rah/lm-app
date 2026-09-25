@@ -5,7 +5,8 @@
 // - /api/customer/order/create: pin required, 30 km service radius, outlet
 //   penuh / coming soon refused;
 // - /api/staff/pickup-pin: only the assigned driver on the way, accurate GPS,
-//   updates the order + the same customer's saved address, audited.
+//   updates the order + the same customer's saved address, audited;
+// - /api/customer/addresses: a customer only reads/changes their own rows.
 import { spawn } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { startMock, state } from './mockPostgrest.mjs';
@@ -175,6 +176,57 @@ await step('Pin correction: no session → 401 STAFF_SESSION_REQUIRED; cross-sit
   assert.equal(none.json.code, 'STAFF_SESSION_REQUIRED');
   assert.equal((await post('/api/staff/pickup-pin', { orderId: ORDER, ...GATE, accuracy: 9 }, { cookie: staff('1', 'driver'), origin: 'https://evil.example' })).status, 403);
   assert.equal((await pin({ orderId: 'nope', ...GATE, accuracy: 9 })).status, 400);
+});
+
+// --- saved addresses: server-only writes (/api/customer/addresses) --------------
+const addresses = (body, { cookie = customer, origin = APP } = {}) => post('/api/customer/addresses', body, { cookie, origin });
+const listAddresses = async (cookie = customer) => {
+  const res = await fetch(APP + '/api/customer/addresses', { headers: { cookie } });
+  return { status: res.status, json: await res.json().catch(() => null) };
+};
+const other = state.customer_addresses.find((x) => x.id === ADDR_OTHER);
+const otherBefore = JSON.stringify(other);
+
+await step('Addresses: a customer lists only their own rows (08… session matches a 62… row)', async () => {
+  const r = await listAddresses();
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.deepEqual(r.json.addresses.map((a) => a.id), [ADDR]);
+  assert.equal(r.json.addresses[0].is_primary, true);
+});
+let added = '';
+await step('Addresses: save a new one (stored under the session phone), make it primary', async () => {
+  const r = await addresses({ action: 'save', address: { id: 'local_x', label: 'Kantor', full_address: 'Jl Merdeka No. 5', is_primary: true, latitude: -6.9, longitude: 107.61 } });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(r.json.addresses.length, 2);
+  const row = r.json.addresses.find((a) => a.label === 'Kantor');
+  added = row.id;
+  assert.equal(row.is_primary, true);
+  assert.equal(r.json.addresses.filter((a) => a.is_primary).length, 1);
+  assert.equal(state.customer_addresses.find((x) => x.id === added).customer_phone, '081111111111');
+});
+await step("Addresses: another customer's row is never changed or deleted (update by its id → new own row; delete → 404)", async () => {
+  const r = await addresses({ action: 'save', address: { id: ADDR_OTHER, label: 'Hack', full_address: 'Jl Hack No. 1' } });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.addresses.length, 3);
+  assert.equal((await addresses({ action: 'delete', id: ADDR_OTHER })).status, 404);
+  assert.equal((await addresses({ action: 'primary', id: ADDR_OTHER })).status, 404);
+  assert.equal(JSON.stringify(state.customer_addresses.find((x) => x.id === ADDR_OTHER)), otherBefore);
+});
+await step('Addresses: edit own, switch primary, delete the primary → the oldest becomes primary', async () => {
+  const e = await addresses({ action: 'save', address: { id: ADDR, label: 'Rumah', full_address: 'Jl Dago No. 1A' } });
+  assert.equal(e.json.addresses.find((a) => a.id === ADDR).full_address, 'Jl Dago No. 1A');
+  const p = await addresses({ action: 'primary', id: ADDR });
+  assert.equal(p.json.addresses.find((a) => a.is_primary).id, ADDR);
+  const d = await addresses({ action: 'delete', id: ADDR });
+  assert.equal(d.status, 200);
+  assert.ok(!d.json.addresses.some((a) => a.id === ADDR));
+  assert.equal(d.json.addresses.filter((a) => a.is_primary).length, 1);
+});
+await step('Addresses: bad input 400; phone of someone else with a session 403; cross-site 403; unknown action 400', async () => {
+  assert.equal((await addresses({ action: 'save', address: { full_address: 'x' } })).status, 400);
+  assert.equal((await addresses({ action: 'save', phone: '082222222222', address: { full_address: 'Jl Dago No. 9' } })).status, 403);
+  assert.equal((await addresses({ action: 'save', address: { full_address: 'Jl Dago No. 9' } }, { origin: 'https://evil.example' })).status, 403);
+  assert.equal((await addresses({ action: 'drop' })).status, 400);
 });
 
 process.kill(-app.pid, 'SIGKILL');

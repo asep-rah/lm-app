@@ -558,6 +558,7 @@ A: `docs/SECURITY_AND_MAINTENANCE.md` (env, SQL, checklist fraud mingguan).
 | GET | `/api/owner/system-health` | Bearer ops + role resync |
 | GET/POST | `/api/owner/employees` | Bearer ops + role resync |
 | POST | `/api/staff/pickup-pin` | Sesi staf (cookie) + role driver yang ditugaskan |
+| GET/POST | `/api/customer/addresses` | Sesi pelanggan terverifikasi (nomor legacy selama login lama aktif); hanya alamat nomor sendiri |
 
 ### 5.2 Migrasi SQL wajib (urut)
 

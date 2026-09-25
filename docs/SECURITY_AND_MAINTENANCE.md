@@ -52,6 +52,8 @@ Urutan di SQL Editor:
 10. `20260930_order_driver_chat.sql` — tabel chat driver ↔ pelanggan `order_driver_chats` (service-role only, RLS on, tanpa akses anon/authenticated). Jalankan **sebelum** deploy fitur chat driver.
 11. `20261001_customer_phone_keys_international.sql` — fungsi deposit `customer_phone_keys` mengenali nomor luar negeri (`+kode negara…`) tanpa membuat kembaran nomor Indonesia. Hasil untuk semua bentuk nomor Indonesia identik dengan sebelumnya. Jalankan **sebelum** deploy fitur nomor luar negeri.
 12. `20261002_outlet_capacity_manual.sql` — status "outlet penuh" (`outlets.is_overcapacity`) hanya diubah server lewat `/api/staff/outlet-capacity` (owner/supervisor, tercatat di `audit_logs`). Trigger menolak perubahan kolom ini dari browser (anon/authenticated); service_role hanya boleh UPDATE kolom ini. Jalankan **sebelum** deploy.
+13. `20261003_pickup_pin_correction.sql` — service_role hanya boleh UPDATE `latitude`/`longitude` di `pickup_orders` dan `customer_addresses` (koreksi titik oleh driver, `/api/staff/pickup-pin`).
+14. `20261004_customer_addresses_server_only.sql` — anon/authenticated **tidak bisa lagi** INSERT/UPDATE/DELETE `customer_addresses` (dulu `grant all`, siapa pun bisa mengubah alamat pelanggan lain). Pelanggan menyimpan alamat lewat `/api/customer/addresses` (hanya baris nomornya sendiri). SELECT dari browser masih ada untuk dashboard CS; pindah ke server adalah langkah terpisah. Jalankan **sesudah** deploy (versi lama aplikasi menulis alamat langsung dari browser).
 
 `pickup_orders.pickup_date` tetap **NOT NULL** di produksi; aplikasi mengisi tanggal lokal hari ini untuk order tanpa jadwal (jemput sekarang, request antar). Tidak ada migrasi yang melonggarkan constraint itu.
 
@@ -60,6 +62,7 @@ Cek cepat:
 - Table Editor → RLS on: `error_logs`, `webhook_logs`, `audit_logs`, `deposit_payment_credits`.
 - Coba dari browser console dengan anon key: `delete` transaksi harus gagal; `rpc('credit_customer_deposit')` harus gagal.
 - Dengan anon key: `storage.from('satuan-item-photos').list()` kosong, `download`/`createSignedUrl` gagal.
+- Dengan anon key: `from('customer_addresses').update({ full_address: 'x' }).eq('id', '…')` harus gagal (permission denied).
 
 ### Reset data (opsional, sekali jalan)
 

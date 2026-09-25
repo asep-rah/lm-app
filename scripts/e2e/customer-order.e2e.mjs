@@ -126,6 +126,26 @@ async function newScenario(opts = {}) {
         }
         return route.fulfill({ json: { id: row.id, order_number: row.order_number, status: row.status } });
       }
+      // Saved addresses are served by the server (/api/customer/addresses,
+      // covered by scripts/e2e/pickup-location.e2e.mjs); stubbed from the mock table.
+      if (url.pathname === '/api/customer/addresses') {
+        const listOut = () => {
+          const rows = tables.customer_addresses || [];
+          const primary = rows.find((r) => r.is_primary)?.id || rows[0]?.id;
+          return { addresses: rows.map((r) => ({ id: r.id, label: r.label_name || 'Alamat', full_address: r.full_address, is_primary: r.id === primary, latitude: r.latitude ?? null, longitude: r.longitude ?? null })) };
+        };
+        if (req.method() === 'GET') return route.fulfill({ json: listOut() });
+        const body = req.postDataJSON() || {};
+        tables.customer_addresses = tables.customer_addresses || [];
+        if (body.action === 'save') {
+          const a = body.address || {};
+          const own = tables.customer_addresses.find((r) => r.id === a.id);
+          const fields = { label_name: a.label, full_address: a.full_address, latitude: a.latitude ?? null, longitude: a.longitude ?? null };
+          if (own) Object.assign(own, fields);
+          else tables.customer_addresses.push({ id: `addr-${tables.customer_addresses.length + 1}`, customer_phone: '085172141494', is_primary: false, ...fields });
+        }
+        return route.fulfill({ json: listOut() });
+      }
       if (url.pathname === '/api/customer/order/report-error') {
         reports.push(req.postData() || '');
         return route.fulfill({ json: { ok: true } });

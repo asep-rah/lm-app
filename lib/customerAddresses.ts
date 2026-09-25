@@ -1,5 +1,8 @@
-import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
-import { supabase } from '@/lib/supabaseClient';
+/**
+ * Saved pickup addresses of the customer. Read and written through
+ * /api/customer/addresses (the browser key can no longer write
+ * customer_addresses); localStorage keeps a copy for offline / first paint.
+ */
 
 export type SavedAddress = {
   id: string;
@@ -61,34 +64,33 @@ const withSinglePrimary = (rows: SavedAddress[], primaryId?: string) => {
 export const primaryAddressOf = (rows: SavedAddress[]) =>
   rows.find((r) => r.is_primary)?.full_address || rows[0]?.full_address || '';
 
+const ENDPOINT = '/api/customer/addresses';
+
+/** Server list, or null when the server could not be reached / refused. */
+async function callServer(phone: string, body?: Record<string, unknown>): Promise<SavedAddress[] | null> {
+  try {
+    const res = await fetch(ENDPOINT, {
+      method: body ? 'POST' : 'GET',
+      cache: 'no-store',
+      credentials: 'same-origin',
+      headers: body ? { 'Content-Type': 'application/json' } : { 'x-customer-phone': phone },
+      body: body ? JSON.stringify({ ...body, phone }) : undefined
+    });
+    if (!res.ok) return null;
+    const data = await res.json().catch(() => null);
+    return Array.isArray(data?.addresses) ? (data.addresses as Record<string, unknown>[]).map(mapRow) : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function loadCustomerAddresses(phone: string): Promise<SavedAddress[]> {
   const local = readLocal(phone);
   if (!phone) return local;
-  try {
-    let query = supabase
-      .from('customer_addresses')
-      .select('id, customer_phone, label_name, full_address, is_primary, latitude, longitude')
-      .eq('customer_phone', phone)
-      .order('created_at', { ascending: true });
-    let { data, error } = await query;
-    if (error && /latitude|longitude/i.test(String(error.message || ''))) {
-      const retry = await supabase
-        .from('customer_addresses')
-        .select('id, customer_phone, label_name, full_address, is_primary')
-        .eq('customer_phone', phone)
-        .order('created_at', { ascending: true });
-      data = (retry.data || null) as typeof data;
-      error = retry.error;
-    }
-    if (error || !data) return local;
-    const remote = (data as Record<string, unknown>[]).map(mapRow).filter((a) => a.full_address);
-    if (!remote.length) return local;
-    const merged = withSinglePrimary(remote);
-    writeLocal(phone, merged);
-    return merged;
-  } catch {
-    return local;
-  }
+  const remote = await callServer(phone);
+  if (!remote || !remote.length) return local;
+  writeLocal(phone, remote);
+  return remote;
 }
 
 export async function upsertCustomerAddress(
@@ -107,8 +109,8 @@ export async function upsertCustomerAddress(
   const full_address = String(draft.full_address || '').trim();
   if (!full_address) return current;
 
-  const isNew = !draft.id || draft.id.startsWith('local_') || draft.id.startsWith('addr_');
-  const id = isNew ? newId() : String(draft.id);
+  // Optimistic local copy first (works offline / before login).
+  const id = draft.id || newId();
   const makePrimary = draft.is_primary === true || current.length === 0;
   const nextRow: SavedAddress = {
     id,
@@ -121,67 +123,25 @@ export async function upsertCustomerAddress(
   const without = current.filter((r) => r.id !== draft.id && r.id !== id);
   const next = withSinglePrimary([...without, nextRow], makePrimary ? id : undefined);
   writeLocal(phone, next);
-
   if (!phone) return next;
 
-  const payload = {
-    id,
-    customer_phone: phone,
-    label_name: label,
-    full_address,
-    is_primary: nextRow.is_primary,
-    latitude: nextRow.latitude,
-    longitude: nextRow.longitude
-  };
-
-  if (isNew) {
-    await insertWithFallback('customer_addresses', [
-      payload,
-      { customer_phone: phone, label_name: label, full_address, is_primary: nextRow.is_primary, latitude: nextRow.latitude, longitude: nextRow.longitude },
-      { customer_phone: phone, label_name: label, full_address, is_primary: nextRow.is_primary },
-      { customer_phone: phone, full_address, is_primary: nextRow.is_primary }
-    ]);
-  } else {
-    await updateWithFallback(
-      'customer_addresses',
-      [
-        { label_name: label, full_address, is_primary: nextRow.is_primary, latitude: nextRow.latitude, longitude: nextRow.longitude },
-        { label_name: label, full_address, is_primary: nextRow.is_primary },
-        { full_address, is_primary: nextRow.is_primary },
-        { full_address }
-      ],
-      { column: 'id', value: id }
-    );
-  }
-
-  if (nextRow.is_primary) {
-    await Promise.all(
-      next
-        .filter((r) => r.id !== id)
-        .map((r) =>
-          updateWithFallback('customer_addresses', [{ is_primary: false }], { column: 'id', value: r.id })
-        )
-    );
-  }
-
-  return next;
+  const remote = await callServer(phone, {
+    action: 'save',
+    address: { id: draft.id, label, full_address, is_primary: nextRow.is_primary, latitude: nextRow.latitude, longitude: nextRow.longitude }
+  });
+  if (!remote) return next;
+  writeLocal(phone, remote);
+  return remote;
 }
 
 export async function removeCustomerAddress(phone: string, current: SavedAddress[], id: string): Promise<SavedAddress[]> {
   const remaining = withSinglePrimary(current.filter((r) => r.id !== id));
   writeLocal(phone, remaining);
-  if (phone && id && !id.startsWith('local_')) {
-    try {
-      await supabase.from('customer_addresses').delete().eq('id', id);
-    } catch {
-      /* ignore */
-    }
-  }
-  const newPrimary = remaining.find((r) => r.is_primary);
-  if (newPrimary && phone) {
-    await updateWithFallback('customer_addresses', [{ is_primary: true }], { column: 'id', value: newPrimary.id });
-  }
-  return remaining;
+  if (!phone || !id || id.startsWith('local_') || id.startsWith('addr_')) return remaining;
+  const remote = await callServer(phone, { action: 'delete', id });
+  if (!remote) return remaining;
+  writeLocal(phone, remote);
+  return remote;
 }
 
 export async function setPrimaryCustomerAddress(
@@ -192,10 +152,8 @@ export async function setPrimaryCustomerAddress(
   const next = withSinglePrimary(current, id);
   writeLocal(phone, next);
   if (!phone) return next;
-  await Promise.all(
-    next.map((r) =>
-      updateWithFallback('customer_addresses', [{ is_primary: r.is_primary }], { column: 'id', value: r.id })
-    )
-  );
-  return next;
+  const remote = await callServer(phone, { action: 'primary', id });
+  if (!remote) return next;
+  writeLocal(phone, remote);
+  return remote;
 }
