@@ -36,6 +36,7 @@ export default function NeracaStatement({ title, asOf, sheet }: Props) {
           <Line label="Piutang Usaha" value={sheet.receivables} indent={2} />
           <Line label="QRIS / Gateway Clearing" value={sheet.gatewayClearing || 0} indent={2} />
           <Line label="Aset Lancar Lainnya" value={sheet.otherCurrent} indent={2} />
+          {sheet.thrFund ? <Line label="Dana Tabungan THR" value={sheet.thrFund} indent={2} /> : null}
           <Line label="Jumlah Aset Lancar" value={sheet.currentAssets} total />
           <Sub>ASET TIDAK LANCAR</Sub>
           <p className="text-[10px] font-black uppercase text-slate-400 pt-2 pl-3">Aset Tetap</p>
@@ -59,6 +60,7 @@ export default function NeracaStatement({ title, asOf, sheet }: Props) {
           <Line label="Utang Usaha" value={sheet.tradePayables} indent={2} />
           <p className="text-[10px] font-bold text-slate-400 pt-1 pl-6">Kewajiban Jangka Pendek Lainnya</p>
           <Line label="Bagi Hasil Pengelolaan" value={sheet.profitShare} indent={3} />
+          {sheet.thrPayable ? <Line label="Utang THR Crew" value={sheet.thrPayable} indent={3} /> : null}
           <Line label="Jumlah Liabilitas Jangka Pendek" value={sheet.shortLiab} total indent={1} />
           <p className="text-[10px] font-black uppercase text-slate-400 pt-2 pl-3">Liabilitas Jangka Panjang</p>
           <Line label="Utang Usaha Jangka Panjang" value={sheet.longTermPayables} indent={2} />

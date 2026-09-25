@@ -54,7 +54,8 @@ export default function LabaRugiPage() {
       const [bundle, savedRates, books] = await Promise.all([loadOwnerFinanceBundle(), loadProfitShareRates(), loadOutletBooks()]);
       if (cancelled) return;
       setOutlets(bundle.outlets);
-      setSource({ txs: bundle.txs, mems: bundle.mems, exps: bundle.exps });
+      // Transaksi void ikut dimuat: dibatalkan di bulan lain → dibalik di bulan void (txRevenueSign).
+      setSource({ txs: [...bundle.txs, ...bundle.voidedTxs], mems: bundle.mems, exps: bundle.exps });
       setBookStore(books);
       const next: Record<string, number> = {};
       bundle.outlets.forEach((o) => {

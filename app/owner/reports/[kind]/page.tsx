@@ -19,6 +19,9 @@ import {
   countMissingPaidAt
 } from '@/lib/financeStatements';
 import NeracaStatement from '@/components/owner/NeracaStatement';
+import SettlementPanel from '@/components/owner/SettlementPanel';
+import { settlementForJournal } from '@/lib/financeSettlement';
+import { isStaffSessionError } from '@/lib/staffRelogin';
 import { loadProfitShareRates } from '@/lib/profitShare';
 
 const META: Record<string, { title: string; tab: string; desc: string }> = {
@@ -67,6 +70,11 @@ export default function OwnerFinanceKindPage() {
   const [month, setMonth] = useState(now.getMonth());
   const [ledgerAccount, setLedgerAccount] = useState<string | null>(null);
   const [truncated, setTruncated] = useState(false);
+  const [deposits, setDeposits] = useState<any[]>([]);
+  // Pembayaran bagi hasil / THR (owner). Tanpa sesi staf laporan tetap tampil, hanya tanpa pembayaran.
+  const [settlementRows, setSettlementRows] = useState<Record<string, unknown>[]>([]);
+  const [settlementError, setSettlementError] = useState<{ text: string; relogin: boolean } | null>(null);
+  const [settlementVersion, setSettlementVersion] = useState(0);
 
   useEffect(() => {
     const raw = localStorage.getItem('laundry_owner_user') || localStorage.getItem('laundry_user');
@@ -93,10 +101,36 @@ export default function OwnerFinanceKindPage() {
       setVoidedTxs(b.voidedTxs);
       setMems(b.mems);
       setExps(b.exps);
+      setDeposits(b.deposits);
       setStore(books);
       setRates(share);
     });
   }, [ready]);
+
+  useEffect(() => {
+    if (!ready) return;
+    let cancelled = false;
+    fetch('/api/owner/finance-settlements', { cache: 'no-store', credentials: 'same-origin' })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok) {
+          setSettlementError({
+            text: `${data?.error || 'Pembayaran bagi hasil/THR belum bisa dimuat.'} Neraca ditampilkan tanpa pembayaran yang sudah dicatat.`,
+            relogin: isStaffSessionError(data)
+          });
+          return;
+        }
+        setSettlementError(null);
+        setSettlementRows(Array.isArray(data.settlements) ? data.settlements : []);
+      })
+      .catch(() => {
+        if (!cancelled) setSettlementError({ text: 'Koneksi bermasalah saat memuat pembayaran bagi hasil/THR.', relogin: false });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ready, settlementVersion]);
 
   const scopedTxs = filterByOutlet(txs, outletId);
   const scopedVoided = filterByOutlet(voidedTxs, outletId);
@@ -104,6 +138,11 @@ export default function OwnerFinanceKindPage() {
   const scopedMems = filterByOutlet(mems, outletId);
   const scopedExps = filterByOutlet(exps, outletId);
   const books = booksOf(store, outletId);
+  const settlements = useMemo(() => settlementRows.map(settlementForJournal), [settlementRows]);
+  const extra = useMemo(
+    () => ({ deposits: filterByOutlet(deposits, outletId), settlements: filterByOutlet(settlements, outletId) }),
+    [deposits, settlements, outletId]
+  );
   const ref: PnlMonthRef = { year, month };
   const years = useMemo(() => {
     const ys = new Set<number>([now.getFullYear()]);
@@ -119,20 +158,20 @@ export default function OwnerFinanceKindPage() {
   }, [txs, mems, exps, store]);
 
   const journal = useMemo(
-    () => buildJournal({ txs: scopedLedgerTxs, mems: scopedMems, exps: scopedExps, books, ref, mode: 'month', rates }),
-    [scopedLedgerTxs, scopedMems, scopedExps, books, year, month, rates]
+    () => buildJournal({ txs: scopedLedgerTxs, mems: scopedMems, exps: scopedExps, books, ref, mode: 'month', rates, ...extra }),
+    [scopedLedgerTxs, scopedMems, scopedExps, books, year, month, rates, extra]
   );
   const ledger = useMemo(
-    () => buildLedger({ txs: scopedLedgerTxs, mems: scopedMems, exps: scopedExps, books, asOf: ref, rates }),
-    [scopedLedgerTxs, scopedMems, scopedExps, books, year, month, rates]
+    () => buildLedger({ txs: scopedLedgerTxs, mems: scopedMems, exps: scopedExps, books, asOf: ref, rates, ...extra }),
+    [scopedLedgerTxs, scopedMems, scopedExps, books, year, month, rates, extra]
   );
   const equity = useMemo(
-    () => buildEquity({ txs: scopedTxs, mems: scopedMems, exps: scopedExps, books, ref, rates }),
-    [scopedTxs, scopedMems, scopedExps, books, year, month, rates]
+    () => buildEquity({ txs: scopedLedgerTxs, mems: scopedMems, exps: scopedExps, books, ref, rates, ...extra }),
+    [scopedLedgerTxs, scopedMems, scopedExps, books, year, month, rates, extra]
   );
   const neraca = useMemo(
-    () => buildBalanceSheet({ txs: scopedLedgerTxs, mems: scopedMems, exps: scopedExps, books, asOf: ref, rates }),
-    [scopedLedgerTxs, scopedMems, scopedExps, books, year, month, rates]
+    () => buildBalanceSheet({ txs: scopedLedgerTxs, mems: scopedMems, exps: scopedExps, books, asOf: ref, rates, ...extra }),
+    [scopedLedgerTxs, scopedMems, scopedExps, books, year, month, rates, extra]
   );
   const completeness = useMemo(() => assessBooksCompleteness(books), [books]);
   const unpaidPeriod = useMemo(
@@ -153,9 +192,26 @@ export default function OwnerFinanceKindPage() {
       books,
       asOf: ref,
       account: ledgerAccount,
-      rates
+      rates,
+      ...extra
     });
-  }, [ledgerAccount, scopedLedgerTxs, scopedMems, scopedExps, books, year, month, rates]);
+  }, [ledgerAccount, scopedLedgerTxs, scopedMems, scopedExps, books, year, month, rates, extra]);
+
+  /** Utang bagi hasil / THR satu outlet per hari ini (untuk form pembayaran). */
+  const outstandingFor = (id: string) => {
+    const today = new Date();
+    const s = buildBalanceSheet({
+      txs: filterByOutlet([...txs, ...voidedTxs], id),
+      mems: filterByOutlet(mems, id),
+      exps: filterByOutlet(exps, id),
+      books: booksOf(store, id),
+      asOf: { year: today.getFullYear(), month: today.getMonth() },
+      rates,
+      deposits: filterByOutlet(deposits, id),
+      settlements: filterByOutlet(settlements, id)
+    });
+    return { profitShare: s.profitShare, thrPayable: s.thrPayable, thrFund: s.thrFund };
+  };
 
   const outletTitle = outletId === 'ALL'
     ? 'NERACA SEMUA CABANG'
@@ -390,6 +446,14 @@ export default function OwnerFinanceKindPage() {
         {kind === 'neraca' && (
           <div className="space-y-4">
             <NeracaStatement title={outletTitle} asOf={ref} sheet={neraca} />
+            <SettlementPanel
+              outlets={outlets}
+              outletId={outletId}
+              outstandingFor={outstandingFor}
+              settlements={settlementRows}
+              loadError={settlementError}
+              onChanged={() => setSettlementVersion((v) => v + 1)}
+            />
             <div className="bg-white border rounded-2xl shadow-sm overflow-hidden">
               <div className="px-4 py-3 border-b">
                 <h3 className="text-sm font-black">Rincian aset tetap</h3>

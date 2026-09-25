@@ -1,3 +1,6 @@
+import { depositPaidOf } from '@/lib/paymentParts';
+import { isVoidTransaction } from '@/lib/voidTx';
+
 export type PnlMonthRef = { year: number; month: number };
 
 export type PnlAccount = {
@@ -136,6 +139,38 @@ const matchAccount = (category: string, accounts: PnlAccount[]): PnlAccount | nu
   return best;
 };
 
+/**
+ * Omset satu transaksi (bagian yang dibayar dari saldo deposit dikeluarkan:
+ * top up deposit sudah diakui omset saat uangnya masuk), dipecah
+ * laundry / ongkir secara proporsional.
+ */
+export function txRevenueParts(t: any): { laundry: number; fee: number; online: boolean } {
+  const amt = Number(t?.amount) || 0;
+  const online = String(t?.order_type || '').toLowerCase() === 'online';
+  if (amt <= 0) return { laundry: 0, fee: 0, online };
+  const recognized = Math.max(0, amt - depositPaidOf(t));
+  const fee = Math.round(Math.min(amt, Math.max(0, Number(t?.delivery_fee) || 0)) * (recognized / amt));
+  return { laundry: recognized - fee, fee, online };
+}
+
+/**
+ * Tanda omset transaksi di bulan ref:
+ *  +1 dijual di bulan ini (dan tidak dibatalkan di bulan yang sama);
+ *  −1 dibatalkan (void) di bulan ini atas penjualan bulan sebelumnya —
+ *     pembatalan dicatat di bulan terjadinya, bulan penjualan tidak diubah;
+ *   0 lainnya. Void tanpa tanggal void tidak pernah dihitung.
+ */
+export function txRevenueSign(t: any, ref: PnlMonthRef): 1 | -1 | 0 {
+  const soldHere = inMonth(t?.created_at, ref);
+  if (!isVoidTransaction(t)) return soldHere ? 1 : 0;
+  const voidedAt = t?.voided_at ? String(t.voided_at) : '';
+  if (!voidedAt) return 0;
+  const voidHere = inMonth(voidedAt, ref);
+  if (soldHere && !voidHere) return 1;
+  if (voidHere && !soldHere) return -1;
+  return 0;
+}
+
 const zeroMap = (accounts: PnlAccount[]) =>
   Object.fromEntries(accounts.map((a) => [a.code, 0])) as Record<string, number>;
 
@@ -152,14 +187,13 @@ export function buildPnlMonth(source: PnlSource, ref: PnlMonthRef, shareRate = P
   const extraMap: Record<string, number> = {};
   let tabunganThr = 0;
 
-  (source.txs || []).filter((t) => inMonth(t.created_at, ref)).forEach((t) => {
-    const amt = Number(t.amount) || 0;
-    const fee = Number(t.delivery_fee) || 0;
-    const laundry = Math.max(0, amt - fee);
-    const online = String(t.order_type || '').toLowerCase() === 'online';
-    if (online) revenue['400006'] += laundry;
-    else revenue['400005'] += laundry;
-    revenue['400007'] += fee;
+  (source.txs || []).forEach((t) => {
+    const sign = txRevenueSign(t, ref);
+    if (!sign) return;
+    const { laundry, fee, online } = txRevenueParts(t);
+    if (online) revenue['400006'] += sign * laundry;
+    else revenue['400005'] += sign * laundry;
+    revenue['400007'] += sign * fee;
   });
 
   (source.mems || []).filter((m) => inMonth(m.created_at, ref)).forEach((m) => {

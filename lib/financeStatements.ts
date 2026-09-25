@@ -1,5 +1,6 @@
 import {
   buildPnlMonth,
+  txRevenueParts,
   PNL_COGS,
   PNL_OPEX,
   PNL_REVENUE,
@@ -28,6 +29,7 @@ import {
   voidDateIso
 } from '@/lib/financeRecognition';
 import { isVoidTransaction } from '@/lib/voidTx';
+import { parseSplitLabel, paymentPartsOf } from '@/lib/paymentParts';
 
 export const BS = {
   CASH: { code: '110001', label: 'Rekening Bank Outlet / Omset' },
@@ -35,10 +37,12 @@ export const BS = {
   OCA: { code: '110003', label: 'Aset Lancar Lainnya' },
   CLEARING: { code: '110004', label: 'QRIS / Gateway Clearing' },
   UNDEPOSITED: { code: '110005', label: 'Kas Tunai Belum Disetor' },
+  THR_FUND: { code: '110006', label: 'Dana Tabungan THR' },
   FA: { code: '150001', label: 'Aset Tetap' },
   ACCUM: { code: '150009', label: 'Akumulasi Penyusutan' },
   AP: { code: '210001', label: 'Utang Usaha' },
   BH: { code: '210010', label: 'Bagi Hasil Pengelolaan' },
+  THR_PAYABLE: { code: '210011', label: 'Utang THR Crew' },
   LT: { code: '220001', label: 'Utang Usaha Jangka Panjang' },
   LEASE: { code: '220002', label: 'Utang Sewa' },
   CAPITAL: { code: '310001', label: 'Modal' },
@@ -56,10 +60,39 @@ export const BS = {
 export const BH_EXPENSE = 'Beban Bagi Hasil Pengelolaan';
 
 const BS_ACCOUNTS = [
-  BS.CASH, BS.AR, BS.OCA, BS.CLEARING, BS.UNDEPOSITED, BS.FA, BS.ACCUM, BS.AP, BS.BH, BS.LT, BS.LEASE,
-  BS.CAPITAL, BS.DRAWING, BS.RE, BS.OPENING_GAP
+  BS.CASH, BS.AR, BS.OCA, BS.CLEARING, BS.UNDEPOSITED, BS.THR_FUND, BS.FA, BS.ACCUM, BS.AP, BS.BH, BS.THR_PAYABLE,
+  BS.LT, BS.LEASE, BS.CAPITAL, BS.DRAWING, BS.RE, BS.OPENING_GAP
 ];
-const CREDIT_NORMAL_BS = [BS.ACCUM, BS.AP, BS.BH, BS.LT, BS.LEASE, BS.CAPITAL, BS.RE, BS.OPENING_GAP];
+const CREDIT_NORMAL_BS = [BS.ACCUM, BS.AP, BS.BH, BS.THR_PAYABLE, BS.LT, BS.LEASE, BS.CAPITAL, BS.RE, BS.OPENING_GAP];
+
+/** Pengeluaran kategori "Tabungan THR": disisihkan untuk THR crew saat hari raya. */
+export const isThrSavingCategory = (category: unknown) => /tabungan\s*thr/i.test(String(category || ''));
+
+/** Pembayaran utang yang dicatat owner (/api/owner/finance-settlements). */
+export type FinanceSettlement = {
+  id: string;
+  outlet_id: string | null;
+  kind: 'profit_share' | 'thr';
+  amount: number;
+  paid_at: string;
+  /** Sumber dana: rekening bank, kas laci, atau dana tabungan THR. */
+  source: 'bank' | 'laci' | 'dana_thr';
+  note?: string | null;
+  voided_at?: string | null;
+};
+
+export const SETTLEMENT_SOURCES: Record<FinanceSettlement['source'], { code: string; label: string }> = {
+  bank: BS.CASH,
+  laci: BS.UNDEPOSITED,
+  dana_thr: BS.THR_FUND
+};
+
+/** Setoran kas kasir (cash_deposits) yang sudah BALANCED — masuk lewat QRIS Mayar (clearing). */
+const isBalancedCashDeposit = (row: any) => {
+  const st = String(row?.status || '').toUpperCase();
+  const qris = String(row?.status_qris || row?.qr_payment_status || '').toLowerCase();
+  return st === 'BALANCED' || qris === 'success' || qris === 'paid';
+};
 
 /** Akun neraca (aset/liabilitas/ekuitas); selain ini = akun laba rugi. */
 export const isBalanceSheetAccount = (name: string) => BS_ACCOUNTS.some((a) => name === `${a.code} ${a.label}`);
@@ -484,6 +517,68 @@ function pushReversal(
   });
 }
 
+/**
+ * Semua jurnal satu transaksi, bertanggal:
+ *  - jual (created_at): Cr pendapatan (tanpa bagian saldo deposit — sudah omset
+ *    saat top up); Dr per cara bayar: tunai → 110005 laci, QRIS/transfer → 110002 piutang;
+ *  - koleksi (paid_at/settled_at): bagian non-tunai 110002 → 110004 clearing / 110001 bank;
+ *  - setor per transaksi (deposited_at/settled_at, data lama): bagian tunai 110005 → 110001.
+ */
+function transactionLines(t: any): JournalLine[] {
+  const out: JournalLine[] = [];
+  // Pembayaran tunggal: aturan lama tetap (belum lunas → piutang, bukan laci). Split: per bagian.
+  const parts = parseSplitLabel(t.payment_method)
+    ? paymentPartsOf(t)
+    : paymentPartsOf(t).map((p) =>
+        p.kind === 'deposit' ? p : { ...p, kind: saleAssetBucket(t) === 'receivable' ? ('noncash' as const) : ('cash' as const) }
+      );
+  const cashPart = parts.filter((p) => p.kind === 'cash').reduce((s, p) => s + p.amount, 0);
+  const nonCashPart = parts.filter((p) => p.kind === 'noncash').reduce((s, p) => s + p.amount, 0);
+  const { laundry, fee, online } = txRevenueParts(t);
+  if (laundry + fee <= 0) return out;
+  const rev = online ? PNL_REVENUE[1] : PNL_REVENUE[0];
+  const refId = String(t.receipt_number || t.id || '');
+  const g = `tx-${t.id}`;
+  const who = `${t.receipt_number || 'TRX'} · ${t.customer_name || '-'}`;
+  const tags = [cashPart ? 'tunai-laci' : '', nonCashPart ? 'piutang' : '', parts.some((p) => p.kind === 'deposit') ? 'sebagian saldo deposit' : '']
+    .filter(Boolean)
+    .join(' + ');
+  const desc = `${who} · jual (${tags || 'deposit'})`;
+  const meta = (payStatus: JournalLine['payStatus']) => ({ ref: refId, source: 'transaction', outletId: t.outlet_id, payStatus });
+  const date = String(t.created_at);
+
+  const debits: JournalLine[] = [
+    line(date, acc(BS.UNDEPOSITED.code, BS.UNDEPOSITED.label), desc, cashPart, 0, g, meta('undeposited')),
+    line(date, acc(BS.AR.code, BS.AR.label), desc, nonCashPart, 0, g, meta('receivable'))
+  ].filter((r): r is JournalLine => Boolean(r));
+  const credits: JournalLine[] = [
+    line(date, acc(rev.code, rev.label), desc, 0, laundry, g, meta('n/a')),
+    line(date, acc(PNL_REVENUE[2].code, PNL_REVENUE[2].label), desc, 0, fee, g, meta('n/a'))
+  ].filter((r): r is JournalLine => Boolean(r));
+  out.push(...debits, ...credits);
+
+  const colAt = collectionDateIso(t);
+  if (colAt && nonCashPart > 0) {
+    const dest = collectionAssetBucket(t) === 'bank' ? BS.CASH : BS.CLEARING;
+    const d = `${who} · koleksi→${dest === BS.CASH ? 'bank' : 'clearing'}`;
+    const m = { ref: refId, source: 'collection', outletId: t.outlet_id, payStatus: (dest === BS.CASH ? 'cash' : 'clearing') as JournalLine['payStatus'] };
+    out.push(
+      line(colAt, acc(dest.code, dest.label), d, nonCashPart, 0, `${g}-col`, m)!,
+      line(colAt, acc(BS.AR.code, BS.AR.label), d, 0, nonCashPart, `${g}-col`, m)!
+    );
+  }
+  const depAt = cashDepositDateIso(t);
+  if (depAt && cashPart > 0) {
+    const d = `${t.receipt_number || 'TRX'} · setor kas → bank`;
+    const m = { ref: refId, source: 'deposit', outletId: t.outlet_id, payStatus: 'cash' as const };
+    out.push(
+      line(depAt, acc(BS.CASH.code, BS.CASH.label), d, cashPart, 0, `${g}-dep`, m)!,
+      line(depAt, acc(BS.UNDEPOSITED.code, BS.UNDEPOSITED.label), d, 0, cashPart, `${g}-dep`, m)!
+    );
+  }
+  return out;
+}
+
 export function buildJournal(opts: {
   txs: any[];
   mems: any[];
@@ -493,6 +588,10 @@ export function buildJournal(opts: {
   mode: 'month' | 'through';
   /** Persentase bagi hasil per outlet (pengaturan owner); tanpa ini dipakai 20%. */
   rates?: Record<string, number>;
+  /** Setoran kas kasir (tabel cash_deposits). */
+  deposits?: any[];
+  /** Pembayaran bagi hasil / THR yang dicatat owner. */
+  settlements?: FinanceSettlement[];
 }): JournalLine[] {
   const { txs, mems, exps, books, ref, mode } = opts;
   const keep = (iso: string) => (mode === 'month' ? inMonth(iso, ref) : onOrBefore(iso, ref));
@@ -539,236 +638,21 @@ export function buildJournal(opts: {
   });
 
   txs.forEach((t) => {
-    const colAt = collectionDateIso(t);
-    const depAt = cashDepositDateIso(t);
+    const voided = isVoidTransaction(t);
     const voidAt = voidDateIso(t);
-    const relevantDates = [t.created_at, colAt, depAt, voidAt].filter(Boolean) as string[];
-    if (!relevantDates.some((d) => keep(d))) return;
+    // Void tanpa tanggal void: tidak pernah dihitung (sama dengan laporan laba rugi).
+    if (voided && !voidAt) return;
 
     const book = bookByOutlet(books, t.outlet_id);
     if (book && !afterBooksStart(t.created_at, book)) return;
 
-    const amt = Number(t.amount) || 0;
-    const fee = Number(t.delivery_fee) || 0;
-    const laundry = Math.max(0, amt - fee);
-    const rev = String(t.order_type || '').toLowerCase() === 'online' ? PNL_REVENUE[1] : PNL_REVENUE[0];
-    const saleBucket = saleAssetBucket(t);
-    const refId = String(t.receipt_number || t.id || '');
-    const g = `tx-${t.id}`;
-    const saleTag =
-      saleBucket === 'undeposited' ? 'tunai-laci' : saleBucket === 'receivable' ? 'piutang' : saleBucket;
-    const descSale = `${t.receipt_number || 'TRX'} · ${t.customer_name || '-'} · jual (${saleTag})`;
-
-    const postedSale: JournalLine[] = [];
-    const capture = (fn: () => void) => {
-      const before = rows.length;
-      fn();
-      postedSale.push(...rows.slice(before));
-    };
-
-    if (keep(t.created_at)) {
-      capture(() => {
-        if (laundry > 0) {
-          pushSalePair(rows, {
-            date: t.created_at,
-            amount: laundry,
-            revCode: rev.code,
-            revLabel: rev.label,
-            desc: descSale,
-            group: `${g}-l`,
-            outletId: t.outlet_id,
-            assetBucket: saleBucket,
-            ref: refId,
-            source: 'transaction'
-          });
-        }
-        if (fee > 0) {
-          pushSalePair(rows, {
-            date: t.created_at,
-            amount: fee,
-            revCode: PNL_REVENUE[2].code,
-            revLabel: PNL_REVENUE[2].label,
-            desc: descSale,
-            group: `${g}-f`,
-            outletId: t.outlet_id,
-            assetBucket: saleBucket,
-            ref: refId,
-            source: 'transaction'
-          });
-        }
-        if (!laundry && !fee && amt > 0) {
-          pushSalePair(rows, {
-            date: t.created_at,
-            amount: amt,
-            revCode: rev.code,
-            revLabel: rev.label,
-            desc: descSale,
-            group: g,
-            outletId: t.outlet_id,
-            assetBucket: saleBucket,
-            ref: refId,
-            source: 'transaction'
-          });
-        }
-      });
-    }
-
-    const postedCol: JournalLine[] = [];
-    if (colAt && keep(colAt) && saleBucket === 'receivable') {
-      const dest = collectionAssetBucket(t);
-      if (dest === 'bank' || dest === 'clearing') {
-        const colTag = dest === 'clearing' ? 'koleksi→clearing' : 'koleksi→bank';
-        const descCol = `${t.receipt_number || 'TRX'} · ${t.customer_name || '-'} · ${colTag}`;
-        const pieces: { amount: number; suffix: string }[] = [];
-        if (laundry > 0) pieces.push({ amount: laundry, suffix: '-l' });
-        if (fee > 0) pieces.push({ amount: fee, suffix: '-f' });
-        if (!laundry && !fee && amt > 0) pieces.push({ amount: amt, suffix: '' });
-        const before = rows.length;
-        pieces.forEach((p) => {
-          pushCollection(rows, {
-            date: colAt,
-            amount: p.amount,
-            desc: descCol,
-            group: `${g}-col${p.suffix}`,
-            outletId: t.outlet_id,
-            assetBucket: dest,
-            ref: refId
-          });
-        });
-        postedCol.push(...rows.slice(before));
-      }
-    }
-
-    const postedDep: JournalLine[] = [];
-    if (depAt && keep(depAt) && saleBucket === 'undeposited') {
-      const descDep = `${t.receipt_number || 'TRX'} · setor kas → bank`;
-      const before = rows.length;
-      const pieces: { amount: number; suffix: string }[] = [];
-      if (laundry > 0) pieces.push({ amount: laundry, suffix: '-l' });
-      if (fee > 0) pieces.push({ amount: fee, suffix: '-f' });
-      if (!laundry && !fee && amt > 0) pieces.push({ amount: amt, suffix: '' });
-      pieces.forEach((p) => {
-        pushCashDeposit(rows, {
-          date: depAt,
-          amount: p.amount,
-          desc: descDep,
-          group: `${g}-dep${p.suffix}`,
-          outletId: t.outlet_id,
-          ref: refId
-        });
-      });
-      postedDep.push(...rows.slice(before));
-    }
-
+    const all = transactionLines(t);
+    // Baris yang terjadi sebelum/saat void saja (koleksi/setor setelah void tidak ada).
+    const live = voidAt ? all.filter((r) => new Date(r.date).getTime() <= new Date(voidAt).getTime()) : all;
+    live.filter((r) => keep(r.date)).forEach((r) => rows.push(r));
     if (voidAt && keep(voidAt)) {
-      // Bangun ulang jejak sumber bila bulan void ≠ bulan jual (mode month).
-      const src = [...postedSale, ...postedCol, ...postedDep];
-      if (src.length) {
-        pushReversal(rows, src, voidAt, '-void');
-      } else {
-        // Void di bulan ini tetapi jual di bulan lain: posting jual+koleksi+deposit through void lalu reverse
-        // hanya komponen yang tanggalnya <= voidAt (sudah di through). Untuk mode month: buat mini through.
-        const ghost: JournalLine[] = [];
-        const pushGhostSale = () => {
-          const bucket = saleAssetBucket(t);
-          const parts: { amount: number; code: string; label: string; suffix: string }[] = [];
-          if (laundry > 0) parts.push({ amount: laundry, code: rev.code, label: rev.label, suffix: '-l' });
-          if (fee > 0) {
-            parts.push({
-              amount: fee,
-              code: PNL_REVENUE[2].code,
-              label: PNL_REVENUE[2].label,
-              suffix: '-f'
-            });
-          }
-          if (!laundry && !fee && amt > 0) parts.push({ amount: amt, code: rev.code, label: rev.label, suffix: '' });
-          parts.forEach((p) => {
-            const a = assetAcc(bucket);
-            ghost.push(
-              {
-                date: t.created_at,
-                akun: acc(a.code, a.label),
-                desc: descSale,
-                debit: p.amount,
-                kredit: 0,
-                group: `${g}${p.suffix}`,
-                ref: refId,
-                source: 'transaction',
-                outletId: t.outlet_id
-              },
-              {
-                date: t.created_at,
-                akun: acc(p.code, p.label),
-                desc: descSale,
-                debit: 0,
-                kredit: p.amount,
-                group: `${g}${p.suffix}`,
-                ref: refId,
-                source: 'transaction',
-                outletId: t.outlet_id
-              }
-            );
-          });
-        };
-        pushGhostSale();
-        if (colAt) {
-          const dest = collectionAssetBucket(t);
-          if (dest === 'bank' || dest === 'clearing') {
-            const a = assetAcc(dest);
-            ghost.push(
-              {
-                date: colAt,
-                akun: acc(a.code, a.label),
-                desc: 'koleksi',
-                debit: amt,
-                kredit: 0,
-                group: `${g}-col`,
-                ref: refId,
-                source: 'collection',
-                outletId: t.outlet_id
-              },
-              {
-                date: colAt,
-                akun: acc(BS.AR.code, BS.AR.label),
-                desc: 'koleksi',
-                debit: 0,
-                kredit: amt,
-                group: `${g}-col`,
-                ref: refId,
-                source: 'collection',
-                outletId: t.outlet_id
-              }
-            );
-          }
-        }
-        if (depAt) {
-          ghost.push(
-            {
-              date: depAt,
-              akun: acc(BS.CASH.code, BS.CASH.label),
-              desc: 'setor',
-              debit: amt,
-              kredit: 0,
-              group: `${g}-dep`,
-              ref: refId,
-              source: 'deposit',
-              outletId: t.outlet_id
-            },
-            {
-              date: depAt,
-              akun: acc(BS.UNDEPOSITED.code, BS.UNDEPOSITED.label),
-              desc: 'setor',
-              debit: 0,
-              kredit: amt,
-              group: `${g}-dep`,
-              ref: refId,
-              source: 'deposit',
-              outletId: t.outlet_id
-            }
-          );
-        }
-        pushReversal(rows, ghost, voidAt, '-void');
-      }
+      // Pembalikan bertanggal voided_at; bulan penjualan tidak diubah.
+      pushReversal(rows, live, voidAt, '-void');
     }
   });
 
@@ -780,14 +664,17 @@ export function buildJournal(opts: {
     if (amt <= 0) return;
     const desc = m.package_name || 'Member';
     const g = `mem-${m.id}`;
+    // Top up di kasir (tunai) masuk laci dan harus disetor; top up online lewat QRIS Mayar (clearing).
+    const online = String(m.order_type || '').toLowerCase() === 'online';
+    const asset = online ? BS.CLEARING : BS.UNDEPOSITED;
     const meta = {
       ref: String(m.id || g),
       source: 'membership',
       outletId: m.outlet_id,
-      payStatus: 'cash' as const
+      payStatus: online ? ('clearing' as const) : ('undeposited' as const)
     };
     rows.push(
-      line(m.created_at, acc(BS.CASH.code, BS.CASH.label), desc, amt, 0, g, meta)!,
+      line(m.created_at, acc(asset.code, asset.label), desc, amt, 0, g, meta)!,
       line(m.created_at, acc(PNL_REVENUE[3].code, PNL_REVENUE[3].label), desc, 0, amt, g, meta)!
     );
   });
@@ -807,9 +694,54 @@ export function buildJournal(opts: {
       outletId: e.outlet_id,
       payStatus: 'n/a' as const
     };
+    if (isThrSavingCategory(e.category)) {
+      // THR crew diakui bertahap (beban, di laba rugi tetap baris Tabungan THR) sebagai utang,
+      // dan uangnya dipindah dari laci ke Dana Tabungan THR sampai dibayar saat hari raya.
+      rows.push(
+        line(e.created_at, akun, desc, amt, 0, g, meta)!,
+        line(e.created_at, acc(BS.THR_PAYABLE.code, BS.THR_PAYABLE.label), desc, 0, amt, g, meta)!,
+        line(e.created_at, acc(BS.THR_FUND.code, BS.THR_FUND.label), `${desc} · pindah ke tabungan`, amt, 0, `${g}-fund`, meta)!,
+        line(e.created_at, acc(BS.UNDEPOSITED.code, BS.UNDEPOSITED.label), `${desc} · pindah ke tabungan`, 0, amt, `${g}-fund`, meta)!
+      );
+      return;
+    }
     rows.push(
       line(e.created_at, akun, desc, amt, 0, g, meta)!,
       line(e.created_at, acc(BS.UNDEPOSITED.code, BS.UNDEPOSITED.label), desc, 0, amt, g, meta)!
+    );
+  });
+
+  (opts.deposits || []).forEach((d) => {
+    if (!isBalancedCashDeposit(d)) return;
+    const date = String(d.paid_at || d.created_at || '');
+    if (!date || !keep(date)) return;
+    const book = bookByOutlet(books, d.outlet_id);
+    if (book && !afterBooksStart(date, book)) return;
+    const gross = Number(d.amount_cash) || 0;
+    const net = Number(d.net_deposit_amount) || Math.max(0, gross - (Number(d.admin_fee) || 0));
+    if (net <= 0) return;
+    // Biaya admin sudah tercatat sebagai pengeluaran (keluar dari laci); di sini hanya net-nya.
+    const g = `setor-${d.id}`;
+    const desc = `Setoran kas kasir${d.deposit_method ? ` (${d.deposit_method})` : ''}`;
+    const meta = { ref: String(d.receipt || d.id || g), source: 'cash_deposit', outletId: d.outlet_id, payStatus: 'clearing' as const };
+    rows.push(
+      line(date, acc(BS.CLEARING.code, BS.CLEARING.label), desc, net, 0, g, meta)!,
+      line(date, acc(BS.UNDEPOSITED.code, BS.UNDEPOSITED.label), desc, 0, net, g, meta)!
+    );
+  });
+
+  (opts.settlements || []).forEach((p) => {
+    if (p.voided_at) return;
+    const amt = Number(p.amount) || 0;
+    if (amt <= 0 || !keep(p.paid_at)) return;
+    const liab = p.kind === 'thr' ? BS.THR_PAYABLE : BS.BH;
+    const src = SETTLEMENT_SOURCES[p.source] || BS.CASH;
+    const g = `bayar-${p.id}`;
+    const desc = `${p.kind === 'thr' ? 'Pembayaran THR crew' : 'Pembayaran bagi hasil'}${p.note ? ` · ${p.note}` : ''}`;
+    const meta = { ref: g, source: 'settlement', outletId: p.outlet_id, payStatus: 'n/a' as const };
+    rows.push(
+      line(p.paid_at, acc(liab.code, liab.label), desc, amt, 0, g, meta)!,
+      line(p.paid_at, acc(src.code, src.label), desc, 0, amt, g, meta)!
     );
   });
 
@@ -838,7 +770,8 @@ function profitShareLines(opts: {
   rates?: Record<string, number>;
 }): JournalLine[] {
   const { books, ref, mode, rates } = opts;
-  const live = opts.txs.filter((t) => !isVoidTransaction(t));
+  // Sama dengan laporan laba rugi: void dibalik di bulan void (txRevenueSign).
+  const live = opts.txs;
   const idOf = (r: any) => String(r?.outlet_id || '');
   const ids = new Set<string>([
     ...books.map((b) => b.outletId),
@@ -894,6 +827,8 @@ export function buildLedger(opts: {
   books: OutletBook[];
   asOf: PnlMonthRef;
   rates?: Record<string, number>;
+  deposits?: any[];
+  settlements?: FinanceSettlement[];
 }): LedgerRow[] {
   const journal = buildJournal({ ...opts, ref: opts.asOf, mode: 'through' });
   const map: Record<string, { debit: number; kredit: number }> = {};
@@ -927,6 +862,8 @@ export function buildLedgerAccount(opts: {
   asOf: PnlMonthRef;
   account: string;
   rates?: Record<string, number>;
+  deposits?: any[];
+  settlements?: FinanceSettlement[];
 }): { account: string; opening: number; mutations: LedgerMutation[]; closing: number } {
   const journal = buildJournal({ ...opts, ref: opts.asOf, mode: 'through' })
     .filter((r) => r.akun === opts.account)
@@ -1015,6 +952,8 @@ export function buildEquity(opts: {
   books: OutletBook[];
   ref: PnlMonthRef;
   rates?: Record<string, number>;
+  deposits?: any[];
+  settlements?: FinanceSettlement[];
 }): EquityStatement {
   const { ref } = opts;
   const through = buildJournal({ ...opts, ref, mode: 'through' });
@@ -1055,6 +994,8 @@ export type BalanceSheet = {
   tradeReceivablesFromSales: number;
   gatewayClearing: number;
   otherCurrent: number;
+  /** Dana Tabungan THR (uang THR yang disisihkan). */
+  thrFund: number;
   currentAssets: number;
   faGroups: FaGroupRow[];
   fixedAtCost: number;
@@ -1064,6 +1005,8 @@ export type BalanceSheet = {
   totalAssets: number;
   tradePayables: number;
   profitShare: number;
+  /** THR crew yang sudah ditabung tetapi belum dibayar. */
+  thrPayable: number;
   shortLiab: number;
   longTermPayables: number;
   leasePayables: number;
@@ -1102,6 +1045,8 @@ export function buildBalanceSheet(opts: {
   books: OutletBook[];
   asOf: PnlMonthRef;
   rates?: Record<string, number>;
+  deposits?: any[];
+  settlements?: FinanceSettlement[];
 }): BalanceSheet {
   const { books, asOf } = opts;
   const journal = buildJournal({ ...opts, ref: asOf, mode: 'through' });
@@ -1112,7 +1057,8 @@ export function buildBalanceSheet(opts: {
   const receivables = bsBal(t, BS.AR);
   const gatewayClearing = bsBal(t, BS.CLEARING);
   const otherCurrent = bsBal(t, BS.OCA);
-  const currentAssets = cash + undepositedCash + receivables + gatewayClearing + otherCurrent;
+  const thrFund = bsBal(t, BS.THR_FUND);
+  const currentAssets = cash + undepositedCash + receivables + gatewayClearing + otherCurrent + thrFund;
 
   // Rincian aset hanya untuk outlet yang saldo awalnya sudah masuk jurnal per asOf.
   const openedBooks = books.filter((b) => {
@@ -1150,9 +1096,10 @@ export function buildBalanceSheet(opts: {
 
   const tradePayables = bsBal(t, BS.AP);
   const profitShare = bsBal(t, BS.BH);
+  const thrPayable = bsBal(t, BS.THR_PAYABLE);
   const longTermPayables = bsBal(t, BS.LT);
   const leasePayables = bsBal(t, BS.LEASE);
-  const shortLiab = tradePayables + profitShare;
+  const shortLiab = tradePayables + profitShare + thrPayable;
   const longLiab = longTermPayables + leasePayables;
   const totalLiab = shortLiab + longLiab;
 
@@ -1194,6 +1141,7 @@ export function buildBalanceSheet(opts: {
     tradeReceivablesFromSales: receivableRevenueOf(opts.txs, asOf),
     gatewayClearing,
     otherCurrent,
+    thrFund,
     currentAssets,
     faGroups,
     fixedAtCost,
@@ -1203,6 +1151,7 @@ export function buildBalanceSheet(opts: {
     totalAssets,
     tradePayables,
     profitShare,
+    thrPayable,
     shortLiab,
     longTermPayables,
     leasePayables,
