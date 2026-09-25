@@ -1,3 +1,4 @@
+import { phoneKey } from '@/lib/phone';
 import { insertWithFallback } from '@/lib/safeWrite';
 import { playOpsSound, unlockOpsAudio } from '@/lib/opsNotify';
 import { getStaffSession } from '@/lib/staffSession';
@@ -39,12 +40,8 @@ export const urlBase64ToUint8Array = (base64String: string) => {
   return output;
 };
 
-const canonicalPhone = (raw: string) => {
-  let d = String(raw || '').replace(/\D/g, '');
-  if (d.startsWith('0')) d = '62' + d.slice(1);
-  else if (d.startsWith('8') && d.length >= 9 && d.length <= 13) d = '62' + d;
-  return d;
-};
+/** Kunci nomor pelanggan (lib/phone): 62… Indonesia, +<kode negara>… luar negeri. */
+const canonicalPhone = (raw: string) => phoneKey(raw);
 
 export const currentPushActor = (): { userId: string; role: string; outletId: string } | null => {
   if (typeof window === 'undefined') return null;

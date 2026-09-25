@@ -1,5 +1,6 @@
 'use client';
 
+import { waDigits } from '@/lib/phone';
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { getStaffSession } from '@/lib/staffSession';
@@ -308,8 +309,8 @@ export default function CSDashboard() {
 
   const openWhatsApp = (phone: string, textMessage: string) => {
     if (!phone) return alert('⚠️ Nomor WhatsApp pelanggan tidak ditemukan!');
-    let cleanPhone = phone.trim().replace(/\D/g, '');
-    if (cleanPhone.startsWith('0')) cleanPhone = '62' + cleanPhone.slice(1);
+    const cleanPhone = waDigits(phone);
+    if (!cleanPhone) return alert('⚠️ Nomor WhatsApp pelanggan tidak valid!');
     const encodedText = encodeURIComponent(textMessage);
     window.open(`https://wa.me/${cleanPhone}?text=${encodedText}`, '_blank');
   };

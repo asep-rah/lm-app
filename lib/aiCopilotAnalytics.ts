@@ -1,3 +1,4 @@
+import { waDigits as phoneWaDigits } from '@/lib/phone';
 import { isVoidTransaction } from '@/lib/voidTx';
 import { isTaskCompleted, isTaskOverdueOpen } from '@/lib/taskRoles';
 
@@ -127,13 +128,8 @@ export function resolveScopedOutletIds(opts: {
 
 export const idr = (n: number) => `Rp ${Math.round(n || 0).toLocaleString('id-ID')}`;
 
-export const waDigits = (phone?: string) => {
-  let d = String(phone || '').replace(/\D/g, '');
-  if (!d) return '';
-  if (d.startsWith('0')) d = `62${d.slice(1)}`;
-  if (d.startsWith('8')) d = `62${d}`;
-  return d;
-};
+/** WhatsApp digits (lib/phone): Indonesian and foreign numbers. */
+export const waDigits = (phone?: string) => phoneWaDigits(phone);
 
 export const waPromoUrl = (phone: string, text: string) => {
   const d = waDigits(phone);

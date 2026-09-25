@@ -11,13 +11,11 @@ import {
   safeNextPath,
   type CustomerAuthConfig
 } from '@/lib/customerAuth/client';
+import PhoneNumberInput from '@/components/PhoneNumberInput';
+import { isValidCustomerPhone, storedPhone } from '@/lib/phone';
 
-// Standarisasi format nomor HP (0812xxxx) — sama dengan dashboard customer.
-const cleanPhone = (str: string) => {
-  let cleaned = str.trim().replace(/\D/g, '');
-  if (cleaned.startsWith('62')) cleaned = '0' + cleaned.slice(2);
-  return cleaned;
-};
+// Nomor tersimpan (lib/phone): 08… untuk Indonesia, +<kode negara>… untuk luar negeri.
+const cleanPhone = (str: string) => storedPhone(str);
 
 const WA_PENDING_KEY = 'ldrv_wa_login_pending';
 const RESEND_COOLDOWN_SEC = 30;
@@ -201,8 +199,8 @@ function WhatsAppVerifiedLogin({ onDone }: { onDone: (phone: string) => void }) 
     e?.preventDefault();
     setError('');
     const normalized = cleanPhone(phone);
-    if (normalized.length < 10) {
-      setError('Nomor WhatsApp tidak valid. Contoh: 081234567890.');
+    if (!normalized || !isValidCustomerPhone(normalized)) {
+      setError('Nomor WhatsApp tidak valid. Contoh: 081234567890, atau pilih kode negara untuk nomor luar negeri.');
       return;
     }
     setBusy(true);
@@ -250,17 +248,7 @@ function WhatsAppVerifiedLogin({ onDone }: { onDone: (phone: string) => void }) 
           <label htmlFor="wa-phone" className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase tracking-wider">
             Nomor WhatsApp Anda
           </label>
-          <input
-            id="wa-phone"
-            type="tel"
-            inputMode="tel"
-            autoComplete="tel"
-            placeholder="Contoh: 081234567890"
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            className={inputClass}
-            required
-          />
+          <PhoneNumberInput id="wa-phone" value={phone} onChange={setPhone} required />
         </div>
         {error && <p className="text-[11px] font-semibold text-rose-600" role="alert">{error}</p>}
         <button type="submit" disabled={busy || cooldownSec > 0} className={primaryBtn}>
@@ -475,7 +463,7 @@ function LegacyWhatsAppLogin({ adminWa, onDone }: { adminWa: string; onDone: (ph
   const handleGenerateWA = (e: React.FormEvent) => {
     e.preventDefault();
     const normalizedPhone = cleanPhone(phone);
-    if (normalizedPhone.length < 9) return alert('Nomor WhatsApp tidak valid!');
+    if (!normalizedPhone || !isValidCustomerPhone(normalizedPhone)) return alert('Nomor WhatsApp tidak valid!');
     const code = 'LDRV-' + Math.floor(1000 + Math.random() * 9000);
     setLoginCode(code);
     setStep(2);
@@ -495,15 +483,7 @@ function LegacyWhatsAppLogin({ adminWa, onDone }: { adminWa: string; onDone: (ph
           <label htmlFor="legacy-phone" className="block text-[11px] font-bold text-slate-500 mb-1.5 uppercase tracking-wider">
             Nomor WhatsApp Anda
           </label>
-          <input
-            id="legacy-phone"
-            type="tel"
-            placeholder="Contoh: 08123456789"
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            className={inputClass}
-            required
-          />
+          <PhoneNumberInput id="legacy-phone" value={phone} onChange={setPhone} required />
         </div>
         <button type="submit" className={primaryBtn}>
           <MessageCircle className="w-4 h-4" /> Masuk dengan WhatsApp

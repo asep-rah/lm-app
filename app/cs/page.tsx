@@ -1,5 +1,6 @@
 'use client';
 
+import { waDigits } from '@/lib/phone';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabaseClient';
@@ -1265,7 +1266,7 @@ export default function CsCommandCenter() {
             </div>
             <div className="flex gap-1.5">
               <a
-                href={`https://wa.me/${phone.startsWith('0') ? '62' + phone.slice(1) : phone}`}
+                href={`https://wa.me/${waDigits(phone) || phone.replace(/\D/g, '')}`}
                 target="_blank"
                 rel="noreferrer"
                 className="flex-1 text-center text-[10px] font-bold bg-emerald-50 text-emerald-700 py-2 rounded-xl"

@@ -1,5 +1,6 @@
 'use client';
 
+import { waDigits } from '@/lib/phone';
 import { useEffect, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import RoleTaskInbox from '@/components/RoleTaskInbox';
@@ -202,8 +203,7 @@ export default function DriverDashboard() {
   };
 
   const handleOpenCall = (phone: string) => {
-    let clean = (phone || '').trim().replace(/\D/g, '');
-    if (clean.startsWith('0')) clean = '62' + clean.slice(1);
+    const clean = waDigits(phone);
     if (!clean) return toast('Nomor pelanggan kosong', 'warn');
     window.open(`tel:+${clean}`, '_self');
   };
@@ -280,8 +280,7 @@ export default function DriverDashboard() {
   };
 
   const handleOpenWA = (phone: string, delivery = false) => {
-    let cleanPhone = (phone || '').trim().replace(/\D/g, '');
-    if (cleanPhone.startsWith('0')) cleanPhone = '62' + cleanPhone.slice(1);
+    const cleanPhone = waDigits(phone);
     const msg = encodeURIComponent(
       delivery
         ? `Halo Kak, saya Driver Laundrivery (${driverName}) yang bertugas mengantar cucian Kakak. Saya sedang menuju ke lokasi ya Kak!`

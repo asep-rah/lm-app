@@ -1,5 +1,7 @@
 'use client';
 
+import { isValidCustomerPhone, phoneLookupKeys, storedPhone } from '@/lib/phone';
+import PhoneNumberInput from '@/components/PhoneNumberInput';
 import dynamic from 'next/dynamic';
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
@@ -195,11 +197,10 @@ const isReadyForPickupAlert = (order: any) => {
 
 const isSiapDiambil = (order: any) => isReadyForPickupAlert(order);
 
+/** Nomor tersimpan (lib/phone): 08… untuk Indonesia, +<kode negara>… untuk luar negeri. */
 const cleanPhone = (phoneStr: string) => {
   if (!phoneStr) return '';
-  let cleaned = phoneStr.trim().replace(/\D/g, '');
-  if (cleaned.startsWith('62')) cleaned = '0' + cleaned.slice(2);
-  return cleaned;
+  return storedPhone(phoneStr) || phoneStr.trim().replace(/\D/g, '');
 };
 
 const getAdminWaNumber = (outletName: string) => {
@@ -1354,7 +1355,9 @@ function CustomerDashboardPage() {
     if (!norm) return;
 
     try {
-      const { data: cust } = await supabase.from('customers').select('*').eq('phone', norm).limit(1);
+      let { data: cust } = await supabase.from('customers').select('*').eq('phone', norm).limit(1);
+      // Didaftarkan dengan bentuk lain (mis. 62… dari POS atau +kode negara).
+      if (!cust?.length) ({ data: cust } = await supabase.from('customers').select('*').in('phone', phoneLookupKeys(norm)).limit(1));
       if (cust && cust.length > 0) {
         setCustomerData(cust[0]);
         if (cust[0].name) setCustomerName(cust[0].name);
@@ -1362,25 +1365,23 @@ function CustomerDashboardPage() {
         setCustomerData({ name: customerName || 'Pelanggan', deposit_balance: 0 });
       }
 
-      // Normalisasi format nomor HP (08xx atau 62xx)
-    const altNorm = norm.startsWith('62')
-    ? '0' + norm.slice(2)
-    : norm.startsWith('0')
-    ? '62' + norm.slice(1)
-    : norm;
+      // Semua bentuk simpanan nomor ini: 08…/62…/+62… atau +kode negara (lib/phone).
+    const keyList = phoneLookupKeys(norm)
+      .map((k) => `"${k}"`)
+      .join(',');
 
   // Tarik data pickup_orders langsung dengan query database
   const { data: pickupOrders } = await supabase
     .from('pickup_orders')
     .select('*')
-    .or(`customer_phone.eq.${norm},customer_phone.eq.${altNorm},phone_number.eq.${norm},phone_number.eq.${altNorm}`)
+    .or(`customer_phone.in.(${keyList}),phone_number.in.(${keyList})`)
     .order('created_at', { ascending: false });
 
   // Tarik data transactions langsung dengan query database
   const { data: posTransactions } = await supabase
     .from('transactions')
     .select('*')
-    .or(`customer_phone.eq.${norm},customer_phone.eq.${altNorm}`)
+    .in('customer_phone', phoneLookupKeys(norm))
     .order('created_at', { ascending: false });
 
   // Filter dan gabungkan data pickup & POS agar pesanan 'Tiba di Outlet' TIDAK PERNAH HILANG
@@ -1553,7 +1554,7 @@ function CustomerDashboardPage() {
     e.preventDefault();
     if (!inlinePhoneLoginAllowed) return goToLogin();
     const norm = cleanPhone(customerPhone);
-    if (!norm) return alert('Ketik nomor WA aktif!');
+    if (!norm || !isValidCustomerPhone(norm)) return alert('Ketik nomor WA aktif!');
     localStorage.setItem('laundry_customer_phone', norm);
     setCustomerData({ name: 'Pelanggan Setia', deposit_balance: 0 });
     fetchCustomerProfile(norm);
@@ -2538,14 +2539,7 @@ function CustomerDashboardPage() {
             ) : null}
           </div>
           {inlinePhoneLoginAllowed ? (
-            <input
-              type="tel"
-              placeholder="Contoh: 08123456789"
-              value={customerPhone}
-              onChange={(e) => setCustomerPhone(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-300 rounded-2xl px-4 py-3.5 text-sm font-bold text-slate-900 focus:outline-none focus:border-brand-600 focus:bg-white transition"
-              required
-            />
+            <PhoneNumberInput value={customerPhone} onChange={setCustomerPhone} required />
           ) : null}
           <button
             type="submit"

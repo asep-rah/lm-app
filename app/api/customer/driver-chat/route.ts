@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { customerAuthConfig, readSession } from '@/lib/customerAuth/server';
 import { orderPhone08 } from '@/lib/customerOrderServer';
+import { phoneLookupKeys } from '@/lib/phone';
 import { cleanDriverChatText, driverNameOf, isDriverChatOpen } from '@/lib/driverChat';
 import {
   insertChatMessage,
@@ -54,8 +55,9 @@ export async function GET(req: NextRequest) {
 
     // Badge: unread driver messages on the customer's running trips.
     if (q.get('unread')) {
-      const variants = [who.phone, `62${who.phone.slice(1)}`, `+62${who.phone.slice(1)}`];
-      const list = variants.map((v) => `"${v}"`).join(',');
+      const list = phoneLookupKeys(who.phone)
+        .map((v) => `"${v}"`)
+        .join(',');
       const { data, error } = await db
         .from('pickup_orders')
         .select('id, customer_phone, phone_number, driver_name, status')

@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabaseClient';
 import { notifyCustomerChat, notifyCsPortal } from '@/lib/notifications';
+import { phoneKey, phoneLookupKeys } from '@/lib/phone';
 
 export type ChatMessage = {
   id?: string;
@@ -31,32 +32,11 @@ export const mapChatMessage = (row: any): ChatMessage => {
   };
 };
 
-/** 08xx, 8xx, dan 62xx jadi 62… supaya thread tidak pecah. */
-export const canonicalPhone = (raw: string) => {
-  let d = String(raw || '').replace(/\D/g, '');
-  if (d.startsWith('0')) d = '62' + d.slice(1);
-  else if (d.startsWith('8') && d.length >= 9 && d.length <= 13) d = '62' + d;
-  return d;
-};
+/** Kunci nomor (lib/phone): 62… untuk Indonesia, +<kode negara>… untuk luar negeri — thread tidak pecah. */
+export const canonicalPhone = (raw: string) => phoneKey(raw);
 
-export const phoneVariants = (raw: string): string[] => {
-  const d = String(raw || '').replace(/\D/g, '');
-  const out = new Set<string>();
-  if (raw) out.add(String(raw).trim());
-  if (d) out.add(d);
-  const canon = canonicalPhone(raw || d);
-  if (canon) {
-    out.add(canon);
-    out.add('+' + canon);
-    if (canon.startsWith('62')) out.add('0' + canon.slice(2));
-  }
-  if (d.startsWith('0') && d.length > 4) {
-    out.add('62' + d.slice(1));
-    out.add('+62' + d.slice(1));
-  }
-  if (d.startsWith('62') && d.length > 4) out.add('0' + d.slice(2));
-  return [...out].filter(Boolean);
-};
+/** Semua bentuk simpanan nomor ini (08…/62…/+62… atau +cc…/cc…) untuk pencarian. */
+export const phoneVariants = (raw: string): string[] => phoneLookupKeys(raw);
 
 export const threadKeyOf = (row: any): string => {
   const phone = canonicalPhone(row?.customer_phone || '');

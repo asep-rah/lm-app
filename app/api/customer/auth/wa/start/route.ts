@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const phone = canonicalPhone62(String(body?.phone || ''));
   if (!isValidMobile62(phone)) {
-    return NextResponse.json({ error: 'Nomor WhatsApp tidak valid. Contoh: 081234567890.' }, { status: 400 });
+    return NextResponse.json({ error: 'Nomor WhatsApp tidak valid. Contoh: 081234567890, atau nomor luar negeri dengan kode negara (+65…).' }, { status: 400 });
   }
 
   const db = authDb();

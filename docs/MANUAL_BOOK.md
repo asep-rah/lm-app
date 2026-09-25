@@ -121,6 +121,8 @@ Alias webhook: `/api/mayar/webhook` mengarah ke handler yang sama. Gateway pemba
    - **Email cadangan** (bila `CUSTOMER_EMAIL_LOGIN_ENABLED=true`): hanya email yang sudah ditautkan & diverifikasi dari Profil; masuk ke akun (nomor WA) yang sama.
    - **Login lama** (default selama WA belum dikonfigurasi): kode dibuat di browser + WA ke nomor admin, tanpa verifikasi server.
    - Detail konfigurasi & uji: [`customer-verified-login.md`](customer-verified-login.md).
+   - **Nomor luar negeri didukung (semua negara).** Di halaman login ada pilihan kode negara (default 🇮🇩 +62). Pelanggan asing memilih negaranya lalu mengetik nomornya. Di POS / form staf, nomor luar negeri diketik dengan awalan `+kode negara` (mis. `+65 9123 4567`).
+   - Format simpan (`lib/phone.ts`, satu sumber untuk seluruh aplikasi): nomor Indonesia tetap `08…`; nomor luar negeri `+<kode negara><nomor>` (mis. `+6591234567`). Tanda `+` membuat nomor asing tidak tertukar dengan nomor Indonesia, termasuk Jepang/Korea/Tiongkok yang diawali 8. Tautan WhatsApp, balasan Evolution, pesanan, deposit, chat CS/driver memakai aturan yang sama.
 2. Profil tersimpan; saldo deposit & poin loyalty diload dari CRM (`customer_crm_profiles` / settings). Profil menampilkan status email cadangan (bila fitur email aktif) dan alamat tersimpan; label sama (mis. dua "Rumah") ditampilkan dengan potongan nama jalan.
 3. PWA dapat mendaftarkan **Web Push** (`/sw.js`) untuk notifikasi status order.
 

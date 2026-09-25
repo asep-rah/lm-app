@@ -28,6 +28,27 @@ describe('phone normalisation (same identity as customers/transactions)', () => 
     assert.ok(!isValidMobile62('62211234567'));
     assert.ok(!isValidMobile62('628123'));
   });
+  it('foreign numbers: +<cc>… everywhere, WhatsApp JID matches what the customer typed', () => {
+    assert.equal(canonicalPhone62('+65 9123 4567'), '+6591234567');
+    assert.equal(localPhone08('+65 9123 4567'), '+6591234567');
+    assert.ok(isValidMobile62(canonicalPhone62('+65 9123 4567')));
+    assert.equal(waMeLink('+65 9123 4567', 'x'), 'https://wa.me/6591234567?text=x');
+    // Japan starts with 8: the JID must not turn into an Indonesian number.
+    const typed = canonicalPhone62('+81 90-1234-5678');
+    const jid = parseEvolutionMessages({
+      event: 'messages.upsert',
+      instance: 'x',
+      data: { key: { remoteJid: '819012345678@s.whatsapp.net', id: 'J1' }, message: { conversation: 'LDRV-ZZ22YY' } }
+    }).messages[0].senderPhone;
+    assert.equal(jid, typed);
+    assert.equal(jid, '+819012345678');
+    // Indonesian JID unchanged.
+    assert.equal(
+      parseEvolutionMessages({ event: 'messages.upsert', instance: 'x', data: { key: { remoteJid: '6285172141494@s.whatsapp.net', id: 'A' }, message: { conversation: 'x' } } })
+        .messages[0].senderPhone,
+      '6285172141494'
+    );
+  });
 });
 
 describe('one-time codes', () => {
