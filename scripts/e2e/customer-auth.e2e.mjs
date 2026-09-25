@@ -190,6 +190,33 @@ await step('session: phone from server-signed cookie', async () => {
   assert.equal(r.json.session.email, null);
 });
 
+// --- foreign numbers (Singapore, Japan) -----------------------------------------
+for (const [label, typed, jid, stored] of [
+  ['Singapore', '+65 9123 4567', '6591234567', '+6591234567'],
+  ['Japan (starts with 8)', '+81 90-1234-5678', '819012345678', '+819012345678']
+]) {
+  await step(`foreign number (${label}): WhatsApp login end-to-end, session keeps +country code`, async () => {
+    const F = browser();
+    const start = await F.call('/api/customer/auth/wa/start', { method: 'POST', body: { phone: typed } });
+    assert.equal(start.status, 200, JSON.stringify(start.json));
+    assert.equal(state.customer_login_challenges.find((x) => x.id === start.json.challengeId).phone, stored);
+    const w = await webhook(jid, start.json.code, `MSG-${jid}`);
+    assert.deepEqual(w.json.results, ['verified']);
+    await new Promise((res) => setTimeout(res, 300));
+    assert.ok(sent.wa.some((m) => m.number === jid), 'reply goes to the digits with country code');
+    const st = await F.call(`/api/customer/auth/wa/status?id=${start.json.challengeId}`);
+    assert.equal(st.json.status, 'verified');
+    assert.equal(st.json.phone, stored);
+    assert.equal((await F.call('/api/customer/auth/session')).json.session.phone, stored);
+  });
+}
+await step('foreign number: an Indonesian 0819… sender cannot complete a Japanese +81 login', async () => {
+  const F = browser();
+  const start = await F.call('/api/customer/auth/wa/start', { method: 'POST', body: { phone: '+81 90-1111-2222' } });
+  const w = await webhook('6281901111222', start.json.code, 'MSG-JP-ID');
+  assert.deepEqual(w.json.results, ['sender_mismatch']);
+});
+
 // --- mismatch & expiry & LID ----------------------------------------------------
 const C = browser();
 let ch2;

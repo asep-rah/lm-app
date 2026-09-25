@@ -93,9 +93,20 @@ describe('validateCustomerOrder', () => {
     assert.ok(r.ok);
     for (const k of ['is_paid', 'driver_id', 'transaction_id']) assert.ok(!(k in r.order.row), k);
   });
+  it('foreign customer (verified session +65…) can order; phone stored as +65…', () => {
+    const r = validateCustomerOrder(base({ customer_phone: '+65 9123 4567' }), ctx({ sessionPhone: '+6591234567' }));
+    assert.ok(r.ok);
+    assert.equal(r.order.row.customer_phone, '+6591234567');
+    assert.equal(r.order.row.phone_number, '+6591234567');
+    // Another number than the session is still refused.
+    assert.equal((validateCustomerOrder(base({ customer_phone: '+6598765432' }), ctx({ sessionPhone: '+6591234567' })) as { status: number }).status, 403);
+  });
   it('helpers', () => {
     assert.equal(orderPhone08('+62 812-3456-7890'), '081234567890');
     assert.equal(orderPhone08('12345'), '');
+    assert.equal(orderPhone08('+65 9123 4567'), '+6591234567');
+    assert.equal(orderPhone08('+81 90 1234 5678'), '+819012345678');
+    assert.equal(orderPhone08('0221234567'), ''); // Indonesian landline is not WhatsApp
     assert.equal(jakartaDate(new Date('2026-09-24T18:30:00Z')), '2026-09-25');
   });
 });

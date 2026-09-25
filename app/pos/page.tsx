@@ -1,4 +1,5 @@
 'use client';
+import { phoneKey, phoneLookupKeys, storedPhone } from '@/lib/phone';
 export const dynamic = 'force-dynamic';
 
 import { useEffect, useMemo, useRef, useState, Suspense } from 'react';
@@ -89,11 +90,10 @@ const safeParse = (data: any, fallback: any) => {
   try { return JSON.parse(data); } catch (e) { return fallback; }
 };
 
+/** Kunci nomor (lib/phone): 62… untuk Indonesia, +<kode negara>… untuk luar negeri. */
 const cleanPhone = (phoneStr: string) => {
   if (!phoneStr) return '';
-  let cleaned = phoneStr.trim().replace(/\D/g, '');
-  if (cleaned.startsWith('0')) cleaned = '62' + cleaned.slice(1);
-  return cleaned;
+  return phoneKey(phoneStr) || phoneStr.trim().replace(/\D/g, '');
 };
 
 const UNPAID_HANDOVER_MSG = 'Transaksi belum lunas. Selesaikan pembayaran sebelum penyerahan.';
@@ -1298,11 +1298,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
 
       const oneYearAgo = new Date();
       oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-      const phoneKeys = [
-        normalizedPhone,
-        hit?.phone,
-        normalizedPhone.startsWith('62') ? '0' + normalizedPhone.slice(2) : null
-      ].filter(Boolean) as string[];
+      const phoneKeys = [...new Set([...phoneLookupKeys(normalizedPhone), hit?.phone].filter(Boolean))] as string[];
       const [{ data: txHist }, { data: memHist }] = await Promise.all([
         supabase
           .from('transactions')
@@ -1362,7 +1358,7 @@ const handleApplyLoan = async (e: React.FormEvent) => {
 
   const selectReturningCustomer = (hit: CustomerHit) => {
     const phone = hit.phone || '';
-    setCustomerPhone(phone.startsWith('62') ? '0' + phone.slice(2) : phone);
+    setCustomerPhone(storedPhone(phone) || phone);
     setCustomerName(hit.name || '');
     setPhoneLast4Matches([]);
     toast(`Pelanggan dipilih: ${hit.name}`, 'ok');
@@ -3805,7 +3801,7 @@ const handleStatusChange = async (
                   type="text"
                   value={editCustomerPhone}
                   onChange={(e) => setEditCustomerPhone(e.target.value)}
-                  placeholder="08..."
+                  placeholder="08… atau +kode negara"
                   className="w-full border rounded-lg p-1.5 font-mono text-slate-700 bg-white text-xs"
                 />
               </div>
@@ -4214,7 +4210,7 @@ const handleStatusChange = async (
                 <button type="button" onClick={() => setMemberOrderType('Offline')} className={`flex-1 py-2 text-xs font-bold rounded-lg transition ${memberOrderType === 'Offline' ? 'bg-purple-600 text-white shadow' : 'text-slate-500'}`}>🏪 Offline (Datang)</button>
                 <button type="button" onClick={() => setMemberOrderType('Online')} className={`flex-1 py-2 text-xs font-bold rounded-lg transition ${memberOrderType === 'Online' ? 'bg-indigo-600 text-white shadow' : 'text-slate-500'}`}>🌐 Online (Order WA)</button>
               </div>
-              <input type="tel" placeholder="08123456789 (WA Pelanggan)" value={memberPhone} onChange={(e) => setMemberPhone(e.target.value)} className="w-full border rounded-xl px-4 py-3 text-sm" required />
+              <input type="tel" placeholder="08123456789 · luar negeri: +65 9123 4567" value={memberPhone} onChange={(e) => setMemberPhone(e.target.value)} className="w-full border rounded-xl px-4 py-3 text-sm" required />
               <input type="text" placeholder="Nama Lengkap Pelanggan" value={memberName} onChange={(e) => setMemberName(e.target.value)} className="w-full border rounded-xl px-4 py-3 text-sm" required />
               <select value={memberPackage} onChange={(e) => setMemberPackage(e.target.value)} className="w-full border rounded-xl px-4 py-3 text-sm"><option value="Silver">Silver (Bayar 300rb, Saldo 320rb)</option><option value="Gold">Gold (Bayar 500rb, Saldo 550rb)</option><option value="Platinum">Platinum (Bayar 900rb, Saldo 1 Jt)</option></select>
               <button type="submit" disabled={isSubmitting} className="w-full bg-purple-600 text-white font-bold py-4 rounded-xl text-sm shadow-md">💳 PROSES TOP-UP ({memberOrderType.toUpperCase()})</button>
@@ -4232,7 +4228,7 @@ const handleStatusChange = async (
                 </div>
                 <form onSubmit={handleRegisterCustomer} className="space-y-3">
                   <input type="text" placeholder="Nama lengkap" value={newCustName} onChange={(e) => setNewCustName(e.target.value)} className="w-full border rounded-xl px-4 py-3 text-sm" required />
-                  <input type="tel" placeholder="Nomor WhatsApp" value={newCustPhone} onChange={(e) => setNewCustPhone(e.target.value)} className="w-full border rounded-xl px-4 py-3 text-sm" required />
+                  <input type="tel" placeholder="Nomor WhatsApp (luar negeri: awali +kode negara)" value={newCustPhone} onChange={(e) => setNewCustPhone(e.target.value)} className="w-full border rounded-xl px-4 py-3 text-sm" required />
                   <button type="submit" disabled={isSubmitting} className="w-full bg-sky-600 text-white font-bold py-3.5 rounded-xl text-sm">Simpan Konsumen</button>
                 </form>
               </div>
@@ -4294,7 +4290,7 @@ const handleStatusChange = async (
                     <input
                       type="tel"
                       inputMode="numeric"
-                      placeholder="08… atau 4 digit terakhir"
+                      placeholder="08…, +kode negara, atau 4 digit terakhir"
                       value={customerPhone}
                       onChange={(e) => setCustomerPhone(e.target.value)}
                       className="w-full border border-indigo-200 bg-indigo-50 text-indigo-800 rounded-xl px-3 py-3 text-xs md:text-sm font-bold"

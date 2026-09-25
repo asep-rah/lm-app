@@ -1,3 +1,4 @@
+import { waDigits } from '@/lib/phone';
 import { canonicalPhone, phoneVariants } from '@/lib/csChat';
 import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
 import { supabase } from '@/lib/supabaseClient';
@@ -363,7 +364,7 @@ export async function loadCrmProfiles(): Promise<CrmProfile[]> {
 }
 
 export const waMeUrl = (phone: string, text: string) => {
-  const d = canonicalPhone(phone) || String(phone || '').replace(/\D/g, '');
+  const d = waDigits(phone);
   if (!d) return '';
   return `https://wa.me/${d}?text=${encodeURIComponent(text)}`;
 };

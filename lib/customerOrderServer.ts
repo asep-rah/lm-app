@@ -12,6 +12,7 @@
  * - no field outside the whitelist reaches the table.
  * Prices stay estimates (the cashier bills after weighing), as before.
  */
+import { isValidCustomerPhone, storedPhone } from '@/lib/phone';
 import { isValidSatuanPhotoPath } from '@/lib/satuanPhotoAccess';
 
 export type CustomerOrderContext = {
@@ -45,13 +46,11 @@ const num = (v: unknown, min: number, max: number, fallback = 0) => {
 };
 const int = (v: unknown, min: number, max: number, fallback: number) => Math.round(num(v, min, max, fallback));
 
-/** 08… from 08…, 62…, +62… or 8…; '' when not an Indonesian mobile number. */
-export const orderPhone08 = (raw: unknown): string => {
-  let d = String(raw ?? '').replace(/\D/g, '');
-  if (d.startsWith('62')) d = '0' + d.slice(2);
-  else if (d.startsWith('8')) d = '0' + d;
-  return /^08\d{7,12}$/.test(d) ? d : '';
-};
+/**
+ * Stored customer phone (lib/phone): 08… for Indonesian mobiles, +<cc>… for
+ * foreign numbers; '' when not a valid WhatsApp number.
+ */
+export const orderPhone08 = (raw: unknown): string => (isValidCustomerPhone(raw) ? storedPhone(raw) : '');
 
 /** Jakarta calendar date (UTC+7, no DST). */
 export const jakartaDate = (now = new Date()) => new Date(now.getTime() + 7 * 3600_000).toISOString().slice(0, 10);

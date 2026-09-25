@@ -7,27 +7,23 @@
  * Evolution API `messages.upsert` webhook payloads.
  */
 import { createHmac, randomBytes, randomInt, timingSafeEqual } from 'crypto';
+import { isValidCustomerPhone, phoneKey, storedPhone, waDigits } from '@/lib/phone';
 
 // ---------------------------------------------------------------------------
 // Phone / email identity
 // ---------------------------------------------------------------------------
 
-/** 08xx / 8xx / +62xx / 62xx → 62xxxxxxxx (same rule as lib/csChat canonicalPhone). */
-export const canonicalPhone62 = (raw: string): string => {
-  let d = String(raw || '').replace(/\D/g, '');
-  if (d.startsWith('0')) d = '62' + d.slice(1);
-  else if (d.startsWith('8') && d.length >= 9 && d.length <= 13) d = '62' + d;
-  return d;
-};
+/**
+ * Comparison key of a customer phone (lib/phone): 62… for Indonesia (as
+ * before), +<cc>… for foreign numbers. Name kept for the existing callers.
+ */
+export const canonicalPhone62 = (raw: string): string => phoneKey(raw);
 
-/** 62xx → 08xx: the format stored in customers.phone by POS/dashboard (cleanPhone). */
-export const localPhone08 = (raw: string): string => {
-  const c = canonicalPhone62(raw);
-  return c.startsWith('62') ? '0' + c.slice(2) : c;
-};
+/** Stored form (lib/phone): 08… for Indonesia (customers.phone), +<cc>… for foreign numbers. */
+export const localPhone08 = (raw: string): string => storedPhone(raw) || String(raw || '').replace(/\D/g, '');
 
-/** Indonesian mobile number (62 8xx, 10–15 digits total). */
-export const isValidMobile62 = (canon: string): boolean => /^628\d{7,12}$/.test(String(canon || ''));
+/** Valid customer WhatsApp number: Indonesian mobile or any foreign number (lib/phone). */
+export const isValidMobile62 = (canon: string): boolean => isValidCustomerPhone(canon);
 
 export const normalizeEmail = (raw: string): string => String(raw || '').trim().toLowerCase();
 
@@ -134,7 +130,7 @@ export const buildWaPrefillMessage = (code: string): string =>
   `Kode masuk Laundrivery: ${code}\n\nKirim pesan ini tanpa diubah untuk masuk ke aplikasi. Jangan bagikan kode ini ke orang lain.`;
 
 export const waMeLink = (systemNumber: string, text: string): string =>
-  `https://wa.me/${canonicalPhone62(systemNumber)}?text=${encodeURIComponent(text)}`;
+  `https://wa.me/${waDigits(systemNumber)}?text=${encodeURIComponent(text)}`;
 
 export type ParsedEvolutionMessage = {
   messageId: string;
@@ -148,7 +144,8 @@ export type ParsedEvolutionMessage = {
 const jidPhone = (jid: unknown): string => {
   const s = String(jid || '').trim();
   const m = s.match(/^(\d{8,16})(?::\d+)?@s\.whatsapp\.net$/i);
-  return m ? canonicalPhone62(m[1]) : '';
+  // JIDs always carry the country code: Japan 81… must not read as Indonesian 8….
+  return m ? phoneKey(m[1], { international: true }) : '';
 };
 
 const messageText = (msg: any): string =>

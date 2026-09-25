@@ -141,7 +141,7 @@ export default function OnlineOrderForm() {
           />
           <input
             type="tel"
-            placeholder="Nomor WhatsApp"
+            placeholder="Nomor WhatsApp (luar negeri: +kode negara)"
             required
             value={phone}
             onChange={(e) => setPhone(e.target.value)}

@@ -1,3 +1,4 @@
+import { phoneLookupKeys, storedPhone } from '@/lib/phone';
 /** Paket top-up deposit pelanggan + label income Finance/POS. */
 
 export type DepositPackageKey = 'Silver' | 'Gold' | 'Platinum';
@@ -43,12 +44,8 @@ export const isMayarDepositIncome = (row: any) => {
 export const depositReceiptOf = (pkg: string) =>
   `DEP-${depositPackageShort(pkg).toUpperCase()}-${Date.now().toString(36).toUpperCase()}`;
 
-export const normalizeCustomerPhone = (raw: string) => {
-  let d = String(raw || '').replace(/\D/g, '');
-  if (d.startsWith('62')) d = '0' + d.slice(2);
-  else if (d.startsWith('8') && d.length >= 9 && d.length <= 13) d = '0' + d;
-  return d;
-};
+/** Stored customer phone (lib/phone): 08… for Indonesia, +<cc>… for foreign numbers. */
+export const normalizeCustomerPhone = (raw: string) => storedPhone(raw) || String(raw || '').replace(/\D/g, '');
 
 type Db = {
   from: (table: string) => any;
@@ -164,20 +161,8 @@ export async function creditCustomerDeposit(
   return { balance: nextBal, error: null, already: false };
 }
 
-const phonesOf = (raw: string) => {
-  const d = String(raw || '').replace(/\D/g, '');
-  const out = new Set<string>();
-  if (raw) out.add(String(raw).trim());
-  if (d) out.add(d);
-  if (d.startsWith('0') && d.length > 4) {
-    out.add('62' + d.slice(1));
-    out.add('+62' + d.slice(1));
-  }
-  if (d.startsWith('62') && d.length > 4) out.add('0' + d.slice(2));
-  const local = normalizeCustomerPhone(raw);
-  if (local) out.add(local);
-  return [...out].filter(Boolean);
-};
+/** Every stored form of this customer's phone (lib/phone) for .in() lookups. */
+const phonesOf = (raw: string) => phoneLookupKeys(raw);
 
 const insertAttempts = async (db: Db, table: string, attempts: Record<string, unknown>[]) => {
   let lastErr: { message: string } | null = null;

@@ -762,6 +762,31 @@ await step('Login page shows the official logo (legacy mode while WA not configu
   await s.close();
 });
 
+await step('Login: country picker (Indonesia default) — a Singapore number is sent as +65…', async () => {
+  const s = await newScenario();
+  const p2 = s.page;
+  await p2.goto(APP + '/customer/login', { waitUntil: 'networkidle' });
+  const country = p2.getByLabel('Kode negara');
+  assert.equal(await country.inputValue(), 'ID');
+  assert.ok((await country.locator('option').count()) > 200, 'all countries listed');
+  await country.selectOption('SG');
+  await p2.locator('#legacy-phone').fill('9123 4567');
+  const opened = [];
+  await p2.exposeFunction('__recordOpen', (u) => opened.push(u));
+  await p2.evaluate(() => {
+    window.open = (u) => {
+      window.__recordOpen(String(u));
+      return null;
+    };
+  });
+  await p2.getByRole('button', { name: /Masuk dengan WhatsApp/ }).click();
+  await p2.waitForTimeout(300);
+  assert.equal(opened.length, 1);
+  assert.match(decodeURIComponent(opened[0]), /\+6591234567/);
+  await p2.screenshot({ path: `${OUT}/09-login-foreign.png`, fullPage: true });
+  await s.close();
+});
+
 await step('No scenario ever reached the production database host', async () => {
   assert.deepEqual(productionDbHits, []);
 });

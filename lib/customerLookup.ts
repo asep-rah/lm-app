@@ -1,3 +1,4 @@
+import { maskPhone as maskAnyPhone } from '@/lib/phone';
 import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
 import { canonicalPhone, phoneVariants } from '@/lib/csChat';
 import { supabase } from '@/lib/supabaseClient';
@@ -14,14 +15,8 @@ const PLACEHOLDER_NAMES = new Set(['', 'pelanggan', 'customer', 'guest', '-']);
 export const isPlaceholderCustomerName = (name: unknown) =>
   PLACEHOLDER_NAMES.has(String(name || '').trim().toLowerCase());
 
-export const maskPhone = (phone: string) => {
-  const d = String(phone || '').replace(/\D/g, '');
-  if (d.length < 4) return '••••';
-  const last4 = d.slice(-4);
-  if (d.startsWith('62') && d.length >= 10) return `08•••${last4}`;
-  if (d.startsWith('0') && d.length >= 10) return `08•••${last4}`;
-  return `••••${last4}`;
-};
+/** 08•••1234 (Indonesia) / +65•••4567 (luar negeri) — lib/phone. */
+export const maskPhone = (phone: string) => maskAnyPhone(phone) || '••••';
 
 export async function findCustomerByPhone(phone: string): Promise<CustomerHit | null> {
   const variants = phoneVariants(phone);

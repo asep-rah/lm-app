@@ -8,6 +8,7 @@
 import type { NextRequest, NextResponse } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { paymentServiceDb } from '@/lib/paymentSecurity';
+import { isValidCustomerPhone, phoneLookupKeys, waDigits } from '@/lib/phone';
 import {
   canonicalPhone62,
   hmacHex,
@@ -47,7 +48,7 @@ export const customerAuthConfig = () => {
     flag('CUSTOMER_WA_LOGIN_ENABLED', false) &&
     secretOk &&
     hasServiceRole &&
-    /^62\d{8,13}$/.test(waNumber) &&
+    isValidCustomerPhone(waNumber) &&
     Boolean(env('EVOLUTION_INSTANCE')) &&
     env('EVOLUTION_WEBHOOK_TOKEN').length >= 24;
   const email =
@@ -91,7 +92,7 @@ export const customerWaLoginChecks = () => {
     { key: 'CUSTOMER_WA_LOGIN_ENABLED', ok: flag('CUSTOMER_WA_LOGIN_ENABLED', false), need: 'isi true' },
     { key: 'CUSTOMER_AUTH_SECRET', ok: env('CUSTOMER_AUTH_SECRET').length >= 32, need: 'minimal 32 karakter' },
     { key: 'SUPABASE_SERVICE_ROLE_KEY', ok: Boolean(env('SUPABASE_SERVICE_ROLE_KEY')), need: 'wajib ada' },
-    { key: 'CUSTOMER_WA_LOGIN_NUMBER', ok: /^62\d{8,13}$/.test(waNumber), need: 'nomor WA sistem, mis. 6285… (angka saja)' },
+    { key: 'CUSTOMER_WA_LOGIN_NUMBER', ok: isValidCustomerPhone(waNumber), need: 'nomor WA sistem, mis. 6285… (angka saja, luar negeri boleh dengan +kode negara)' },
     { key: 'EVOLUTION_INSTANCE', ok: Boolean(env('EVOLUTION_INSTANCE')), need: 'nama instance Evolution' },
     { key: 'EVOLUTION_WEBHOOK_TOKEN', ok: env('EVOLUTION_WEBHOOK_TOKEN').length >= 24, need: 'minimal 24 karakter' }
   ];
@@ -227,9 +228,7 @@ export async function checkChallengeRate(
 
 /** Customer display name (optional) from customers table, by any phone variant. */
 export async function customerNameOf(db: SupabaseClient, phone: string): Promise<string> {
-  const canon = canonicalPhone62(phone);
-  const variants = [...new Set([localPhone08(canon), canon, '+' + canon])];
-  const { data } = await db.from('customers').select('name').in('phone', variants).limit(1);
+  const { data } = await db.from('customers').select('name').in('phone', phoneLookupKeys(phone)).limit(1);
   return String(data?.[0]?.name || '').trim();
 }
 
@@ -254,7 +253,7 @@ export async function evolutionSendText(number: string, text: string): Promise<b
     const res = await fetch(`${evolution.apiUrl}/message/sendText/${encodeURIComponent(evolution.instance)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: evolution.apiKey },
-      body: JSON.stringify({ number: canonicalPhone62(number), text }),
+      body: JSON.stringify({ number: waDigits(number), text }),
       signal: AbortSignal.timeout(8000)
     });
     return res.ok;
