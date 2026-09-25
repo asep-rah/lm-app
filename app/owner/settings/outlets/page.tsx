@@ -7,11 +7,14 @@ import { updateWithFallback } from '@/lib/safeWrite';
 import { canAccessSettings, homePathForRole, isOwnerRole } from '@/lib/staffSession';
 import { parseOutletImages } from '@/lib/outletShowcase';
 import { uploadShowcaseFile } from '@/lib/uploadProof';
+import OutletCapacityPanel from '@/components/OutletCapacityPanel';
+import { canSetOutletCapacity } from '@/lib/outletCapacity';
 
 type OutletRow = Record<string, any>;
 
 export default function OwnerOutletShowcasePage() {
   const [ready, setReady] = useState(false);
+  const [canSetFull, setCanSetFull] = useState(false);
   const [outlets, setOutlets] = useState<OutletRow[]>([]);
   const [selectedId, setSelectedId] = useState('');
   const [saving, setSaving] = useState(false);
@@ -69,6 +72,7 @@ export default function OwnerOutletShowcasePage() {
       window.location.href = homePathForRole(role);
       return;
     }
+    setCanSetFull(canSetOutletCapacity(role));
     setReady(true);
     load();
   }, []);
@@ -144,6 +148,8 @@ export default function OwnerOutletShowcasePage() {
         </div>
         <OwnerShowcaseNav active="outlets" />
       </div>
+
+      {canSetFull && <OutletCapacityPanel />}
 
       <form onSubmit={handleSave} className="bg-white border border-slate-200 rounded-2xl p-4 md:p-6 shadow-sm space-y-4 max-w-3xl">
         <div>

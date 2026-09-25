@@ -300,6 +300,7 @@ Tabel: `driver_attendance`.
 | Laporan | `/owner/reports/laba-rugi`, jurnal, buku besar, neraca, dll. |
 | CRM / Promo / KPI / Performa | Modul terpisah di sidebar |
 | **Diagnosis** | `/owner/system-health` |
+| **Outlet penuh** | Settings → Profil Outlet (owner) atau Workspace (supervisor) → **Status outlet penuh** → *tandai penuh* / *buka lagi*. Outlet penuh tidak muncul di pilihan pesanan pelanggan. **Tidak ada penutupan otomatis** dari jumlah antrean; hanya owner & supervisor yang bisa mengubahnya (dicatat di `audit_logs`: `outlet_marked_full` / `outlet_reopened`). |
 | **Keluar** | Menu (tombol tengah dock) → tombol merah **Keluar / Logout Sesi** di bawah menu. Menghapus sesi server + data login di perangkat. |
 
 #### Laba Rugi berbasis COA

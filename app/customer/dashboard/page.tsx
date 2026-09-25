@@ -51,7 +51,7 @@ import {
   loadComplaintForOrder
 } from '@/lib/csCare';
 import { ensureComplaintTicketFromIssue, findComplaintTicket, ticketTitleOf } from '@/lib/complaintTicket';
-import { nearestOpenOutlet, pickNearestOpenOutlets } from '@/lib/outletCapacity';
+import { nearestOpenOutlet, noOutletReason, pickNearestOpenOutlets } from '@/lib/outletCapacity';
 import { toast } from '@/lib/toast';
 import {
   showComplaintActions,
@@ -311,7 +311,6 @@ function CustomerDashboardPage() {
   const [customerData, setCustomerData] = useState<any>(null);
   const [outletsList, setOutletsList] = useState<any[]>([]);
   const [filteredOutlets, setFilteredOutlets] = useState<any[]>([]);
-  const [pendingByOutlet, setPendingByOutlet] = useState<Record<string, number>>({});
   const [selectedOutlet, setSelectedOutlet] = useState('');
   const qrOutletLockRef = useRef(false);
   const pickupPinLockedRef = useRef(false);
@@ -1148,17 +1147,9 @@ function CustomerDashboardPage() {
   useEffect(() => {
     async function initPWA() {
       const { data: dbOutlets } = await supabase.from('outlets').select('*');
-      let pendingByOutlet: Record<string, number> = {};
       if (dbOutlets && dbOutlets.length > 0) {
-        const [{ data: pendingPickups }, { data: pendingTx }] = await Promise.all([
-          supabase.from('pickup_orders').select('outlet_id, status').neq('status', 'Selesai').neq('status', 'Batal'),
-          supabase.from('transactions').select('outlet_id, status').neq('status', 'Selesai')
-        ]);
-        [...(pendingPickups || []), ...(pendingTx || [])].forEach((row: any) => {
-          if (row.outlet_id) pendingByOutlet[row.outlet_id] = (pendingByOutlet[row.outlet_id] || 0) + 1;
-        });
-        setPendingByOutlet(pendingByOutlet);
-        const open = dbOutlets.filter((o: any) => !o.is_coming_soon && !o.is_overcapacity && (pendingByOutlet[o.id] || 0) < 20);
+        // "Penuh" hanya dari tanda manual owner/supervisor (outlets.is_overcapacity).
+        const open = dbOutlets.filter((o: any) => !o.is_coming_soon && !o.is_overcapacity);
         const visible = open.length ? open : dbOutlets;
         setOutletsList(dbOutlets);
         setFilteredOutlets(visible);
@@ -1175,7 +1166,7 @@ function CustomerDashboardPage() {
           setSelectedOutlet(fromStore);
           setFilteredOutlets(ensureOutletInList(visible, dbOutlets, fromStore));
         } else {
-          const pick = nearestOpenOutlet(visible, null, pendingByOutlet, calculateDistanceKm);
+          const pick = nearestOpenOutlet(visible, null, calculateDistanceKm);
           if (pick) setSelectedOutlet(pick.id);
         }
       }
@@ -1253,7 +1244,7 @@ function CustomerDashboardPage() {
               }
             } else {
               setFilteredOutlets(visible);
-              const pick = nearestOpenOutlet(visible, { lat, lon }, {}, calculateDistanceKm);
+              const pick = nearestOpenOutlet(visible, { lat, lon }, calculateDistanceKm);
               if (pick) setSelectedOutlet(pick.id);
             }
           }
@@ -1332,12 +1323,16 @@ function CustomerDashboardPage() {
     [outletsList, deviceCoords, userCoords, userCity, showAllCities]
   );
   const orderOutlets = useMemo(() => {
-    const rows = pickNearestOpenOutlets(outletsList, userCoords, pendingByOutlet, 3);
+    const rows = pickNearestOpenOutlets(outletsList, userCoords, 3);
     if (outletQuery && selectedOutlet) {
       return ensureOutletInList(rows, outletsList, selectedOutlet).slice(0, 3);
     }
     return rows;
-  }, [outletsList, userCoords, pendingByOutlet, outletQuery, selectedOutlet]);
+  }, [outletsList, userCoords, outletQuery, selectedOutlet]);
+  const noOutletText =
+    noOutletReason(outletsList) === 'full'
+      ? 'Outlet terdekat sedang penuh dan ditutup sementara oleh pengelola. Coba lagi nanti atau hubungi CS.'
+      : 'Belum ada cabang yang bisa melayani titik ini.';
 
   useEffect(() => {
     if (outletQuery) return;
@@ -2103,7 +2098,7 @@ function CustomerDashboardPage() {
       if (!isValidHouseNumber(houseNumber)) return 'Isi nomor rumah / blok. Boleh lengkap, contoh: 117, 12A, B-3, atau rumah no.117.';
       if (!userCoords) return 'Pasang titik di peta dulu: pilih saran, tekan GPS, atau geser peta ke gerbang.';
       if (!selectedOutlet || !orderOutlets.some((o) => String(o.id) === String(selectedOutlet))) {
-        return orderOutlets.length ? 'Pilih outlet yang melayani alamat Anda.' : 'Belum ada cabang terdekat yang bisa menerima pesanan dari titik ini.';
+        return orderOutlets.length ? 'Pilih outlet yang melayani alamat Anda.' : noOutletText;
       }
       if (pickupLater) {
         const sched = parsePickupSchedule(pickupDate, pickupTime);
@@ -2814,7 +2809,7 @@ function CustomerDashboardPage() {
                   </p>
                 ) : orderOutlets.length === 0 ? (
                   <p className="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-100 rounded-2xl px-3 py-2.5">
-                    Belum ada cabang terdekat yang bisa menerima pesanan (penuh / overload).
+                    {noOutletText}
                   </p>
                 ) : (
                   <>

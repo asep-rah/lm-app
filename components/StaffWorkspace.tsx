@@ -21,7 +21,7 @@ import FinanceWorkspacePanel from '@/components/FinanceWorkspacePanel';
 import RequisitionForm from '@/components/RequisitionForm';
 import { prAmount, prQty } from '@/lib/cmsRequisition';
 import { toast } from '@/lib/toast';
-import { updateWithFallback } from '@/lib/safeWrite';
+import OutletCapacityPanel from '@/components/OutletCapacityPanel';
 import AICopilotCard from '@/components/analytics/AICopilotCard';
 import WasherFraudAlertListener from '@/components/WasherFraudAlertListener';
 import OperatorQueueBoard from '@/components/pos/OperatorQueueBoard';
@@ -68,9 +68,7 @@ export default function StaffWorkspace() {
   const [investorNotes, setInvestorNotes] = useState<any[]>([]);
   const [issues, setIssues] = useState<any[]>([]);
   const [unassignedChats, setUnassignedChats] = useState(0);
-  const [outletCaps, setOutletCaps] = useState<any[]>([]);
   const [outletNames, setOutletNames] = useState<Record<string, string>>({});
-  const [capBusy, setCapBusy] = useState<string | null>(null);
   const [supNote, setSupNote] = useState('');
   const [supBusy, setSupBusy] = useState<string | null>(null);
 
@@ -110,8 +108,6 @@ export default function StaffWorkspace() {
     if (role === 'supervisor') {
       const { data } = await supabase.from('outlet_issues').select('*').order('created_at', { ascending: false }).limit(40);
       setIssues((data || []).filter((i: any) => String(i.status || '').toLowerCase() !== 'selesai' && complaintStepOf(i) !== 'resolved'));
-      const { data: outs } = await supabase.from('outlets').select('id, name, is_overcapacity').order('name');
-      setOutletCaps(outs || []);
     }
     const { data: outs } = await supabase.from('outlets').select('id, name');
     setOutletNames(Object.fromEntries((outs || []).map((o: any) => [o.id, o.name])));
@@ -202,23 +198,6 @@ export default function StaffWorkspace() {
     } finally {
       setSupBusy(null);
     }
-  };
-
-  const toggleOutletCapacity = async (outlet: any) => {
-    setCapBusy(outlet.id);
-    const next = !outlet.is_overcapacity;
-    const { error } = await updateWithFallback(
-      'outlets',
-      [{ is_overcapacity: next }],
-      { column: 'id', value: outlet.id }
-    );
-    setCapBusy(null);
-    if (error) {
-      toast('Gagal mengubah kapasitas: ' + error.message, 'err');
-      return;
-    }
-    setOutletCaps((prev) => prev.map((o) => (o.id === outlet.id ? { ...o, is_overcapacity: next } : o)));
-    toast(next ? `${outlet.name} disembunyikan dari pelanggan.` : `${outlet.name} kembali dibuka.`, 'ok');
   };
 
   const handleLogout = () => {
@@ -441,24 +420,7 @@ export default function StaffWorkspace() {
 
             {role === 'supervisor' && (
               <div className="space-y-2">
-                <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Kapasitas outlet</p>
-                <p className="text-[11px] text-slate-500">Outlet penuh disembunyikan dari pilihan pelanggan.</p>
-                {outletCaps.length === 0 && <p className="text-xs text-slate-400">Outlet belum dimuat.</p>}
-                {outletCaps.map((o) => (
-                  <div key={o.id} className="flex items-center justify-between gap-2 text-xs border border-slate-100 rounded-lg px-2.5 py-2">
-                    <span className="font-semibold truncate">{o.name}</span>
-                    <button
-                      type="button"
-                      disabled={capBusy === o.id}
-                      onClick={() => toggleOutletCapacity(o)}
-                      className={`shrink-0 text-[10px] font-bold px-2 py-1 rounded-md ${
-                        o.is_overcapacity ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'
-                      }`}
-                    >
-                      {o.is_overcapacity ? 'Penuh — buka lagi' : 'Tandai penuh'}
-                    </button>
-                  </div>
-                ))}
+                <OutletCapacityPanel compact />
                 <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400 pt-2">Persetujuan komplain</p>
                 {issues.filter((i) => isComplaintIssue(i) && complaintStepOf(i) === 'pending_supervisor').length === 0 && (
                   <p className="text-xs text-slate-400">Tidak ada komplain menunggu keputusan.</p>
