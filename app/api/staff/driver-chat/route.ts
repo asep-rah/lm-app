@@ -11,7 +11,7 @@ import {
 } from '@/lib/driverChatServer';
 import { clientIp, insertErrorLog, paymentServiceDb } from '@/lib/paymentSecurity';
 import { createMemoryRateLimiter, isSameOriginRequest } from '@/lib/requestGuards';
-import { readStaffSession } from '@/lib/staffAuth/server';
+import { readStaffSession, staffSessionError, staffSessionProblem } from '@/lib/staffAuth/server';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,7 +28,10 @@ type Db = ReturnType<typeof paymentServiceDb>;
  */
 async function currentDriver(req: NextRequest, db: Db) {
   const session = readStaffSession(req);
-  if (!session) return { error: deny(401, 'Sesi driver berakhir. Keluar lalu masuk lagi.') };
+  if (!session) {
+    const e = staffSessionError(staffSessionProblem(req) === 'not_configured' ? 'not_configured' : 'missing');
+    return { error: NextResponse.json(e.body, { status: e.status, headers: noStore }) };
+  }
   const { data: staff } = await db.from('employees').select('id, name, role').eq('id', session.sid).maybeSingle();
   if (!staff) return { error: deny(401, 'Akun tidak ditemukan. Masuk lagi.') };
   if (String(staff.role || '').toLowerCase() !== 'driver') return { error: deny(403, 'Chat pelanggan hanya untuk driver.') };

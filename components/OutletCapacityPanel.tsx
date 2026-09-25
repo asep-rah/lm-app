@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { toast } from '@/lib/toast';
+import { isStaffSessionError, staffRelogin } from '@/lib/staffRelogin';
 
 type OutletCap = { id: string; name: string; is_overcapacity?: boolean | null; is_coming_soon?: boolean | null };
 
@@ -14,6 +15,7 @@ type OutletCap = { id: string; name: string; is_overcapacity?: boolean | null; i
 export default function OutletCapacityPanel({ compact = false }: { compact?: boolean }) {
   const [outlets, setOutlets] = useState<OutletCap[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [problem, setProblem] = useState<{ text: string; relogin: boolean } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -42,9 +44,12 @@ export default function OutletCapacityPanel({ compact = false }: { compact?: boo
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        toast(data?.error || 'Gagal mengubah status outlet.', 'err');
+        const text = data?.error || 'Gagal mengubah status outlet.';
+        if (res.status === 401 || res.status === 503) setProblem({ text, relogin: isStaffSessionError(data) });
+        else toast(text, 'err');
         return;
       }
+      setProblem(null);
       setOutlets((prev) => (prev || []).map((x) => (x.id === o.id ? { ...x, is_overcapacity: full } : x)));
       toast(full ? `${o.name} ditandai penuh — disembunyikan dari pelanggan.` : `${o.name} dibuka kembali.`, 'ok');
     } catch {
@@ -62,6 +67,16 @@ export default function OutletCapacityPanel({ compact = false }: { compact?: boo
           Hanya owner & supervisor. Outlet yang ditandai penuh tidak muncul di pilihan pesanan pelanggan sampai dibuka lagi.
         </p>
       </div>
+      {problem && (
+        <div className="text-[11px] font-semibold text-rose-700 bg-rose-50 border border-rose-100 rounded-lg px-2.5 py-2 space-y-2" role="alert">
+          <p>{problem.text}</p>
+          {problem.relogin && (
+            <button type="button" onClick={staffRelogin} className="bg-rose-600 text-white font-bold px-3 py-1.5 rounded-md">
+              Masuk ulang
+            </button>
+          )}
+        </div>
+      )}
       {outlets === null && <p className="text-xs text-slate-400">Memuat outlet…</p>}
       {outlets?.length === 0 && <p className="text-xs text-slate-400">Belum ada outlet.</p>}
       {(outlets || []).map((o) => (

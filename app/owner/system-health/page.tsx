@@ -25,6 +25,7 @@ export default function SystemHealthPage() {
   const [errors, setErrors] = useState<ErrRow[]>([]);
   const [webhooks, setWebhooks] = useState<any[]>([]);
   const [pending, setPending] = useState<any[]>([]);
+  const [staffSessionConfigured, setStaffSessionConfigured] = useState(true);
   const [customerLogin, setCustomerLogin] = useState<{
     whatsapp: boolean;
     legacy: boolean;
@@ -60,6 +61,7 @@ export default function SystemHealthPage() {
       setWebhooks(json.webhooks || []);
       setPending(json.pending || []);
       setCustomerLogin(json.customerLogin || null);
+      setStaffSessionConfigured(json.staffSessionConfigured !== false);
     } catch (e: any) {
       toast(e?.message || 'Gagal muat diagnosis (cek PAYMENT_OPS_SECRET)', 'err');
       setErrors([]);
@@ -161,6 +163,16 @@ export default function SystemHealthPage() {
         </p>
       ) : (
         <div className="space-y-6">
+          {!staffSessionConfigured && (
+            <section className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-[12px] text-rose-800 space-y-1" role="alert">
+              <p className="font-black">STAFF_SESSION_SECRET belum diisi di Vercel (Production)</p>
+              <p>
+                Tanpa ini, tombol staf yang butuh sesi aman — status outlet penuh, chat driver, foto item satuan — selalu
+                ditolak. Isi string acak minimal 32 karakter (<code>openssl rand -base64 48</code>), Redeploy Production, lalu
+                semua staf keluar dan masuk lagi.
+              </p>
+            </section>
+          )}
           {customerLogin && (
             <section className="space-y-2">
               <h2 className="text-xs font-black uppercase tracking-wide text-slate-500">Login WhatsApp pelanggan</h2>

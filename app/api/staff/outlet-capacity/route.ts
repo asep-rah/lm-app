@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { canSetOutletCapacity } from '@/lib/outletCapacity';
 import { clientIp, insertAuditLog, insertErrorLog, paymentServiceDb } from '@/lib/paymentSecurity';
 import { isSameOriginRequest } from '@/lib/requestGuards';
-import { readStaffSession } from '@/lib/staffAuth/server';
+import { readStaffSession, staffSessionError, staffSessionProblem } from '@/lib/staffAuth/server';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,7 +18,10 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export async function POST(req: NextRequest) {
   if (!isSameOriginRequest(req.headers)) return deny(403, 'Permintaan ditolak.');
   const session = readStaffSession(req);
-  if (!session) return deny(401, 'Sesi berakhir. Keluar lalu masuk lagi.');
+  if (!session) {
+    const e = staffSessionError(staffSessionProblem(req) === 'not_configured' ? 'not_configured' : 'missing');
+    return NextResponse.json(e.body, { status: e.status, headers: noStore });
+  }
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   const outletId = String(body.outletId || '');
   if (!UUID.test(outletId)) return deny(400, 'Outlet tidak valid.');
