@@ -48,6 +48,8 @@ Urutan di SQL Editor:
 6. `20260908_outlet_books.sql`, loyalty window, dll.
 7. `20260923_customer_verified_login.sql` — tabel login customer (service-role only), sebelum mengaktifkan login WA/email terverifikasi.
 8. `20260924_satuan_item_photos.sql` — bucket privat `satuan-item-photos` tanpa policy anon (unggah lewat signed upload URL dari server, lihat lewat API staf). Jalankan sebelum `SATUAN_ITEM_PHOTO_ENABLED=true`.
+9. `20260925`–`20260929` — hak `service_role` untuk kode server dan pencabutan INSERT anon di `pickup_orders` (lihat `docs/RELEASE_PR5_RUNBOOK.md`).
+10. `20260930_order_driver_chat.sql` — tabel chat driver ↔ pelanggan `order_driver_chats` (service-role only, RLS on, tanpa akses anon/authenticated). Jalankan **sebelum** deploy fitur chat driver.
 
 `pickup_orders.pickup_date` tetap **NOT NULL** di produksi; aplikasi mengisi tanggal lokal hari ini untuk order tanpa jadwal (jemput sekarang, request antar). Tidak ada migrasi yang melonggarkan constraint itu.
 

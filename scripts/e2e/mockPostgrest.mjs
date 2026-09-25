@@ -1,5 +1,5 @@
 // Minimal in-memory PostgREST mock for local E2E of the customer auth routes.
-// Supports: select (all columns), eq/neq/gte/lte/is/not.is/in/ilike filters,
+// Supports: select (all columns), eq/neq/gte/lte/is/not.is/in/ilike filters, or=(…),
 // order, limit, count=exact (HEAD/GET), insert, update (PATCH), upsert on_conflict,
 // Accept object (single), unique constraints mirroring the migration.
 import http from 'node:http';
@@ -34,9 +34,30 @@ const match = (row, key, expr) => {
   return neg ? !ok : ok;
 };
 
-const RESERVED = new Set(['select', 'order', 'limit', 'offset', 'on_conflict', 'columns']);
+const RESERVED = new Set(['select', 'order', 'limit', 'offset', 'on_conflict', 'columns', 'or']);
+// or=(a.eq.1,b.in.(x,y)) — split on top-level commas only.
+const orTerms = (expr) => {
+  const inner = expr.replace(/^\(|\)$/g, '');
+  const terms = [];
+  let depth = 0;
+  let cur = '';
+  for (const ch of inner) {
+    if (ch === '(') depth++;
+    if (ch === ')') depth--;
+    if (ch === ',' && depth === 0) {
+      terms.push(cur);
+      cur = '';
+    } else cur += ch;
+  }
+  if (cur) terms.push(cur);
+  return terms.map((t) => [t.slice(0, t.indexOf('.')), t.slice(t.indexOf('.') + 1)]);
+};
 const filterRows = (rows, params) =>
-  rows.filter((r) => [...params.entries()].every(([k, v]) => RESERVED.has(k) || match(r, k, v)));
+  rows.filter(
+    (r) =>
+      [...params.entries()].every(([k, v]) => RESERVED.has(k) || match(r, k, v)) &&
+      params.getAll('or').every((expr) => orTerms(expr).some(([k, v]) => match(r, k, v)))
+  );
 
 const uniqueViolation = (table, row, ignore) =>
   (UNIQUE[table] || []).some((fn) => {

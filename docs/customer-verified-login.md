@@ -101,6 +101,21 @@ Jalankan migrasi `supabase/migrations/20260923_customer_verified_login.sql` di S
    Token juga diterima lewat header `x-webhook-token` atau `Authorization: Bearer` bila versi Evolution Anda mendukung header webhook.
 5. Isi `EVOLUTION_INSTANCE=laundrivery-login`, `CUSTOMER_WA_LOGIN_NUMBER=<nomor sistem 62…>`, `EVOLUTION_WEBHOOK_TOKEN`, (opsional) `EVOLUTION_API_URL` + `EVOLUTION_API_KEY` untuk balasan.
 
+### Memakai instance yang sudah ada (mis. `laundrivery`)
+
+Nama instance bebas. Kode hanya mencocokkan `EVOLUTION_INSTANCE` dengan nama instance di payload webhook (tanpa membedakan huruf besar/kecil). Jadi instance yang sudah ada, misalnya `laundrivery`, boleh dipakai: isi `EVOLUTION_INSTANCE=laundrivery`, dan pada langkah 4 ganti `laundrivery-login` dengan `laundrivery`.
+
+**Nomor sistem** (`CUSTOMER_WA_LOGIN_NUMBER`) adalah nomor WhatsApp yang di-scan QR-nya ke instance itu. Cara mengetahuinya:
+
+- Evolution Manager (`<EVOLUTION_API_URL>/manager`) → buka instance → nomor/`ownerJid` tertera di kartu instance; atau
+- `GET <EVOLUTION_API_URL>/instance/fetchInstances?instanceName=laundrivery` (header `apikey`) → field `ownerJid`, mis. `628xxxxxxxxxx@s.whatsapp.net` → ambil angka sebelum `@`; atau
+- di HP yang nomornya dipakai: WhatsApp → Perangkat tertaut → ada perangkat Evolution/Baileys.
+
+Tulis dalam format `62…` tanpa `+`/spasi. Nomor ini yang dibuka lewat tombol **Buka WhatsApp** di halaman login.
+
+Bila instance ini juga dipakai CS/bot n8n (webhook global): pesan biasa diabaikan oleh webhook login (tanpa kode `LDRV-` tidak diproses dan tidak dibalas), tetapi n8n tetap menerima pesan kode login. Atur n8n agar mengabaikan pesan yang diawali `LDRV-` supaya bot tidak ikut membalas.
+
+
 Catatan untuk `docker-compose.yml` yang ada di repo: `WEBHOOK_GLOBAL_URL` mengirim **semua** event ke n8n. Pesan login juga akan terkirim ke sana. Itu tidak membuka celah login (kode hanya bisa diselesaikan oleh browser yang memegang cookie nonce), tetapi sebaiknya instance login dikecualikan dari webhook global atau n8n mengabaikan pesan `LDRV-…`. Lihat juga temuan keamanan di bagian 8.
 
 ## 5. Penyedia email (Resend)

@@ -85,10 +85,12 @@ function OwnerSidebarController({
   }, [pathname, searchParams]);
 
   const handleLogout = () => {
+    if (!confirm('Keluar dari aplikasi Owner?')) return;
     clearStaffServerSession();
     localStorage.removeItem('laundry_owner_user');
     localStorage.removeItem('laundry_user');
-    window.location.href = '/login';
+    localStorage.removeItem('staff_role');
+    window.location.replace('/login');
   };
 
   return (

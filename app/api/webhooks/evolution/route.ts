@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { NextResponse, type NextRequest } from 'next/server';
 import { extractWaCode, parseEvolutionMessages, safeEqual } from '@/lib/customerAuth/core';
 import { authDb, codeHash, customerAuthConfig, evolutionSendText } from '@/lib/customerAuth/server';
@@ -25,14 +26,23 @@ export async function POST(req: NextRequest) {
     req.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ||
     '';
   if (!cfg.evolution.webhookToken || !safeEqual(token, cfg.evolution.webhookToken)) {
+    // Diagnosis in Vercel Logs (no token/phone is logged).
+    // Short fingerprints (8 hex of SHA-256) let the owner compare tokens without revealing them:
+    //   printf %s "$TOKEN" | shasum -a 256 | cut -c1-8
+    const fp = (v: string) => (v ? createHash('sha256').update(v).digest('hex').slice(0, 8) : 'none');
+    console.warn('[wa-login webhook] 401 token', token ? 'mismatch' : 'missing', 'received', fp(token), 'expected', fp(cfg.evolution.webhookToken));
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   if (!cfg.whatsapp) return NextResponse.json({ ok: true, ignored: 'wa_login_disabled' });
 
   const body = await req.json().catch(() => null);
   const { event, instance, messages } = parseEvolutionMessages(body);
-  if (event !== 'messages.upsert') return NextResponse.json({ ok: true, ignored: 'event' });
+  if (event !== 'messages.upsert') {
+    console.info('[wa-login webhook] ignored event', event || '(none)');
+    return NextResponse.json({ ok: true, ignored: 'event' });
+  }
   if (instance.toLowerCase() !== cfg.evolution.instance.toLowerCase()) {
+    console.warn('[wa-login webhook] ignored instance', instance || '(none)', 'expected', cfg.evolution.instance);
     return NextResponse.json({ ok: true, ignored: 'instance' });
   }
 
@@ -131,5 +141,7 @@ export async function POST(req: NextRequest) {
       results.push('race_lost');
     }
   }
+  // Outcome per message (verified / no_code / unknown_code / sender_mismatch / …), no phone numbers.
+  if (results.some((r) => r !== 'skip' && r !== 'no_code')) console.info('[wa-login webhook]', results.join(','));
   return NextResponse.json({ ok: true, results });
 }

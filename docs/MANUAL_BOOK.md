@@ -129,7 +129,7 @@ Alias webhook: `/api/mayar/webhook` mengarah ke handler yang sama. Gateway pemba
 Tab **Order** berisi 3 langkah (pilihan tetap tersimpan saat maju/mundur/berpindah tab; tombol Lanjut/Pesan menempel di atas navigasi bawah):
 
 1. **Alamat & Penjemputan** — alamat tersimpan/baru, pencarian alamat + pin peta, nomor rumah/blok, patokan → outlet terdekat yang melayani (3 cabang terdekat, tidak coming soon/overload) → *Jemput sekarang* / *Jadwalkan* → **Driver Internal** (gratis, antrean & estimasi jemput) atau **Instan** (estimasi ongkir dari jarak jalan) → catatan penjemputan.
-2. **Layanan** — kiloan dan/atau satuan, durasi, kuantitas, detail cucian kiloan, voucher promo, tukar poin loyalty.
+2. **Layanan** — kiloan dan/atau satuan, durasi, kuantitas, detail cucian kiloan, voucher promo, tukar poin loyalty. **Tidak ada pilihan yang terisi otomatis**: jumlah kantong, proses cuci (Dicampur/Dipisah), pakaian luntur (Tidak/Ya), jenis kiloan, durasi kiloan, item satuan, dan durasi item harus dipilih customer sendiri; *Tambah Paket Kiloan Ini* / *Tambah Item Satuan Ini* menolak dengan pesan yang jelas bila ada yang belum dipilih. Setelah satu paket kiloan ditambahkan, jumlah kantong & proses cuci kembali kosong untuk paket berikutnya. `bag_count` pesanan = total kantong di keranjang (paket campur 3 kantong = 3), `wash_process` = *Pisah Perkantong* bila lebih dari satu paket.
 3. **Periksa & Pesan** — ringkasan yang bisa diubah per bagian, nama pemesan, rincian estimasi (subtotal, ongkir, promo, poin, total), persetujuan, satu tombol **Pesan Sekarang** (dikunci terhadap ketukan ganda; nomor order dipakai ulang saat kirim ulang).
 
 Perhitungan harga/promo/poin/ongkir dan payload `pickup_orders` tidak berubah dibanding form satu halaman sebelumnya.
@@ -265,6 +265,15 @@ Tabel: `driver_attendance`.
 - Tombol navigasi membuka **Google Maps** ke pin pelanggan.
 - Upload bukti serah-terima sesuai tahap.
 
+#### Chat driver ↔ pelanggan (dalam aplikasi)
+
+- Seperti Grab/Gojek: satu percakapan per pesanan jemput/antar.
+- **Terbuka** saat driver sudah mengambil tugas dan perjalanan berjalan: status `Driver Menuju Lokasi`, `Barang Dibawa ke Outlet`, atau `Driver Mengantar`. Setelah itu (tiba di outlet, terkirim, batal) chat **hanya bisa dibaca**.
+- Driver: tombol **Chat Pelanggan** di kartu tugas (hanya untuk tugas miliknya), badge merah = pesan belum dibaca.
+- Pelanggan: tombol **Chat Driver** di kartu *Aktivitas → Berlangsung*, badge = pesan driver yang belum dibaca; tanda *Dibaca* pada pesan sendiri.
+- Semua lewat server (`/api/customer/driver-chat`, `/api/staff/driver-chat`); tabel `order_driver_chats` tidak bisa diakses dari browser. Driver harus login ulang bila sesi staf berakhir. Pesan diperbarui tiap ±4 detik saat chat terbuka (badge tiap 15 detik).
+- Tombol WhatsApp/Telepon tetap ada sebagai cadangan.
+
 #### Penguncian jika libur / belum absen
 
 - CS **tidak** menempatkan driver yang `OFF_DUTY` ke antrean jemput internal.
@@ -289,6 +298,7 @@ Tabel: `driver_attendance`.
 | Laporan | `/owner/reports/laba-rugi`, jurnal, buku besar, neraca, dll. |
 | CRM / Promo / KPI / Performa | Modul terpisah di sidebar |
 | **Diagnosis** | `/owner/system-health` |
+| **Keluar** | Menu (tombol tengah dock) → tombol merah **Keluar / Logout Sesi** di bawah menu. Menghapus sesi server + data login di perangkat. |
 
 #### Laba Rugi berbasis COA
 

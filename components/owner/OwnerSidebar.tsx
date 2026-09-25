@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { Bell, ChevronDown, Menu, Shield, X } from 'lucide-react';
+import { Bell, ChevronDown, LogOut, Menu, Shield, X } from 'lucide-react';
 import { type SettingsPanel } from '@/components/owner/ownerNav';
 
 export type { SettingsPanel };
@@ -94,12 +94,12 @@ export default function OwnerSidebar({
         <button
           type="button"
           aria-label="Tutup menu"
-          className="fixed inset-0 z-[70] bg-black/40"
+          className="fixed inset-0 z-[91] bg-black/40"
           onClick={onClose}
         />
       )}
       <aside
-        className={`fixed top-0 left-0 z-[80] h-full w-[min(88vw,300px)] bg-white shadow-2xl border-r border-slate-200 flex flex-col transition-transform duration-200 ${
+        className={`fixed top-0 left-0 z-[95] h-full w-[min(88vw,300px)] bg-white shadow-2xl border-r border-slate-200 flex flex-col transition-transform duration-200 ${
           open ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
@@ -259,18 +259,17 @@ export default function OwnerSidebar({
             )}
           </div>
         </nav>
-        <div className="p-3 border-t border-slate-200 bg-slate-50 shrink-0">
-  <button 
-    type="button" 
-    onClick={onLogout} 
-    className="btn btn-error btn-block text-white font-extrabold text-xs rounded-2xl shadow-md gap-2"
-  >
-    <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-    </svg>
-    Keluar / Logout Sesi
-  </button>
-</div>
+        {/* Di atas dock bawah (z-[90]) supaya tombol keluar tidak tertutup. */}
+        <div className="p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t border-slate-200 bg-slate-50 shrink-0">
+          <button
+            type="button"
+            onClick={onLogout}
+            className="w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-rose-600 hover:bg-rose-700 active:scale-[0.98] text-white font-extrabold text-xs py-3 shadow-md transition"
+          >
+            <LogOut className="w-4 h-4" />
+            Keluar / Logout Sesi
+          </button>
+        </div>
       </aside>
     </>
   );
