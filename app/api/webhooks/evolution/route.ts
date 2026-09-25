@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { NextResponse, type NextRequest } from 'next/server';
 import { extractWaCode, parseEvolutionMessages, safeEqual } from '@/lib/customerAuth/core';
 import { authDb, codeHash, customerAuthConfig, evolutionSendText } from '@/lib/customerAuth/server';
@@ -26,7 +27,10 @@ export async function POST(req: NextRequest) {
     '';
   if (!cfg.evolution.webhookToken || !safeEqual(token, cfg.evolution.webhookToken)) {
     // Diagnosis in Vercel Logs (no token/phone is logged).
-    console.warn('[wa-login webhook] 401 token', token ? 'mismatch' : 'missing');
+    // Short fingerprints (8 hex of SHA-256) let the owner compare tokens without revealing them:
+    //   printf %s "$TOKEN" | shasum -a 256 | cut -c1-8
+    const fp = (v: string) => (v ? createHash('sha256').update(v).digest('hex').slice(0, 8) : 'none');
+    console.warn('[wa-login webhook] 401 token', token ? 'mismatch' : 'missing', 'received', fp(token), 'expected', fp(cfg.evolution.webhookToken));
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   if (!cfg.whatsapp) return NextResponse.json({ ok: true, ignored: 'wa_login_disabled' });
