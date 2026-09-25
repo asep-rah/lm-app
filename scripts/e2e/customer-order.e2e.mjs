@@ -855,6 +855,18 @@ await step('Login: country picker (Indonesia default) — a Singapore number is 
     assert.equal(await page.getByRole('tab', { name: /Alamat & Jemput/, selected: true }).count(), 1);
   });
 
+  await step('Pickup point: zoom +/- and "Perbesar" sit inside the map on the right, Perbesar under the zoom', async () => {
+    const map = await page.locator('.leaflet-container').boundingBox();
+    const zoom = await page.locator('.leaflet-control-zoom').boundingBox();
+    const big = await page.getByRole('button', { name: 'Perbesar' }).boundingBox();
+    assert.ok(map && zoom && big);
+    assert.ok(zoom.x > map.x + map.width / 2, 'zoom on the right');
+    assert.ok(big.x > map.x + map.width / 2 && big.x + big.width <= map.x + map.width, 'Perbesar inside the map, right side');
+    assert.ok(big.y >= zoom.y + zoom.height && big.y + big.height <= map.y + map.height, 'Perbesar under the zoom, inside the map');
+    assert.ok(Math.abs(big.x + big.width - (zoom.x + zoom.width)) < 3, 'right edges aligned');
+    await page.screenshot({ path: `${OUT}/11-map-controls.png` });
+  });
+
   await step('Pickup point: "Perbesar" opens a full-screen map, "Selesai" closes it', async () => {
     await page.getByRole('button', { name: 'Perbesar' }).click();
     const dlg = page.getByRole('dialog', { name: 'Peta titik jemput' });

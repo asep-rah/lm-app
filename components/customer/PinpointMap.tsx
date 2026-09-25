@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Maximize2, MapPin, Navigation, X } from 'lucide-react';
+import { Maximize2, MapPin, Minimize2, Navigation, X } from 'lucide-react';
 import type { GeoPoint } from '@/lib/mapsNav';
 import 'leaflet/dist/leaflet.css';
 
@@ -40,7 +40,7 @@ export default function PinpointMap({ value, fallbackCenter, onChange, onGps, lo
 
       const start = value || fallbackCenter || FALLBACK_CENTER;
       const map = L.map(host, {
-        zoomControl: true,
+        zoomControl: false,
         attributionControl: true,
         dragging: true
       }).setView([start.lat, start.lng], value ? 17 : fallbackCenter ? 15 : 12);
@@ -48,6 +48,8 @@ export default function PinpointMap({ value, fallbackCenter, onChange, onGps, lo
         maxZoom: 19,
         attribution: '&copy; OpenStreetMap'
       }).addTo(map);
+      // Zoom +/- on the right; the "Perbesar" button sits right under it (see render).
+      L.control.zoom({ position: 'topright' }).addTo(map);
 
       map.on('dragend', () => {
         armedRef.current = true;
@@ -128,16 +130,7 @@ export default function PinpointMap({ value, fallbackCenter, onChange, onGps, lo
         <p className="text-[10px] font-extrabold text-slate-500 uppercase inline-flex items-center gap-1">
           <MapPin className="w-3 h-3" /> Geser peta, pin tetap di tengah
         </p>
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => setFull(true)}
-            className="text-[10px] font-bold text-slate-600 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded-lg inline-flex items-center gap-1"
-          >
-            <Maximize2 className="w-3 h-3" /> Perbesar
-          </button>
-          {gpsButton}
-        </div>
+        {gpsButton}
       </div>
       {/* Same DOM node in both modes so Leaflet keeps its map; only the layout changes. */}
       <div
@@ -169,6 +162,18 @@ export default function PinpointMap({ value, fallbackCenter, onChange, onGps, lo
           {/* Constant className: React must never overwrite the classes Leaflet adds (leaflet-container…);
               "relative" also stops Leaflet from pinning an inline position. Only the wrapper resizes. */}
           <div ref={hostRef} className="relative h-full w-full z-0 bg-slate-100" />
+          {ready && (
+            // Styled like Leaflet's zoom bar, placed right under it (top-right).
+            <button
+              type="button"
+              onClick={() => setFull((v) => !v)}
+              aria-label={full ? 'Kecilkan peta' : 'Perbesar'}
+              title={full ? 'Kecilkan peta' : 'Perbesar peta'}
+              className="absolute right-[10px] top-[84px] z-[1001] w-[34px] h-[34px] bg-white text-slate-800 rounded border-2 border-black/20 bg-clip-padding flex items-center justify-center hover:bg-slate-50"
+            >
+              {full ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            </button>
+          )}
           {ready && (
             <div className="pointer-events-none absolute inset-0 z-[1000] flex items-center justify-center">
               <div className="-translate-y-4 drop-shadow-md text-rose-600">
