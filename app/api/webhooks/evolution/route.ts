@@ -25,14 +25,20 @@ export async function POST(req: NextRequest) {
     req.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ||
     '';
   if (!cfg.evolution.webhookToken || !safeEqual(token, cfg.evolution.webhookToken)) {
+    // Diagnosis in Vercel Logs (no token/phone is logged).
+    console.warn('[wa-login webhook] 401 token', token ? 'mismatch' : 'missing');
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   if (!cfg.whatsapp) return NextResponse.json({ ok: true, ignored: 'wa_login_disabled' });
 
   const body = await req.json().catch(() => null);
   const { event, instance, messages } = parseEvolutionMessages(body);
-  if (event !== 'messages.upsert') return NextResponse.json({ ok: true, ignored: 'event' });
+  if (event !== 'messages.upsert') {
+    console.info('[wa-login webhook] ignored event', event || '(none)');
+    return NextResponse.json({ ok: true, ignored: 'event' });
+  }
   if (instance.toLowerCase() !== cfg.evolution.instance.toLowerCase()) {
+    console.warn('[wa-login webhook] ignored instance', instance || '(none)', 'expected', cfg.evolution.instance);
     return NextResponse.json({ ok: true, ignored: 'instance' });
   }
 
@@ -131,5 +137,7 @@ export async function POST(req: NextRequest) {
       results.push('race_lost');
     }
   }
+  // Outcome per message (verified / no_code / unknown_code / sender_mismatch / …), no phone numbers.
+  if (results.some((r) => r !== 'skip' && r !== 'no_code')) console.info('[wa-login webhook]', results.join(','));
   return NextResponse.json({ ok: true, results });
 }
