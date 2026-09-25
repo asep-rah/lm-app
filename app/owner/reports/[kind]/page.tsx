@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import OwnerChrome from '@/components/owner/OwnerChrome';
 import { canAccessSettings, homePathForRole, isOwnerRole } from '@/lib/staffSession';
-import { loadOwnerFinanceBundle, filterByOutlet, ledgerTxsOf } from '@/lib/ownerFinanceData';
+import { earliestBooksStart, loadOwnerFinanceBundle, filterByOutlet, ledgerTxsOf } from '@/lib/ownerFinanceData';
 import { monthLabel, type PnlMonthRef } from '@/lib/pnlReport';
 import { booksOf, idr, loadOutletBooks, type OutletBook } from '@/lib/outletBooks';
 import {
@@ -66,6 +66,7 @@ export default function OwnerFinanceKindPage() {
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth());
   const [ledgerAccount, setLedgerAccount] = useState<string | null>(null);
+  const [truncated, setTruncated] = useState(false);
 
   useEffect(() => {
     const raw = localStorage.getItem('laundry_owner_user') || localStorage.getItem('laundry_user');
@@ -83,7 +84,10 @@ export default function OwnerFinanceKindPage() {
 
   useEffect(() => {
     if (!ready) return;
-    Promise.all([loadOwnerFinanceBundle(), loadOutletBooks(), loadProfitShareRates()]).then(([b, books, share]) => {
+    // Neraca/buku besar kumulatif sejak mulai pembukuan: muat data sejak tanggal itu.
+    Promise.all([loadOutletBooks(), loadProfitShareRates()]).then(async ([books, share]) => {
+      const b = await loadOwnerFinanceBundle({ since: earliestBooksStart(Object.values(books)) });
+      setTruncated(b.truncated);
       setOutlets(b.outlets);
       setTxs(b.txs);
       setVoidedTxs(b.voidedTxs);
@@ -115,12 +119,12 @@ export default function OwnerFinanceKindPage() {
   }, [txs, mems, exps, store]);
 
   const journal = useMemo(
-    () => buildJournal({ txs: scopedLedgerTxs, mems: scopedMems, exps: scopedExps, books, ref, mode: 'month' }),
-    [scopedLedgerTxs, scopedMems, scopedExps, books, year, month]
+    () => buildJournal({ txs: scopedLedgerTxs, mems: scopedMems, exps: scopedExps, books, ref, mode: 'month', rates }),
+    [scopedLedgerTxs, scopedMems, scopedExps, books, year, month, rates]
   );
   const ledger = useMemo(
-    () => buildLedger({ txs: scopedLedgerTxs, mems: scopedMems, exps: scopedExps, books, asOf: ref }),
-    [scopedLedgerTxs, scopedMems, scopedExps, books, year, month]
+    () => buildLedger({ txs: scopedLedgerTxs, mems: scopedMems, exps: scopedExps, books, asOf: ref, rates }),
+    [scopedLedgerTxs, scopedMems, scopedExps, books, year, month, rates]
   );
   const equity = useMemo(
     () => buildEquity({ txs: scopedTxs, mems: scopedMems, exps: scopedExps, books, ref, rates }),
@@ -148,9 +152,10 @@ export default function OwnerFinanceKindPage() {
       exps: scopedExps,
       books,
       asOf: ref,
-      account: ledgerAccount
+      account: ledgerAccount,
+      rates
     });
-  }, [ledgerAccount, scopedLedgerTxs, scopedMems, scopedExps, books, year, month]);
+  }, [ledgerAccount, scopedLedgerTxs, scopedMems, scopedExps, books, year, month, rates]);
 
   const outletTitle = outletId === 'ALL'
     ? 'NERACA SEMUA CABANG'
@@ -186,6 +191,13 @@ export default function OwnerFinanceKindPage() {
             </select>
           </div>
         </div>
+
+        {truncated && (
+          <p className="text-[11px] text-rose-900 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2 leading-relaxed">
+            Data terlalu banyak untuk dimuat seluruhnya (lebih dari 50.000 baris per tabel). Angka neraca & buku besar bisa
+            kurang lengkap — hubungi tim teknis untuk tutup buku / saldo penutupan.
+          </p>
+        )}
 
         {!completeness.complete && (
           <p className="text-[11px] text-amber-900 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 leading-relaxed">
@@ -353,17 +365,24 @@ export default function OwnerFinanceKindPage() {
         {kind === 'perubahan-modal' && (
           <div className="bg-white border rounded-2xl p-5 shadow-sm space-y-2 text-sm max-w-2xl">
             <p className="text-[11px] text-slate-400 mb-2">Per {monthLabel(ref)}</p>
-            <Row label="Modal disetor (awal + tambahan kumulatif)" value={idr(neraca.paidInCapital)} />
-            <Row label="Ekuitas saldo awal (1 Januari / awal tahun)" value={idr(neraca.equityBegin)} />
-            <Row label="Setoran modal tambahan tahun ini" value={idr(neraca.extraYear)} />
-            <Row label="Laba tahun ini setelah penyusutan & bagi hasil" value={idr(neraca.yearProfit)} />
-            <Row label="Prive tahun ini" value={idr(neraca.drawingsYear)} />
-            <Row label={`Laba / rugi ${monthLabel(ref)} sebelum bagi hasil`} value={idr(equity.periodProfit)} />
-            <Row label={`Laba / rugi ${monthLabel(ref)} setelah bagi hasil`} value={idr(equity.periodProfitAfterShare)} />
-            <Row label="Jumlah ekuitas (posisi neraca)" value={idr(neraca.totalEquity)} strong />
+            <Row label={`Ekuitas awal tahun ${ref.year} (1 Januari / saldo pembukaan)`} value={idr(neraca.equityBegin)} />
+            <Row label="+ Setoran modal tambahan tahun ini" value={idr(neraca.extraYear)} />
+            <Row label="+ Laba bersih tahun berjalan (setelah penyusutan & bagi hasil)" value={idr(neraca.yearProfit)} />
+            <Row label="− Prive tahun ini" value={idr(-neraca.drawingsYear)} />
+            <Row label={`Ekuitas akhir per ${monthLabel(ref)} (= neraca)`} value={idr(neraca.totalEquity)} strong />
+            <p className="text-[11px] font-black text-slate-500 pt-3">Bulan {monthLabel(ref)}</p>
+            <Row label="Laba / rugi bulan ini sebelum bagi hasil" value={idr(equity.periodProfit)} />
+            <Row label="Bagi hasil pengelolaan bulan ini" value={idr(equity.periodProfitAfterShare - equity.periodProfit)} />
+            <Row label="Laba / rugi bulan ini setelah bagi hasil" value={idr(equity.periodProfitAfterShare)} />
+            <p className="text-[11px] font-black text-slate-500 pt-3">Komposisi ekuitas</p>
+            <Row label="Modal disetor (awal + tambahan)" value={idr(neraca.paidInCapital)} />
+            {neraca.openingGap ? <Row label="Selisih pembukaan" value={idr(neraca.openingGap)} /> : null}
+            <Row label="Prive kumulatif" value={idr(-neraca.drawings)} />
+            <Row label="Laba ditahan (tahun-tahun lalu)" value={idr(neraca.retainedPrior)} />
+            <Row label="Laba tahun berjalan" value={idr(neraca.yearProfit)} />
             <p className="text-[10px] text-slate-500 pt-2 leading-relaxed">
-              “Laba bulan ini” dan “laba tahun ini” memakai basis yang berbeda: bulan = sebelum/sesudah bagi hasil periode;
-              tahun = setelah bagi hasil YTD di neraca. Jangan samakan keduanya tanpa penyesuaian.
+              Semua angka dari jurnal yang sama dengan buku besar dan neraca. Bagi hasil dicatat tiap akhir bulan (sama dengan
+              laporan laba rugi) dan tetap menjadi utang sampai dibayar.
             </p>
           </div>
         )}

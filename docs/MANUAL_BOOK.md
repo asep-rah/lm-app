@@ -323,6 +323,17 @@ Laporan memakai kode akun di `lib/pnlReport.ts`:
 
 Pendapatan dari transaksi + membership; beban dipetakan dari kategori expense / COA yang dikonfigurasi.
 
+#### Jurnal, Buku Besar, Neraca, Perubahan Ekuitas
+
+- **Satu sumber:** neraca dan laporan perubahan ekuitas disusun dari **saldo buku besar** (jurnal yang sama, `lib/financeStatements.ts`). Karena setiap bukti jurnal seimbang, **Aset = Liabilitas + Ekuitas** selalu berlaku dan setiap angka neraca sama dengan saldo akunnya di buku besar.
+- **Data:** dimuat sejak tanggal mulai pembukuan paling awal (bukan hanya 12 bulan), per halaman, tanpa batas 3.000 baris. Bila lebih dari 50.000 baris per tabel, laporan menampilkan peringatan.
+- **Void:** dibalik pada tanggal void (bulan jual tidak diubah); void di bulan yang sama tidak menyisakan omset, kas, maupun bagi hasil.
+- **Saldo awal:** transaksi sebelum tanggal mulai pembukuan tidak dihitung ulang, karena sudah termasuk saldo awal. Aset yang dibeli sebelum tanggal mulai masuk di **nilai buku**: harga perolehan dikurangi akumulasi penyusutan sampai bulan sebelum mulai. Selisihnya tampil sebagai "Selisih Pembukaan" di pengaturan outlet.
+- **Bagi hasil pengelolaan:** dijurnal tiap akhir bulan per outlet (Dr Beban Bagi Hasil Pengelolaan / Cr 210010), dengan angka yang sama persis dengan Laporan Laba Rugi (persentase per outlet, bulan rugi = 0). Nilainya tetap menjadi utang sampai pembayarannya dicatat; tidak hilang saat ganti tahun.
+- **Kas tunai belum disetor minus** berarti ada pengeluaran yang dicatat dari laci padahal dibayar dari sumber lain. Neraca menampilkan peringatan dan tidak menyembunyikannya.
+- **Ekuitas:** Modal Disetor + Selisih Pembukaan − Prive + Laba Ditahan + Laba Tahun Berjalan = Jumlah Ekuitas.
+- Format Laporan Laba Rugi (COA) **tidak berubah**.
+
 #### Soft Void (pembatalan aman)
 
 1. Kasir mengajukan hapus (`delete_requested`).

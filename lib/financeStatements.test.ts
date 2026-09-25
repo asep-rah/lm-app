@@ -321,3 +321,121 @@ describe('representative recon sample', () => {
     assert.equal(clearing, sheet.gatewayClearing);
   });
 });
+
+describe('accounting integrity: neraca = buku besar, aset = liabilitas + ekuitas', () => {
+  const book = (o: Partial<OutletBook> = {}): OutletBook =>
+    Object.assign(emptyBook('o1'), { booksStart: '2026-01-01', openingCapital: 10_000_000, openingCash: 10_000_000, assets: [] }, o);
+  const sale = (o: Record<string, unknown> = {}) => ({
+    id: `t-${Math.random().toString(36).slice(2)}`,
+    outlet_id: 'o1',
+    delivery_fee: 0,
+    order_type: 'Offline',
+    receipt_number: 'R',
+    customer_name: 'X',
+    is_paid: true,
+    payment_status: 'paid',
+    payment_method: 'Cash',
+    status: 'Selesai',
+    amount: 100_000,
+    created_at: '2026-09-10T10:00:00.000Z',
+    ...o
+  });
+  const expense = (o: Record<string, unknown> = {}) => ({ id: `e-${Math.random().toString(36).slice(2)}`, outlet_id: 'o1', category: 'Beban Gaji Crew', description: 'x', ...o });
+  const mesin = (acquiredAt: string) => ({ id: 'a1', name: 'Mesin', category: 'Mesin & Peralatan', cost: 6_000_000, residual: 0, lifeMonths: 60, acquiredAt });
+
+  const check = (args: { txs?: any[]; mems?: any[]; exps?: any[]; books?: OutletBook[]; asOf?: { year: number; month: number } }) => {
+    const a = { txs: args.txs || [], mems: args.mems || [], exps: args.exps || [], books: args.books || [book()], asOf: args.asOf || sep };
+    const sheet = buildBalanceSheet(a);
+    const ledger = buildLedger(a);
+    const saldo = (code: string) => ledger.find((r) => r.name.startsWith(code))?.saldo || 0;
+    assert.equal(Math.round(sheet.totalAssets - sheet.totalPasiva), 0, 'aset = liabilitas + ekuitas');
+    assert.equal(sheet.cash, saldo(BS.CASH.code));
+    assert.equal(sheet.undepositedCash, saldo(BS.UNDEPOSITED.code));
+    assert.equal(sheet.receivables, saldo(BS.AR.code));
+    assert.equal(sheet.gatewayClearing, saldo(BS.CLEARING.code));
+    assert.equal(sheet.accumDep, saldo(BS.ACCUM.code));
+    assert.equal(sheet.profitShare, saldo(BS.BH.code));
+    // Baris ekuitas di neraca dijumlahkan persis menjadi Jumlah Ekuitas.
+    assert.equal(
+      Math.round(sheet.paidInCapital + sheet.openingGap - sheet.drawings + sheet.retainedPrior + sheet.yearProfit),
+      Math.round(sheet.totalEquity)
+    );
+    // Laporan perubahan ekuitas: awal tahun + setoran + laba − prive = akhir.
+    assert.equal(Math.round(sheet.equityBegin + sheet.extraYear + sheet.yearProfit - sheet.drawingsYear), Math.round(sheet.totalEquity));
+    const journal = buildJournal({ ...a, ref: a.asOf, mode: 'through' });
+    assert.deepEqual(journalGroupBalanceIssues(journal), []);
+    return sheet;
+  };
+
+  it('expenses larger than the cash drawer stay balanced (drawer shows minus + warning, not hidden)', () => {
+    const s = check({ txs: [sale()], exps: [expense({ amount: 200_000, created_at: '2026-09-11T10:00:00.000Z' })] });
+    assert.equal(s.undepositedCash, -100_000);
+    assert.match(s.completeness.issues[0], /minus/);
+  });
+  it('a sale voided in the same month leaves no revenue, no cash and no bagi hasil', () => {
+    const s = check({ txs: [sale({ is_void: true, status: 'Dibatalkan', voided_at: '2026-09-12T10:00:00.000Z' })] });
+    assert.equal(s.undepositedCash, 0);
+    assert.equal(s.yearProfit, 0);
+    assert.equal(s.profitShare, 0);
+  });
+  it('void journal: each reversal is one balanced voucher', () => {
+    const rows = buildJournal({ txs: [sale({ is_void: true, voided_at: '2026-09-12T10:00:00.000Z' })], mems: [], exps: [], books: [], ref: sep, mode: 'month' });
+    assert.deepEqual(journalGroupBalanceIssues(rows), []);
+  });
+  it('sales before the books start date are not counted again (they are in the opening balance)', () => {
+    const s = check({ txs: [sale({ created_at: '2025-12-20T10:00:00.000Z' })] });
+    assert.equal(s.undepositedCash, 0);
+    assert.equal(s.totalAssets, 10_000_000);
+  });
+  it('an asset bought before the books start enters at book value; accumulated depreciation matches the asset schedule', () => {
+    const b = book({ openingCash: 4_000_000, openingCapital: 10_000_000, assets: [mesin('2025-01-01')] });
+    const s = check({ books: [b] });
+    // 12 bulan sebelum mulai (1.200.000) + Jan–Sep 2026 (900.000)
+    assert.equal(s.accumDep, 2_100_000);
+    assert.equal(s.fixedAtCost, 6_000_000);
+    assert.equal(s.openingGap, -1_200_000, 'owner sees the opening difference instead of a silent imbalance');
+  });
+  it('bagi hasil: accrued monthly like the P&L, stays a liability after the year changes', () => {
+    const b = book({ booksStart: '2025-06-01' });
+    const tx = sale({ amount: 1_000_000, created_at: '2025-11-10T10:00:00.000Z', deposited_at: '2025-11-11T10:00:00.000Z' });
+    const dec = check({ books: [b], txs: [tx], asOf: { year: 2025, month: 11 } });
+    const jan = check({ books: [b], txs: [tx], asOf: { year: 2026, month: 0 } });
+    assert.equal(dec.profitShare, 200_000);
+    assert.equal(jan.profitShare, 200_000, 'unpaid bagi hasil does not vanish into equity on 1 January');
+    assert.equal(jan.retainedPrior, 800_000);
+    assert.equal(jan.yearProfit, 0);
+  });
+  it('bagi hasil uses the outlet percentage and a month with a loss has none', () => {
+    const b = book();
+    const s = check({
+      books: [b],
+      txs: [sale({ amount: 1_000_000, created_at: '2026-08-10T10:00:00.000Z' })],
+      exps: [expense({ amount: 1_500_000, created_at: '2026-09-10T10:00:00.000Z' })]
+    });
+    assert.equal(s.profitShare, 200_000, 'August profit 1.000.000 × 20%; September loss has no negative share');
+    const custom = buildBalanceSheet({ txs: [sale({ amount: 1_000_000 })], mems: [], exps: [], books: [b], asOf: sep, rates: { o1: 30 } });
+    assert.equal(custom.profitShare, 300_000);
+  });
+  it('prive: account detail and ledger summary show the same (debit) balance', () => {
+    const b = book({ drawings: [{ id: 'p', date: '2026-09-02', amount: 500_000, note: '' }] });
+    const args = { txs: [], mems: [], exps: [], books: [b], asOf: sep };
+    const detail = buildLedgerAccount({ ...args, account: `${BS.DRAWING.code} ${BS.DRAWING.label}` });
+    const row = buildLedger(args).find((r) => r.name.startsWith(BS.DRAWING.code));
+    assert.equal(detail.closing, 500_000);
+    assert.equal(row?.saldo, 500_000);
+    check({ books: [b] });
+  });
+  it('capital, prive, membership, QRIS clearing and books without a start date all balance', () => {
+    check({ books: [book({ extraCapital: [{ id: 'c', date: '2026-09-01', amount: 1_000_000, note: '' }] })] });
+    check({ mems: [{ id: 'm', outlet_id: 'o1', price: 50_000, created_at: '2026-09-05T10:00:00.000Z' }] });
+    check({ txs: [sale({ payment_method: 'QRIS', paid_via: 'GATEWAY', paid_at: '2026-09-10T11:00:00.000Z' })] });
+    check({ books: [], txs: [sale()] });
+    check({ books: [book({ booksStart: '', assets: [mesin('2026-03-01')] })] });
+  });
+  it('equity statement for one month: before/after bagi hasil', () => {
+    const e = buildEquity({ txs: [sale({ amount: 1_000_000 })], mems: [], exps: [], books: [book()], ref: sep });
+    assert.equal(e.periodProfit, 1_000_000);
+    assert.equal(e.periodProfitAfterShare, 800_000);
+    assert.equal(e.endingEquity, e.openingEquity + e.additional + e.periodProfitAfterShare - e.drawings);
+  });
+});
