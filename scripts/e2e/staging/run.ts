@@ -587,6 +587,9 @@ async function main() {
     customer_name: '[STAGING] Pelanggan Uji',
     customer_phone: SYN.customer,
     address: '[STAGING] jl uji coblong no.1 bandung',
+    // Pin is required and must be within the outlet's service radius.
+    latitude: -6.886,
+    longitude: 107.613,
     items,
     ...extra
   });

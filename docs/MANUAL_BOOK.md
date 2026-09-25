@@ -130,11 +130,19 @@ Alias webhook: `/api/mayar/webhook` mengarah ke handler yang sama. Gateway pemba
 
 Tab **Order** berisi 3 langkah (pilihan tetap tersimpan saat maju/mundur/berpindah tab; tombol Lanjut/Pesan menempel di atas navigasi bawah):
 
-1. **Alamat & Penjemputan** — alamat tersimpan/baru, pencarian alamat + pin peta, nomor rumah/blok, patokan → outlet terdekat yang melayani (3 cabang terdekat, tidak coming soon/overload) → *Jemput sekarang* / *Jadwalkan* → **Driver Internal** (gratis, antrean & estimasi jemput) atau **Instan** (estimasi ongkir dari jarak jalan) → catatan penjemputan.
+1. **Alamat & Penjemputan** — alamat tersimpan/baru, pencarian alamat + pin peta, nomor rumah/blok, patokan → outlet terdekat yang melayani (3 cabang terdekat dalam **jangkauan 30 km** garis lurus, tidak coming soon/penuh) → *Jemput sekarang* / *Jadwalkan* → **Driver Internal** (gratis, antrean & estimasi jemput) atau **Instan** (estimasi ongkir dari jarak jalan) → catatan penjemputan.
 2. **Layanan** — kiloan dan/atau satuan, durasi, kuantitas, detail cucian kiloan, voucher promo, tukar poin loyalty. **Tidak ada pilihan yang terisi otomatis**: jumlah kantong, proses cuci (Dicampur/Dipisah), pakaian luntur (Tidak/Ya), jenis kiloan, durasi kiloan, item satuan, dan durasi item harus dipilih customer sendiri; *Tambah Paket Kiloan Ini* / *Tambah Item Satuan Ini* menolak dengan pesan yang jelas bila ada yang belum dipilih. Setelah satu paket kiloan ditambahkan, jumlah kantong & proses cuci kembali kosong untuk paket berikutnya. `bag_count` pesanan = total kantong di keranjang (paket campur 3 kantong = 3), `wash_process` = *Pisah Perkantong* bila lebih dari satu paket.
 3. **Periksa & Pesan** — ringkasan yang bisa diubah per bagian, nama pemesan, rincian estimasi (subtotal, ongkir, promo, poin, total), persetujuan, satu tombol **Pesan Sekarang** (dikunci terhadap ketukan ganda; nomor order dipakai ulang saat kirim ulang).
 
 Perhitungan harga/promo/poin/ongkir dan payload `pickup_orders` tidak berubah dibanding form satu halaman sebelumnya.
+
+**Ketepatan titik jemput (langkah 1):**
+
+- Peta awal berpusat di lokasi HP, atau di outlet aktif bila lokasi HP belum diketahui (tidak lagi di Jakarta). Tombol **Perbesar** membuka peta layar penuh untuk menggeser pin tepat di gerbang; **Selesai** kembali ke form.
+- Setelah **GPS saya**, akurasi ditampilkan. Bila lebih kasar dari ±50 m, muncul peringatan kuning agar pin digeser manual.
+- Bila pin digeser lebih dari 300 m dari alamat yang dipilih di pencarian, muncul peringatan "Pin berjarak … dari …". Ini hanya peringatan, bukan penolakan.
+- Kartu **Pastikan titik jemput** menampilkan alamat lengkap dan outlet beserta jaraknya. Pin baru wajib dikonfirmasi dengan **Ya, titik sudah tepat** sebelum bisa lanjut. Pin dari alamat tersimpan dianggap sudah dikonfirmasi. Setiap kali pin digeser, konfirmasi diminta lagi.
+- Pin yang lebih dari 30 km dari semua outlet aktif mendapat pesan "di luar jangkauan layanan", dan tidak ada outlet yang bisa dipilih. Server (`/api/customer/order/create`) juga menolak pesanan tanpa pin, pesanan di luar 30 km, dan pesanan ke outlet yang penuh atau coming soon.
 
 Aktivitas menampilkan **progres cucian** (jemput → outlet → sortir … siap → selesai, dari status + `work_logs`) terpisah dari **status pembayaran** (Lunas / Menunggu pembayaran / Tagihan setelah ditimbang). Detail pesanan menampilkan subtotal, diskon (dipecah menjadi diskon manual dan potongan poin bila bisa diturunkan dari `discount_type`/`discount_value`), ongkir, dan total — rumus sama dengan struk POS: `subtotal = amount + discount_amount − delivery_fee`.
 
@@ -265,6 +273,7 @@ Tabel: `driver_attendance`.
 
 - Job pickup / delivery tampil di dashboard.
 - Tombol navigasi membuka **Google Maps** ke pin pelanggan.
+- **Perbaiki titik jemput**: saat status `Driver Menuju Lokasi`, driver yang ditugaskan bisa berdiri di gerbang pelanggan lalu menekan **Titik salah? Simpan lokasi saya sebagai titik jemput**. GPS HP harus akurat (≤ 50 m) dan titiknya masih dalam 30 km dari outlet. Titik pada pesanan, dan pada alamat tersimpan pelanggan yang dipakai pesanan itu, langsung diperbarui, sehingga pesanan berikutnya tepat. Semua lewat server (`/api/staff/pickup-pin`) dan dicatat di `audit_logs` (`pickup_pin_corrected`, titik lama → baru).
 - Upload bukti serah-terima sesuai tahap.
 
 #### Chat driver ↔ pelanggan (dalam aplikasi)
@@ -482,7 +491,7 @@ Kolom tipikal: `user_id`, `user_name`, `role`, `action`, `entity_*`, `amount`, `
 1. Di form alamat pelanggan: aktifkan GPS ulang, **geser pin** tepat di pintu rumah.
 2. Lengkapi **nomor rumah / patokan** di field teks (penting untuk driver).
 3. Kasir/CS dapat mengoreksi alamat di order sebelum dispatch.
-4. Driver memakai tombol **navigasi Google Maps**; jika pin salah, hubungi pelanggan via chat/WA dan update koordinat di sistem bila ada form edit.
+4. Driver memakai tombol **navigasi Google Maps**. Jika pin salah, driver datang ke gerbang yang benar (tanya lewat Chat Pelanggan), lalu tekan **Titik salah? Simpan lokasi saya sebagai titik jemput**. Pesanan dan alamat tersimpan pelanggan ikut diperbarui. Butuh migrasi `20261003_pickup_pin_correction.sql`.
 5. Rating Google outlet (Places) terpisah dari pin pelanggan — masalah rating ≠ masalah jemput.
 
 ### 4.4 Driver lupa clock-out / tidak muncul di assign CS
@@ -548,6 +557,8 @@ A: `docs/SECURITY_AND_MAINTENANCE.md` (env, SQL, checklist fraud mingguan).
 | GET | `/api/cron/sync-payments` | Bearer `CRON_SECRET` |
 | GET | `/api/owner/system-health` | Bearer ops + role resync |
 | GET/POST | `/api/owner/employees` | Bearer ops + role resync |
+| POST | `/api/staff/pickup-pin` | Sesi staf (cookie) + role driver yang ditugaskan |
+| GET/POST | `/api/customer/addresses` | Sesi pelanggan terverifikasi (nomor legacy selama login lama aktif); hanya alamat nomor sendiri |
 
 ### 5.2 Migrasi SQL wajib (urut)
 

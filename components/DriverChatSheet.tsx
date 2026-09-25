@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2, Lock, MessageCircle, Send, X } from 'lucide-react';
 import { DRIVER_CHAT_MAX_LENGTH, type DriverChatMessage, type DriverChatSender } from '@/lib/driverChat';
+import { isStaffSessionError, staffRelogin } from '@/lib/staffRelogin';
 
 const POLL_MS = 4000;
 
@@ -32,6 +33,8 @@ export default function DriverChatSheet({ as, orderId, title, subtitle, customer
   const [open, setOpen] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  // Driver only: the 12 h security cookie expired → offer "Masuk ulang".
+  const [needRelogin, setNeedRelogin] = useState(false);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
@@ -57,9 +60,11 @@ export default function DriverChatSheet({ as, orderId, title, subtitle, customer
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(data?.error || 'Chat belum bisa dimuat.');
+        setNeedRelogin(as === 'driver' && isStaffSessionError(data));
         return;
       }
       setError('');
+      setNeedRelogin(false);
       setOpen(Boolean(data.open));
       setMessages(Array.isArray(data.messages) ? data.messages : []);
     } catch {
@@ -68,7 +73,7 @@ export default function DriverChatSheet({ as, orderId, title, subtitle, customer
       busyRef.current = false;
       setLoading(false);
     }
-  }, [endpoint, orderId, headers]);
+  }, [as, endpoint, orderId, headers]);
 
   useEffect(() => {
     const first = window.setTimeout(() => void load(), 0);
@@ -109,6 +114,7 @@ export default function DriverChatSheet({ as, orderId, title, subtitle, customer
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(data?.error || 'Pesan belum terkirim. Coba lagi.');
+        setNeedRelogin(as === 'driver' && isStaffSessionError(data));
         if (res.status === 409) setOpen(false);
         return;
       }
@@ -172,6 +178,11 @@ export default function DriverChatSheet({ as, orderId, title, subtitle, customer
         {error && (
           <p className="text-[11px] font-semibold text-rose-600 bg-rose-50 border-t border-rose-100 px-4 py-2" role="alert">
             {error}
+            {needRelogin && (
+              <button type="button" onClick={staffRelogin} className="ml-2 bg-rose-600 text-white font-bold px-2.5 py-1 rounded-md">
+                Masuk ulang
+              </button>
+            )}
           </p>
         )}
 

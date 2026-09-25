@@ -126,6 +126,26 @@ async function newScenario(opts = {}) {
         }
         return route.fulfill({ json: { id: row.id, order_number: row.order_number, status: row.status } });
       }
+      // Saved addresses are served by the server (/api/customer/addresses,
+      // covered by scripts/e2e/pickup-location.e2e.mjs); stubbed from the mock table.
+      if (url.pathname === '/api/customer/addresses') {
+        const listOut = () => {
+          const rows = tables.customer_addresses || [];
+          const primary = rows.find((r) => r.is_primary)?.id || rows[0]?.id;
+          return { addresses: rows.map((r) => ({ id: r.id, label: r.label_name || 'Alamat', full_address: r.full_address, is_primary: r.id === primary, latitude: r.latitude ?? null, longitude: r.longitude ?? null })) };
+        };
+        if (req.method() === 'GET') return route.fulfill({ json: listOut() });
+        const body = req.postDataJSON() || {};
+        tables.customer_addresses = tables.customer_addresses || [];
+        if (body.action === 'save') {
+          const a = body.address || {};
+          const own = tables.customer_addresses.find((r) => r.id === a.id);
+          const fields = { label_name: a.label, full_address: a.full_address, latitude: a.latitude ?? null, longitude: a.longitude ?? null };
+          if (own) Object.assign(own, fields);
+          else tables.customer_addresses.push({ id: `addr-${tables.customer_addresses.length + 1}`, customer_phone: '085172141494', is_primary: false, ...fields });
+        }
+        return route.fulfill({ json: listOut() });
+      }
       if (url.pathname === '/api/customer/order/report-error') {
         reports.push(req.postData() || '');
         return route.fulfill({ json: { ok: true } });
@@ -786,6 +806,76 @@ await step('Login: country picker (Indonesia default) — a Singapore number is 
   await p2.screenshot({ path: `${OUT}/09-login-foreign.png`, fullPage: true });
   await s.close();
 });
+
+// ---------------------------------------------------------------------------
+// Pickup point accuracy: a NEW pin must be confirmed once, poor GPS accuracy
+// is flagged, pins beyond the 30 km service radius get no outlet, and the map
+// can be enlarged to place the pin at the gate.
+// ---------------------------------------------------------------------------
+{
+  const s = await newScenario();
+  const { page, ctx } = s;
+  await page.goto(APP + '/customer/dashboard', { waitUntil: 'networkidle' });
+  await page.waitForTimeout(1200);
+  await page.locator('nav').getByRole('button', { name: 'Order' }).click();
+  const gps = () => page.getByRole('button', { name: 'GPS saya' }).click();
+
+  await step('Pickup point: a new pin needs "Ya, titik sudah tepat" before step 2', async () => {
+    await page.getByRole('button', { name: '+ Alamat baru' }).click();
+    await page.getByPlaceholder('Cari nama jalan / komplek / patokan besar').fill('Jl Ir Juanda Dago');
+    await page.getByPlaceholder(/^Wajib\. Contoh/).fill('12');
+    await ctx.setGeolocation({ latitude: -6.8862, longitude: 107.6132, accuracy: 8 });
+    await gps();
+    await page.getByText('GPS akurat (±8 m)').waitFor();
+    await page.getByText('Pastikan titik jemput').waitFor();
+    await page.getByLabel('Pilih outlet').waitFor();
+    await page.getByRole('button', { name: /Lanjut/ }).click();
+    await page.getByText('Periksa titik jemput di peta', { exact: false }).first().waitFor();
+    assert.equal(await page.getByRole('tab', { name: /Alamat & Jemput/, selected: true }).count(), 1);
+    await page.getByRole('button', { name: 'Ya, titik sudah tepat' }).click();
+    await page.getByText('Titik jemput sudah dipastikan', { exact: false }).waitFor();
+    await page.getByRole('button', { name: /Lanjut/ }).click();
+    await page.getByRole('tab', { name: /Layanan/, selected: true }).waitFor();
+  });
+
+  await step('Pickup point: poor GPS accuracy is flagged and the moved pin must be confirmed again', async () => {
+    await page.getByRole('tab', { name: /Alamat & Jemput/ }).click();
+    await ctx.setGeolocation({ latitude: -6.8866, longitude: 107.6136, accuracy: 150 });
+    await gps();
+    await page.getByText('Lokasi GPS kurang akurat (±150 m)', { exact: false }).waitFor();
+    await page.getByRole('button', { name: 'Ya, titik sudah tepat' }).waitFor();
+  });
+
+  await step('Pickup point: beyond 30 km there is no outlet and the reason is shown', async () => {
+    await ctx.setGeolocation({ latitude: -6.5569, longitude: 107.4431, accuracy: 10 }); // Purwakarta, ~41 km
+    await gps();
+    await page.getByText('di luar jangkauan layanan', { exact: false }).first().waitFor();
+    assert.equal(await page.getByLabel('Pilih outlet').count(), 0);
+    await page.getByRole('button', { name: /Lanjut/ }).click();
+    assert.equal(await page.getByRole('tab', { name: /Alamat & Jemput/, selected: true }).count(), 1);
+  });
+
+  await step('Pickup point: "Perbesar" opens a full-screen map, "Selesai" closes it', async () => {
+    await page.getByRole('button', { name: 'Perbesar' }).click();
+    const dlg = page.getByRole('dialog', { name: 'Peta titik jemput' });
+    await dlg.waitFor();
+    const box = await dlg.boundingBox();
+    assert.ok(box && box.height > 700, `full-screen height ${box?.height}`);
+    const mapH = await page.evaluate(() => {
+      const el = document.querySelector('[role=dialog] .leaflet-container');
+      return el ? el.getBoundingClientRect().height : -1;
+    });
+    assert.ok(mapH > 600, `map height in full screen ${mapH}`);
+    await page.screenshot({ path: `${OUT}/10-pin-fullscreen.png` });
+    await dlg.getByRole('button', { name: 'Selesai' }).click();
+    await dlg.waitFor({ state: 'detached' }).catch(() => {});
+    assert.equal(await page.getByRole('dialog', { name: 'Peta titik jemput' }).count(), 0);
+    // Leaflet's own classes survive the mode switch (React must not overwrite them).
+    const h = await page.evaluate(() => document.querySelector('.leaflet-container')?.getBoundingClientRect().height ?? -1);
+    assert.ok(h > 200 && h < 300, `inline map height ${h}`);
+  });
+  await s.close();
+}
 
 await step('No scenario ever reached the production database host', async () => {
   assert.deepEqual(productionDbHits, []);

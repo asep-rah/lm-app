@@ -85,7 +85,9 @@ await step('Cashier refused; forged role in the cookie does not help', async () 
   assert.equal(state.outlets[0].is_overcapacity, false);
 });
 await step('No session / forged token / cross-site / bad input', async () => {
-  assert.equal((await post({ outletId: OUTLET, full: true })).status, 401);
+  const none = await post({ outletId: OUTLET, full: true });
+  assert.equal(none.status, 401);
+  assert.equal(none.json.code, 'STAFF_SESSION_REQUIRED', 'UI offers "Masuk ulang"');
   assert.equal((await post({ outletId: OUTLET, full: true }, { cookie: 'ldrv_staff_session=x.y' })).status, 401);
   assert.equal((await post({ outletId: OUTLET, full: true }, { cookie: staff('1', 'owner'), origin: 'https://evil.example' })).status, 403);
   assert.equal((await post({ outletId: 'nope', full: true }, { cookie: staff('1', 'owner') })).status, 400);

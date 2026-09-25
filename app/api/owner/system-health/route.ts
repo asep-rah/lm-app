@@ -4,6 +4,7 @@ import { requirePaymentOpsAuth } from '@/lib/requirePaymentOpsAuth';
 import { isPaymentLocked } from '@/lib/paymentVerify';
 import { envAuditFlags } from '@/lib/supabaseEnv';
 import { customerWaLoginChecks } from '@/lib/customerAuth/server';
+import { staffSessionSecret } from '@/lib/staffAuth/server';
 
 export const dynamic = 'force-dynamic';
 
@@ -105,7 +106,9 @@ export async function GET(req: Request) {
       webhooks: hooks || [],
       pending,
       env: envAuditFlags(),
-      customerLogin: customerWaLoginChecks()
+      customerLogin: customerWaLoginChecks(),
+      // Tombol staf yang aman (status outlet penuh, chat driver, foto satuan) butuh ini.
+      staffSessionConfigured: Boolean(staffSessionSecret())
     });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || 'Gagal muat diagnosis', env: envAuditFlags() }, { status: 500 });

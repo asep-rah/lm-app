@@ -51,7 +51,8 @@ import {
   loadComplaintForOrder
 } from '@/lib/csCare';
 import { ensureComplaintTicketFromIssue, findComplaintTicket, ticketTitleOf } from '@/lib/complaintTicket';
-import { nearestOpenOutlet, noOutletReason, pickNearestOpenOutlets } from '@/lib/outletCapacity';
+import { nearestOpenOutlet, nearestServingOutletKm, noOutletReason, pickNearestOpenOutlets } from '@/lib/outletCapacity';
+import { SERVICE_RADIUS_KM, distanceKm as straightKm, toLatLon } from '@/lib/serviceArea';
 import { toast } from '@/lib/toast';
 import {
   showComplaintActions,
@@ -262,6 +263,9 @@ const ensureOutletInList = (list: any[], all: any[], id: string) => {
   return row ? [row, ...(list || [])] : list;
 };
 
+/** Pin identity for "already confirmed" (≈1 m). */
+const pinKeyOf = (lat: number, lon: number) => `${lat.toFixed(5)},${lon.toFixed(5)}`;
+
 const readOutletQueryParam = () => {
   if (typeof window === 'undefined') return '';
   try {
@@ -343,6 +347,10 @@ function CustomerDashboardPage() {
   const [selectedBanner, setSelectedBanner] = useState<BannerSlide | null>(null);
   const [userCoords, setUserCoords] = useState<{ lat: number; lon: number } | null>(null);
   const [deviceCoords, setDeviceCoords] = useState<{ lat: number; lon: number } | null>(null);
+  // Akurasi (meter) titik GPS yang sedang dipakai sebagai pin; null bila pin dari peta/alamat tersimpan.
+  const [gpsAccuracyM, setGpsAccuracyM] = useState<number | null>(null);
+  // Pin yang sudah dikonfirmasi pelanggan ("Ya, titik sudah tepat").
+  const [confirmedPinKey, setConfirmedPinKey] = useState('');
   const [gpsCity, setGpsCity] = useState('');
   const [cityOverride, setCityOverride] = useState<string | null>(null);
   const [showAllCities, setShowAllCities] = useState(false);
@@ -1218,7 +1226,10 @@ function CustomerDashboardPage() {
           const lat = pos.coords.latitude;
           const lon = pos.coords.longitude;
           setDeviceCoords({ lat, lon });
-          if (!pickupPinLockedRef.current) setUserCoords({ lat, lon });
+          if (!pickupPinLockedRef.current) {
+            setUserCoords({ lat, lon });
+            setGpsAccuracyM(Number.isFinite(pos.coords.accuracy) ? pos.coords.accuracy : null);
+          }
 
           if (dbOutlets && dbOutlets.length > 0) {
             const nearby = dbOutlets.filter((o: any) => {
@@ -1323,16 +1334,41 @@ function CustomerDashboardPage() {
     [outletsList, deviceCoords, userCoords, userCity, showAllCities]
   );
   const orderOutlets = useMemo(() => {
-    const rows = pickNearestOpenOutlets(outletsList, userCoords, 3);
-    if (outletQuery && selectedOutlet) {
-      return ensureOutletInList(rows, outletsList, selectedOutlet).slice(0, 3);
+    // Hanya outlet yang buka dan dalam jangkauan layanan; outlet dari link/QR
+    // tetap ditampilkan bila memenuhi syarat yang sama.
+    const eligible = pickNearestOpenOutlets(outletsList, userCoords, Number.POSITIVE_INFINITY);
+    const rows = eligible.slice(0, 3);
+    if (outletQuery && selectedOutlet && eligible.some((o) => String(o.id) === String(selectedOutlet))) {
+      return ensureOutletInList(rows, eligible, selectedOutlet).slice(0, 3);
     }
     return rows;
   }, [outletsList, userCoords, outletQuery, selectedOutlet]);
+  const noOutletKind = noOutletReason(outletsList, userCoords);
+  const nearestOutletKm = nearestServingOutletKm(outletsList, userCoords);
   const noOutletText =
-    noOutletReason(outletsList) === 'full'
-      ? 'Outlet terdekat sedang penuh dan ditutup sementara oleh pengelola. Coba lagi nanti atau hubungi CS.'
-      : 'Belum ada cabang yang bisa melayani titik ini.';
+    noOutletKind === 'out_of_range'
+      ? `Titik jemput di luar jangkauan layanan (outlet terdekat ±${(nearestOutletKm ?? 0).toFixed(1).replace('.', ',')} km, maksimal ${SERVICE_RADIUS_KM} km). Periksa lagi posisi pin atau hubungi CS.`
+      : noOutletKind === 'full'
+        ? 'Outlet terdekat sedang penuh dan ditutup sementara oleh pengelola. Coba lagi nanti atau hubungi CS.'
+        : 'Belum ada cabang yang bisa melayani titik ini.';
+  // Jarak garis lurus pin → outlet terpilih, untuk kartu konfirmasi titik jemput.
+  const selectedOutletRow = orderOutlets.find((o) => String(o.id) === String(selectedOutlet)) || null;
+  const selectedOutletPt = selectedOutletRow ? toLatLon(selectedOutletRow.latitude, selectedOutletRow.longitude) : null;
+  const pinToOutletKm = userCoords && selectedOutletPt ? straightKm(userCoords, selectedOutletPt) : null;
+  // Pusat awal peta sebelum pin dipasang: lokasi HP bila sudah diketahui,
+  // kalau belum outlet aktif pertama (bukan Jakarta).
+  const mapFallbackCenter = useMemo(() => {
+    if (deviceCoords) return { lat: deviceCoords.lat, lng: deviceCoords.lon };
+    const o = (outletsList || []).find((x: any) => !x?.is_coming_soon && toLatLon(x?.latitude, x?.longitude));
+    const pt = o ? toLatLon(o.latitude, o.longitude) : null;
+    return pt ? { lat: pt.lat, lng: pt.lon } : null;
+  }, [deviceCoords, outletsList]);
+  // Titik dari alamat tersimpan sudah pernah dipastikan; titik baru wajib dikonfirmasi sekali.
+  const pinKey = userCoords ? pinKeyOf(userCoords.lat, userCoords.lon) : '';
+  const pinConfirmed =
+    Boolean(pinKey) &&
+    (confirmedPinKey === pinKey ||
+      savedAddresses.some((a) => a.latitude != null && a.longitude != null && pinKeyOf(Number(a.latitude), Number(a.longitude)) === pinKey));
 
   useEffect(() => {
     if (outletQuery) return;
@@ -1650,9 +1686,10 @@ function CustomerDashboardPage() {
     setGpsHint('Mengambil lokasi GPS… izinkan akses lokasi jika diminta.');
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
-        const { latitude, longitude } = pos.coords;
+        const { latitude, longitude, accuracy } = pos.coords;
         pickupPinLockedRef.current = true;
         setUserCoords({ lat: latitude, lon: longitude });
+        setGpsAccuracyM(Number.isFinite(accuracy) ? accuracy : null);
         setDeviceCoords({ lat: latitude, lon: longitude });
         setGpsHint('Pin dipindah ke lokasi Anda. Mengisi nama jalan…');
         const label = await reverseGeocodeAddress(latitude, longitude);
@@ -2100,6 +2137,7 @@ function CustomerDashboardPage() {
       if (!selectedOutlet || !orderOutlets.some((o) => String(o.id) === String(selectedOutlet))) {
         return orderOutlets.length ? 'Pilih outlet yang melayani alamat Anda.' : noOutletText;
       }
+      if (!pinConfirmed) return 'Periksa titik jemput di peta, lalu tekan "Ya, titik sudah tepat".';
       if (pickupLater) {
         const sched = parsePickupSchedule(pickupDate, pickupTime);
         if (!sched) return 'Isi tanggal dan jam jemput yang valid (contoh 03/09/2026 dan 09.00).';
@@ -2751,6 +2789,7 @@ function CustomerDashboardPage() {
                             setCustomerAddress(parts.street);
                             setHouseNumber(parts.house);
                             pickupPinLockedRef.current = Boolean(addr.latitude && addr.longitude);
+                            setGpsAccuracyM(null);
                             if (addr.latitude != null && addr.longitude != null) {
                               setUserCoords({ lat: Number(addr.latitude), lon: Number(addr.longitude) });
                             } else {
@@ -2794,9 +2833,17 @@ function CustomerDashboardPage() {
                     onHouseNoChange={setHouseNumber}
                     onLandmarkChange={setPickupLandmark}
                     onGps={handleGetCurrentLocation}
+                    fallbackCenter={mapFallbackCenter}
+                    gpsAccuracyM={gpsAccuracyM}
+                    confirmed={pinConfirmed}
+                    onConfirm={() => setConfirmedPinKey(pinKey)}
+                    outletName={selectedOutletRow?.name ? String(selectedOutletRow.name) : ''}
+                    outletKm={pinToOutletKm}
                     onPin={(pt, streetLabel) => {
                       pickupPinLockedRef.current = true;
                       setUserCoords({ lat: pt.lat, lon: pt.lng });
+                      // Pin dipindah dengan tangan / dari saran alamat: akurasi GPS tidak lagi berlaku.
+                      setGpsAccuracyM(null);
                       if (streetLabel) setCustomerAddress(splitHouseNumber(streetLabel).street);
                     }}
                   />
