@@ -787,6 +787,70 @@ await step('Login: country picker (Indonesia default) — a Singapore number is 
   await s.close();
 });
 
+// ---------------------------------------------------------------------------
+// Pickup point accuracy: a NEW pin must be confirmed once, poor GPS accuracy
+// is flagged, pins beyond the 30 km service radius get no outlet, and the map
+// can be enlarged to place the pin at the gate.
+// ---------------------------------------------------------------------------
+{
+  const s = await newScenario();
+  const { page, ctx } = s;
+  await page.goto(APP + '/customer/dashboard', { waitUntil: 'networkidle' });
+  await page.waitForTimeout(1200);
+  await page.locator('nav').getByRole('button', { name: 'Order' }).click();
+  const gps = () => page.getByRole('button', { name: 'GPS saya' }).click();
+
+  await step('Pickup point: a new pin needs "Ya, titik sudah tepat" before step 2', async () => {
+    await page.getByRole('button', { name: '+ Alamat baru' }).click();
+    await page.getByPlaceholder('Cari nama jalan / komplek / patokan besar').fill('Jl Ir Juanda Dago');
+    await page.getByPlaceholder(/^Wajib\. Contoh/).fill('12');
+    await ctx.setGeolocation({ latitude: -6.8862, longitude: 107.6132, accuracy: 8 });
+    await gps();
+    await page.getByText('GPS akurat (±8 m)').waitFor();
+    await page.getByText('Pastikan titik jemput').waitFor();
+    await page.getByLabel('Pilih outlet').waitFor();
+    await page.getByRole('button', { name: /Lanjut/ }).click();
+    await page.getByText('Periksa titik jemput di peta', { exact: false }).first().waitFor();
+    assert.equal(await page.getByRole('tab', { name: /Alamat & Jemput/, selected: true }).count(), 1);
+    await page.getByRole('button', { name: 'Ya, titik sudah tepat' }).click();
+    await page.getByText('Titik jemput sudah dipastikan', { exact: false }).waitFor();
+    await page.getByRole('button', { name: /Lanjut/ }).click();
+    await page.getByRole('tab', { name: /Layanan/, selected: true }).waitFor();
+  });
+
+  await step('Pickup point: poor GPS accuracy is flagged and the moved pin must be confirmed again', async () => {
+    await page.getByRole('tab', { name: /Alamat & Jemput/ }).click();
+    await ctx.setGeolocation({ latitude: -6.8866, longitude: 107.6136, accuracy: 150 });
+    await gps();
+    await page.getByText('Lokasi GPS kurang akurat (±150 m)', { exact: false }).waitFor();
+    await page.getByRole('button', { name: 'Ya, titik sudah tepat' }).waitFor();
+  });
+
+  await step('Pickup point: beyond 30 km there is no outlet and the reason is shown', async () => {
+    await ctx.setGeolocation({ latitude: -6.5569, longitude: 107.4431, accuracy: 10 }); // Purwakarta, ~41 km
+    await gps();
+    await page.getByText('di luar jangkauan layanan', { exact: false }).first().waitFor();
+    assert.equal(await page.getByLabel('Pilih outlet').count(), 0);
+    await page.getByRole('button', { name: /Lanjut/ }).click();
+    assert.equal(await page.getByRole('tab', { name: /Alamat & Jemput/, selected: true }).count(), 1);
+  });
+
+  await step('Pickup point: "Perbesar" opens a full-screen map, "Selesai" closes it', async () => {
+    await page.getByRole('button', { name: 'Perbesar' }).click();
+    const dlg = page.getByRole('dialog', { name: 'Peta titik jemput' });
+    await dlg.waitFor();
+    const box = await dlg.boundingBox();
+    assert.ok(box && box.height > 700, `full-screen height ${box?.height}`);
+    const mapBox = await dlg.locator('.leaflet-container').boundingBox();
+    assert.ok(mapBox && mapBox.height > 600, `map height in full screen ${mapBox?.height}`);
+    await page.screenshot({ path: `${OUT}/10-pin-fullscreen.png` });
+    await dlg.getByRole('button', { name: 'Selesai' }).click();
+    await dlg.waitFor({ state: 'detached' }).catch(() => {});
+    assert.equal(await page.getByRole('dialog', { name: 'Peta titik jemput' }).count(), 0);
+  });
+  await s.close();
+}
+
 await step('No scenario ever reached the production database host', async () => {
   assert.deepEqual(productionDbHits, []);
 });

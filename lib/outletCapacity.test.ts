@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { canSetOutletCapacity, isOutletOverCapacity, nearestOpenOutlet, noOutletReason, pickNearestOpenOutlets } from './outletCapacity';
+import {
+  canSetOutletCapacity,
+  isOutletOverCapacity,
+  nearestOpenOutlet,
+  nearestServingOutletKm,
+  noOutletReason,
+  pickNearestOpenOutlets
+} from './outletCapacity';
 
 const DAGO = { id: 'dago', name: 'Dago', latitude: -6.8853, longitude: 107.6195 };
 const HERE = { lat: -6.886, lon: 107.613 };
@@ -23,6 +30,19 @@ describe('outlet capacity is a manual switch only', () => {
     assert.equal(noOutletReason([{ ...DAGO, is_coming_soon: true }]), 'no_outlet');
     assert.equal(noOutletReason([]), 'no_outlet');
     assert.equal(noOutletReason([{ ...DAGO, is_overcapacity: true }, { ...DAGO, id: 'b' }]), 'no_outlet');
+  });
+  it('only outlets within the 30 km service radius are offered; farther pins get "out_of_range"', () => {
+    const LEMBANG = { lat: -6.8117, lon: 107.6175 }; // ~8 km
+    const PURWAKARTA = { lat: -6.5569, lon: 107.4431 }; // ~41 km
+    assert.deepEqual(pickNearestOpenOutlets([DAGO], LEMBANG).map((o) => o.id), ['dago']);
+    assert.deepEqual(pickNearestOpenOutlets([DAGO], PURWAKARTA), []);
+    assert.equal(noOutletReason([DAGO], PURWAKARTA), 'out_of_range');
+    assert.equal(noOutletReason([{ ...DAGO, is_overcapacity: true }], PURWAKARTA), 'out_of_range');
+    assert.equal(noOutletReason([{ ...DAGO, is_overcapacity: true }], HERE), 'full');
+    assert.equal(noOutletReason([], PURWAKARTA), 'no_outlet');
+    const km = nearestServingOutletKm([DAGO], PURWAKARTA);
+    assert.ok(km != null && km > 30 && km < 50, String(km));
+    assert.equal(nearestServingOutletKm([DAGO], null), null);
   });
   it('nearestOpenOutlet skips full outlets when another is open', () => {
     const far = { id: 'far', latitude: -6.95, longitude: 107.7 };

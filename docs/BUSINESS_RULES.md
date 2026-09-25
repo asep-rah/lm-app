@@ -51,6 +51,12 @@ Outlet selection may consider:
 
 The selection algorithm must be implemented as shared domain logic. A user with appropriate permission may override an automatic suggestion when the workflow records the final outlet.
 
+Current approved parameters (owner decisions):
+
+- **Service radius: 30 km**, straight line from the customer's pickup pin to the outlet (`SERVICE_RADIUS_KM`, `lib/serviceArea.ts`). Outlets farther than that are not offered, and the order server rejects such orders.
+- **"Outlet penuh"** is a manual switch set only by the owner or a supervisor; it is never set automatically from order counts.
+- Every online pickup order carries a map pin. A new pin (not from a saved address) must be confirmed by the customer once before ordering.
+
 ## 5. Internal Driver Rules
 
 1. A driver is eligible for automatic/internal assignment only when operationally `ON_DUTY`.

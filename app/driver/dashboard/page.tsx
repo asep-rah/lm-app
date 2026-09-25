@@ -11,13 +11,16 @@ import StatusBadge from '@/components/ui/StatusBadge';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 import { toast } from '@/lib/toast';
 import { uploadProofFile } from '@/lib/uploadProof';
-import { Camera, Check, MessageCircle } from 'lucide-react';
+import { Camera, Check, Crosshair, MessageCircle } from 'lucide-react';
 import GoogleMapsNavButton from '@/components/GoogleMapsNavButton';
 import DriverAttendancePanel from '@/components/driver/DriverAttendancePanel';
 import type { DriverAttendance } from '@/lib/driverAttendance';
 import { clearStaffServerSession } from '@/lib/staffSession';
 import DriverChatSheet from '@/components/DriverChatSheet';
 import { isDriverChatOpen, sameDriverName } from '@/lib/driverChat';
+import { canCorrectPickupPin } from '@/lib/pickupPinCorrection';
+import { PIN_CORRECTION_MAX_ACCURACY_M } from '@/lib/serviceArea';
+import { isStaffSessionError, staffRelogin } from '@/lib/staffRelogin';
 
 
 const ACTIVE_STATUSES = [
@@ -61,6 +64,7 @@ export default function DriverDashboard() {
   const [driverTab, setDriverTab] = useState<'jobs' | 'inbox' | 'account'>('jobs');
   const [uploadingId, setUploadingId] = useState<string | null>(null);
   const [chatOrder, setChatOrder] = useState<any | null>(null);
+  const [pinBusy, setPinBusy] = useState<string | null>(null);
   const [chatUnread, setChatUnread] = useState<Record<string, number>>({});
   const gpsFailed = useRef(false);
   const driverNameRef = useRef('Driver Internal');
@@ -200,6 +204,61 @@ export default function DriverDashboard() {
     } else {
       toast('Gagal mengambil tugas: ' + error.message, 'err');
     }
+  };
+
+  // Driver di gerbang pelanggan: simpan GPS HP sebagai titik jemput yang benar
+  // (pesanan + alamat tersimpan pelanggan) lewat /api/staff/pickup-pin.
+  const handleCorrectPin = (order: any) => {
+    if (!navigator.geolocation) return toast('HP tidak mendukung GPS.', 'err');
+    const ok = window.confirm(
+      'Perbaiki titik jemput?\n\nPastikan Anda sedang berdiri di gerbang/pintu pelanggan. Titik pesanan ini dan alamat tersimpan pelanggan akan diganti dengan lokasi Anda sekarang.'
+    );
+    if (!ok) return;
+    const id = String(order.id);
+    setPinBusy(id);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const { latitude, longitude, accuracy } = pos.coords;
+        if (!(accuracy <= PIN_CORRECTION_MAX_ACCURACY_M)) {
+          setPinBusy(null);
+          return toast(`GPS kurang akurat (±${Math.round(accuracy)} m). Pindah ke area terbuka lalu coba lagi.`, 'err');
+        }
+        try {
+          const res = await fetch('/api/staff/pickup-pin', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ orderId: id, lat: latitude, lon: longitude, accuracy })
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            const text = data?.error || 'Titik belum tersimpan.';
+            if (isStaffSessionError(data)) {
+              if (window.confirm(`${text}\n\nMasuk ulang sekarang?`)) staffRelogin();
+            } else {
+              toast(text, 'err');
+            }
+            return;
+          }
+          setPickups((prev) => prev.map((x) => (String(x.id) === id ? { ...x, latitude: data.latitude, longitude: data.longitude } : x)));
+          toast(
+            data.addressUpdated
+              ? 'Titik jemput diperbarui, termasuk alamat tersimpan pelanggan.'
+              : 'Titik jemput pesanan ini diperbarui.',
+            'ok'
+          );
+        } catch {
+          toast('Koneksi bermasalah. Coba lagi.', 'err');
+        } finally {
+          setPinBusy(null);
+        }
+      },
+      (err) => {
+        setPinBusy(null);
+        toast(err?.code === 1 ? 'Izin lokasi ditolak. Aktifkan izin lokasi lalu coba lagi.' : 'Gagal mengambil GPS. Coba lagi.', 'err');
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
   };
 
   const handleOpenCall = (phone: string) => {
@@ -467,6 +526,17 @@ export default function DriverDashboard() {
 
                 <div className="grid grid-cols-1 gap-2">
                   <GoogleMapsNavButton order={p} address={pickupAddress(p)} />
+                  {canCorrectPickupPin(p, driverName) && (
+                    <button
+                      type="button"
+                      onClick={() => handleCorrectPin(p)}
+                      disabled={pinBusy === String(p.id)}
+                      className="flex items-center justify-center gap-1.5 bg-white border border-indigo-200 text-indigo-700 font-bold p-2.5 rounded-xl text-[11px] disabled:opacity-60"
+                    >
+                      <Crosshair className="w-4 h-4" />
+                      {pinBusy === String(p.id) ? 'Mengambil GPS…' : 'Titik salah? Simpan lokasi saya sebagai titik jemput'}
+                    </button>
+                  )}
                   {isDriverChatOpen(p) && sameDriverName(p.driver_name, driverName) && (
                     <button
                       type="button"

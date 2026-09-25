@@ -5,6 +5,7 @@ import { clientIp, insertErrorLog, paymentServiceDb } from '@/lib/paymentSecurit
 import { newOrderNumber, pickupOrderAttempts, pickupRoleTaskAttempts } from '@/lib/pickupOrderRows';
 import { createMemoryRateLimiter, isSameOriginRequest } from '@/lib/requestGuards';
 import { satuanPhotoOwnerFolder } from '@/lib/satuanPhotoAccess';
+import { checkPickupServiceArea } from '@/lib/serviceArea';
 import { SATUAN_ITEM_PHOTO_BUCKET, satuanPhotoConfig } from '@/lib/satuanPhotoServer';
 
 export const dynamic = 'force-dynamic';
@@ -76,8 +77,11 @@ export async function POST(req: NextRequest) {
 
   try {
     const db = paymentServiceDb();
-    const outlet = await db.from('outlets').select('id').eq('id', String(row.outlet_id)).maybeSingle();
+    const outlet = await db.from('outlets').select('*').eq('id', String(row.outlet_id)).maybeSingle();
     if (outlet.error || !outlet.data) return deny(400, 'Outlet tidak ditemukan.');
+    // Outlet buka (tidak penuh / coming soon) dan pin dalam jangkauan layanan.
+    const area = checkPickupServiceArea(row, outlet.data);
+    if (!area.ok) return deny(area.status, area.error);
     if (photoPaths.length && !(await photosExist(db, photoPaths))) {
       return deny(400, 'Foto item satuan belum terunggah. Unggah ulang fotonya lalu pesan lagi.');
     }
