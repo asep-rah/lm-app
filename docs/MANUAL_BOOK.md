@@ -323,6 +323,23 @@ Laporan memakai kode akun di `lib/pnlReport.ts`:
 
 Pendapatan dari transaksi + membership; beban dipetakan dari kategori expense / COA yang dikonfigurasi.
 
+#### Jurnal, Buku Besar, Neraca, Perubahan Ekuitas
+
+- **Satu sumber:** neraca dan laporan perubahan ekuitas disusun dari **saldo buku besar** (jurnal yang sama, `lib/financeStatements.ts`). Karena setiap bukti jurnal seimbang, **Aset = Liabilitas + Ekuitas** selalu berlaku dan setiap angka neraca sama dengan saldo akunnya di buku besar.
+- **Data:** dimuat sejak tanggal mulai pembukuan paling awal (bukan hanya 12 bulan), per halaman, tanpa batas 3.000 baris. Bila lebih dari 50.000 baris per tabel, laporan menampilkan peringatan.
+- **Void:** dibalik pada tanggal void (bulan jual tidak diubah); void di bulan yang sama tidak menyisakan omset, kas, maupun bagi hasil.
+- **Saldo awal:** transaksi sebelum tanggal mulai pembukuan tidak dihitung ulang, karena sudah termasuk saldo awal. Aset yang dibeli sebelum tanggal mulai masuk di **nilai buku**: harga perolehan dikurangi akumulasi penyusutan sampai bulan sebelum mulai. Selisihnya tampil sebagai "Selisih Pembukaan" di pengaturan outlet.
+- **Bagi hasil pengelolaan:** dijurnal tiap akhir bulan per outlet (Dr Beban Bagi Hasil Pengelolaan / Cr 210010), dengan angka yang sama persis dengan Laporan Laba Rugi (persentase per outlet, bulan rugi = 0). Nilainya tetap menjadi utang sampai pembayarannya dicatat; tidak hilang saat ganti tahun.
+- **Kas tunai belum disetor minus** berarti ada pengeluaran yang dicatat dari laci padahal dibayar dari sumber lain. Neraca menampilkan peringatan dan tidak menyembunyikannya.
+- **Ekuitas:** Modal Disetor + Selisih Pembukaan − Prive + Laba Ditahan + Laba Tahun Berjalan = Jumlah Ekuitas.
+- **Top up deposit** diakui omset saat uangnya masuk. Tunai di kasir masuk ke laci; top up online lewat Mayar masuk ke Clearing. Laundry yang dibayar pakai saldo deposit (termasuk bagian deposit pada split payment) **tidak** dihitung omset lagi dan tidak menambah kas.
+- **Split payment** dipecah per bagian: QRIS/transfer → piutang, lalu clearing setelah lunas; Cash → kas laci.
+- **Setoran kas kasir** (POS → Setoran, status BALANCED) memindahkan kas laci ke QRIS / Gateway Clearing (nilai net; biaya admin sudah tercatat sebagai pengeluaran).
+- **Void lintas bulan:** penjualan tetap tercatat di bulan jual, lalu dibalik di bulan void, baik di Laba Rugi maupun di Neraca. Void di bulan yang sama bernilai nol.
+- **Tabungan THR:** pengeluaran berkategori "Tabungan THR" memindahkan uang ke *Dana Tabungan THR* dan dicatat sebagai *Utang THR Crew*. Di Laba Rugi tetap tampil di baris Tabungan THR, formatnya tidak berubah.
+- **Catat pembayaran** (Neraca → *Pembayaran bagi hasil & THR*, khusus owner): pembayaran bagi hasil (dari bank/laci) atau THR (dari Dana Tabungan THR/bank/laci) mengurangi utangnya di neraca. Catatan yang salah bisa **dibatalkan** dengan alasan; datanya tidak dihapus dan tercatat di `audit_logs`. THR yang sudah ditabung **jangan** dicatat lagi sebagai pengeluaran "THR Crew". Butuh migrasi `20261005_finance_settlements.sql`.
+- Format Laporan Laba Rugi (COA) **tidak berubah**.
+
 #### Soft Void (pembatalan aman)
 
 1. Kasir mengajukan hapus (`delete_requested`).
@@ -558,6 +575,7 @@ A: `docs/SECURITY_AND_MAINTENANCE.md` (env, SQL, checklist fraud mingguan).
 | GET | `/api/owner/system-health` | Bearer ops + role resync |
 | GET/POST | `/api/owner/employees` | Bearer ops + role resync |
 | POST | `/api/staff/pickup-pin` | Sesi staf (cookie) + role driver yang ditugaskan |
+| GET/POST | `/api/owner/finance-settlements` | Sesi staf (cookie) + role owner (dibaca ulang dari employees); diaudit |
 | GET/POST | `/api/customer/addresses` | Sesi pelanggan terverifikasi (nomor legacy selama login lama aktif); hanya alamat nomor sendiri |
 
 ### 5.2 Migrasi SQL wajib (urut)

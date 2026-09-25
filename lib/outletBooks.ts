@@ -158,12 +158,29 @@ export function recordedPayables(book: OutletBook) {
   return num(book.tradePayables) + num(book.longTermPayables) + num(book.leasePayables);
 }
 
-/** Kas pembukaan: isi manual, atau sisa modal + hutang setelah aset & piutang. */
+/**
+ * Akumulasi penyusutan aset yang sudah terjadi SEBELUM tanggal mulai
+ * pembukuan (aset dibeli sebelum outlet mulai dibukukan di aplikasi). Masuk
+ * neraca pembukaan sebagai Akumulasi Penyusutan, jadi aset tercatat di nilai
+ * buku pada tanggal mulai — bukan di harga perolehan penuh.
+ */
+export function openingAccumDep(book: OutletBook) {
+  if (!book.booksStart) return 0;
+  const d = new Date(book.booksStart);
+  if (Number.isNaN(d.getTime())) return 0;
+  const before: PnlMonthRef = d.getMonth() === 0 ? { year: d.getFullYear() - 1, month: 11 } : { year: d.getFullYear(), month: d.getMonth() - 1 };
+  return accumDepreciation(book, before);
+}
+
+/** Nilai buku aset tetap pada tanggal mulai pembukuan. */
+export const openingAssetNetOf = (book: OutletBook) => assetCostOf(book) - openingAccumDep(book);
+
+/** Kas pembukaan: isi manual, atau sisa modal + hutang setelah aset (nilai buku) & piutang. */
 export function resolvedOpeningCash(book: OutletBook) {
   if (num(book.openingCash) > 0) return num(book.openingCash);
   return Math.max(
     0,
-    num(book.openingCapital) + recordedPayables(book) - assetCostOf(book) - num(book.receivables) - num(book.otherCurrentAssets)
+    num(book.openingCapital) + recordedPayables(book) - openingAssetNetOf(book) - num(book.receivables) - num(book.otherCurrentAssets)
   );
 }
 
@@ -172,7 +189,7 @@ export function openingGap(book: OutletBook) {
     resolvedOpeningCash(book) +
     num(book.receivables) +
     num(book.otherCurrentAssets) +
-    assetCostOf(book) -
+    openingAssetNetOf(book) -
     num(book.openingCapital) -
     recordedPayables(book)
   );

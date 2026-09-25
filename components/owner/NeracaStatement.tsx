@@ -36,6 +36,7 @@ export default function NeracaStatement({ title, asOf, sheet }: Props) {
           <Line label="Piutang Usaha" value={sheet.receivables} indent={2} />
           <Line label="QRIS / Gateway Clearing" value={sheet.gatewayClearing || 0} indent={2} />
           <Line label="Aset Lancar Lainnya" value={sheet.otherCurrent} indent={2} />
+          {sheet.thrFund ? <Line label="Dana Tabungan THR" value={sheet.thrFund} indent={2} /> : null}
           <Line label="Jumlah Aset Lancar" value={sheet.currentAssets} total />
           <Sub>ASET TIDAK LANCAR</Sub>
           <p className="text-[10px] font-black uppercase text-slate-400 pt-2 pl-3">Aset Tetap</p>
@@ -59,19 +60,21 @@ export default function NeracaStatement({ title, asOf, sheet }: Props) {
           <Line label="Utang Usaha" value={sheet.tradePayables} indent={2} />
           <p className="text-[10px] font-bold text-slate-400 pt-1 pl-6">Kewajiban Jangka Pendek Lainnya</p>
           <Line label="Bagi Hasil Pengelolaan" value={sheet.profitShare} indent={3} />
+          {sheet.thrPayable ? <Line label="Utang THR Crew" value={sheet.thrPayable} indent={3} /> : null}
           <Line label="Jumlah Liabilitas Jangka Pendek" value={sheet.shortLiab} total indent={1} />
           <p className="text-[10px] font-black uppercase text-slate-400 pt-2 pl-3">Liabilitas Jangka Panjang</p>
-          <Line label="Utang Usaha" value={sheet.longTermPayables} indent={2} />
+          <Line label="Utang Usaha Jangka Panjang" value={sheet.longTermPayables} indent={2} />
           <Line label="Utang Sewa" value={sheet.leasePayables} indent={2} />
           <Line label="Jumlah Liabilitas Jangka Panjang" value={sheet.longLiab} total indent={1} />
           <Line label="Jumlah Kewajiban" value={sheet.totalLiab} total />
 
           <Sub>EKUITAS</Sub>
-          <Line label="Modal" value={sheet.paidInCapital} indent={1} />
-          <Line label="Ekuitas Saldo Awal" value={sheet.equityBegin} indent={1} />
-          {sheet.extraYear ? <Line label="Setoran modal tahun ini" value={sheet.extraYear} indent={1} /> : null}
-          <Line label="Laba Tahun Ini" value={sheet.yearProfit} indent={1} />
-          {sheet.drawingsYear ? <Line label="Prive tahun ini" value={sheet.drawingsYear} indent={1} paren /> : null}
+          {/* Setiap baris dijumlahkan menjadi Jumlah Ekuitas (tidak ada baris ringkasan yang dobel). */}
+          <Line label="Modal Disetor" value={sheet.paidInCapital} indent={1} />
+          {sheet.openingGap ? <Line label="Selisih Pembukaan" value={sheet.openingGap} indent={1} /> : null}
+          {sheet.drawings ? <Line label="Prive" value={sheet.drawings} indent={1} paren /> : null}
+          <Line label="Laba Ditahan (tahun-tahun lalu)" value={sheet.retainedPrior} indent={1} />
+          <Line label="Laba Tahun Berjalan" value={sheet.yearProfit} indent={1} />
           <Line label="Jumlah Ekuitas" value={sheet.totalEquity} total />
           <Line label="JUMLAH LIABILITAS DAN EKUITAS" value={sheet.totalPasiva} grand />
           <p className={`text-[11px] font-bold pt-2 ${balanced ? 'text-emerald-700' : 'text-rose-600'}`}>
@@ -84,6 +87,11 @@ export default function NeracaStatement({ title, asOf, sheet }: Props) {
               Piutang penjualan belum dikoleksi bertanggal: Rp {money(sheet.tradeReceivablesFromSales)}.
               QRIS lunas yang belum masuk rekening outlet dicatat di Clearing (Rp {money(sheet.gatewayClearing || 0)}),
               bukan Bank.
+            </p>
+          )}
+          {sheet.undepositedCash < -0.5 && (
+            <p className="text-[11px] text-rose-800 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2 mt-2 leading-relaxed">
+              {sheet.completeness.issues[0]}
             </p>
           )}
           {sheet.completeness && !sheet.completeness.complete && (

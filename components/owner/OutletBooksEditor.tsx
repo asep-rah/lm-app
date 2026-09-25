@@ -6,6 +6,7 @@ import {
   defaultLifeOf,
   emptyAsset,
   idr,
+  openingAssetNetOf,
   openingGap,
   recordedPayables,
   resolvedOpeningCash,
@@ -27,8 +28,10 @@ export default function OutletBooksEditor({ value, onChange }: Props) {
   const set = (patch: Partial<OutletBook>) => onChange({ ...value, ...patch });
   const assets = value.assets || [];
   const cost = assetCostOf(value);
+  // Aset yang dibeli sebelum tanggal mulai dihitung di nilai buku (setelah penyusutan sebelumnya).
+  const netAssets = openingAssetNetOf(value);
   const cash = resolvedOpeningCash(value);
-  const uses = cash + (Number(value.receivables) || 0) + (Number(value.otherCurrentAssets) || 0) + cost;
+  const uses = cash + (Number(value.receivables) || 0) + (Number(value.otherCurrentAssets) || 0) + netAssets;
   const gap = openingGap({ ...value, openingCash: cash });
 
   return (
@@ -66,7 +69,8 @@ export default function OutletBooksEditor({ value, onChange }: Props) {
       </div>
 
       <div className={`text-[10px] rounded-lg px-2 py-1.5 ${Math.abs(gap) < 1 ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'}`}>
-        Kas {idr(cash)} + Piutang {idr(value.receivables || 0)} + Aset {idr(cost)} = {idr(uses)}
+        Kas {idr(cash)} + Piutang {idr(value.receivables || 0)} + Aset {idr(netAssets)}
+        {netAssets !== cost ? ` (perolehan ${idr(cost)} − penyusutan sebelum mulai ${idr(cost - netAssets)})` : ''} = {idr(uses)}
         {' · '}
         Modal + Utang = {idr((Number(value.openingCapital) || 0) + recordedPayables(value))}
         {Math.abs(gap) >= 1 ? ` · selisih ${idr(gap)} ke ekuitas` : ' · seimbang'}
