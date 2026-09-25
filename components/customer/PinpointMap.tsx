@@ -161,17 +161,14 @@ export default function PinpointMap({ value, fallbackCenter, onChange, onGps, lo
             </div>
           </div>
         )}
-        <div className={full ? 'relative flex-1' : 'relative'}>
-          <div
-            ref={hostRef}
-            className={
-              full
-                ? 'absolute inset-0 z-0 bg-slate-100'
-                : // Explicit "relative": Leaflet otherwise pins position:relative inline at init, which would
-                  // override "absolute inset-0" in full-screen mode (0-height map).
-                  'relative h-64 w-full rounded-2xl overflow-hidden border border-slate-200 z-0 bg-slate-100'
-            }
-          />
+        <div
+          className={
+            full ? 'relative flex-1' : 'relative h-64 w-full rounded-2xl overflow-hidden border border-slate-200'
+          }
+        >
+          {/* Constant className: React must never overwrite the classes Leaflet adds (leaflet-container…);
+              "relative" also stops Leaflet from pinning an inline position. Only the wrapper resizes. */}
+          <div ref={hostRef} className="relative h-full w-full z-0 bg-slate-100" />
           {ready && (
             <div className="pointer-events-none absolute inset-0 z-[1000] flex items-center justify-center">
               <div className="-translate-y-4 drop-shadow-md text-rose-600">

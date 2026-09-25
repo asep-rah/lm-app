@@ -839,12 +839,7 @@ await step('Login: country picker (Indonesia default) — a Singapore number is 
     await page.getByRole('button', { name: 'Perbesar' }).click();
     const dlg = page.getByRole('dialog', { name: 'Peta titik jemput' });
     await dlg.waitFor();
-    await page.screenshot({ path: `${OUT}/dbg1.png` });
-    console.log('DBG dialogs', await page.getByRole('dialog').count(), await page.evaluate(() => [...document.querySelectorAll('[role=dialog]')].map((d) => d.getAttribute('aria-label') + ':' + d.getBoundingClientRect().height)));
-    await page.waitForTimeout(1000);
-    await page.screenshot({ path: `${OUT}/dbg2.png` });
-    console.log('DBG after 1s', await page.evaluate(() => [...document.querySelectorAll('[role=dialog]')].map((d) => d.getAttribute('aria-label') + ':' + d.getBoundingClientRect().height)));
-    const box = await dlg.boundingBox({ timeout: 3000 });
+    const box = await dlg.boundingBox();
     assert.ok(box && box.height > 700, `full-screen height ${box?.height}`);
     const mapH = await page.evaluate(() => {
       const el = document.querySelector('[role=dialog] .leaflet-container');
@@ -855,6 +850,9 @@ await step('Login: country picker (Indonesia default) — a Singapore number is 
     await dlg.getByRole('button', { name: 'Selesai' }).click();
     await dlg.waitFor({ state: 'detached' }).catch(() => {});
     assert.equal(await page.getByRole('dialog', { name: 'Peta titik jemput' }).count(), 0);
+    // Leaflet's own classes survive the mode switch (React must not overwrite them).
+    const h = await page.evaluate(() => document.querySelector('.leaflet-container')?.getBoundingClientRect().height ?? -1);
+    assert.ok(h > 200 && h < 300, `inline map height ${h}`);
   });
   await s.close();
 }
