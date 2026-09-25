@@ -11,5 +11,6 @@ export const PR_MIGRATION_FILES = [
   '20260928_revoke_anon_pickup_insert.sql',
   '20260929_service_role_sequence_usage.sql',
   '20260930_order_driver_chat.sql',
-  '20261001_customer_phone_keys_international.sql'
+  '20261001_customer_phone_keys_international.sql',
+  '20261002_outlet_capacity_manual.sql'
 ];
