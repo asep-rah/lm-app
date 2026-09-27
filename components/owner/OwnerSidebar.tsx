@@ -162,6 +162,11 @@ export default function OwnerSidebar({
                   <button type="button" onClick={() => go('settings', 'payroll')} className={itemCls(activeTab === 'settings' && settingsPanel === 'payroll')}>
                     Gaji & COA
                   </button>
+                  {isOwner && (
+                    <button type="button" onClick={() => go('settings', 'access')} className={itemCls(activeTab === 'settings' && settingsPanel === 'access')}>
+                      Hak akses role
+                    </button>
+                  )}
                 </div>
               )}
             </div>

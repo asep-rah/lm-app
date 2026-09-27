@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { allowOwnerAreaPage, loadMyPermissions } from '@/lib/staffPermissionsClient';
 import { useParams } from 'next/navigation';
 import OwnerChrome from '@/components/owner/OwnerChrome';
-import { canAccessSettings, homePathForRole, isOwnerRole } from '@/lib/staffSession';
 import { earliestBooksStart, loadOwnerFinanceBundle, filterByOutlet, ledgerTxsOf } from '@/lib/ownerFinanceData';
 import { monthLabel, type PnlMonthRef } from '@/lib/pnlReport';
 import { booksOf, idr, loadOutletBooks, type OutletBook } from '@/lib/outletBooks';
@@ -77,6 +77,7 @@ export default function OwnerFinanceKindPage() {
   const [settlementRows, setSettlementRows] = useState<Record<string, unknown>[]>([]);
   const [settlementError, setSettlementError] = useState<{ text: string; relogin: boolean } | null>(null);
   const [settlementVersion, setSettlementVersion] = useState(0);
+  const [canLockPeriod, setCanLockPeriod] = useState(false);
 
   useEffect(() => {
     const raw = localStorage.getItem('laundry_owner_user') || localStorage.getItem('laundry_user');
@@ -84,12 +85,17 @@ export default function OwnerFinanceKindPage() {
       window.location.href = '/login';
       return;
     }
-    const role = String(JSON.parse(raw).role || '').toLowerCase();
-    if (!canAccessSettings(role) && !isOwnerRole(role)) {
-      window.location.href = homePathForRole(role);
-      return;
-    }
-    setReady(true);
+    let cancelled = false;
+    void (async () => {
+      if (!(await allowOwnerAreaPage('view.finance_reports')) || cancelled) return;
+      const perms = await loadMyPermissions();
+      if (cancelled) return;
+      setCanLockPeriod(perms.has('period.lock'));
+      setReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -462,7 +468,7 @@ export default function OwnerFinanceKindPage() {
               loadError={settlementError}
               onChanged={() => setSettlementVersion((v) => v + 1)}
             />
-            <PeriodLockPanel outlets={outlets} />
+            {canLockPeriod && <PeriodLockPanel outlets={outlets} />}
             <div className="bg-white border rounded-2xl shadow-sm overflow-hidden">
               <div className="px-4 py-3 border-b">
                 <h3 className="text-sm font-black">Rincian aset tetap</h3>

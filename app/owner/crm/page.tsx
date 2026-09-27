@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { allowOwnerAreaPage } from '@/lib/staffPermissionsClient';
 import OwnerChrome from '@/components/owner/OwnerChrome';
 import { CRM_TIERS, DEFAULT_CRM_SETTINGS, idr, saveCrmSettings, waMeUrl, type CrmSettings } from '@/lib/crm';
 import { filterCrmAudience, loadCrmAnalytics, runRetentionSweep, type CrmAnalytics } from '@/lib/crm-automation';
 import { queuePush } from '@/lib/notifications';
-import { canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
 import { supabase } from '@/lib/supabaseClient';
 
 type OutletOpt = { id: string; name: string };
@@ -58,16 +58,14 @@ export default function OwnerCrmPage() {
       window.location.href = '/login';
       return;
     }
-    const role = String(JSON.parse(raw).role || '').toLowerCase();
-    if (isWorkspaceRole(role) && !canAccessSettings(role)) {
-      window.location.href = '/workspace';
-      return;
-    }
-    if (!canAccessSettings(role) && !isOwnerRole(role)) {
-      window.location.href = homePathForRole(role);
-      return;
-    }
-    setReady(true);
+    let cancelled = false;
+    void (async () => {
+      if (!(await allowOwnerAreaPage('view.crm')) || cancelled) return;
+      setReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {

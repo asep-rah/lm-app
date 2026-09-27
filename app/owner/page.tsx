@@ -1,12 +1,14 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { allowOwnerAreaPage, loadMyPermissions } from '@/lib/staffPermissionsClient';
+import RoleAccessPanel from '@/components/owner/RoleAccessPanel';
 import { supabase } from '@/lib/supabaseClient';
 import StageTimeline from '@/components/StageTimeline';
 import WasherBatchTimeline from '@/components/pos/WasherBatchTimeline';
 import { depositPaidOf } from '@/lib/paymentParts';
 import { isVoidTransaction } from '@/lib/voidTx';
-import { canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
+import { canAccessSettings, isOwnerRole } from '@/lib/staffSession';
 import { isMultiOutletRole, staffRolesForForm } from '@/lib/staffRoles';
 import { parseAssignedOutletIds } from '@/lib/driverAttendance';
 import { postStaffApi } from '@/lib/staffApiClient';
@@ -88,6 +90,7 @@ export default function Dashboard() {
   const [receiptTerms, setReceiptTerms] = useState('');
   const [receiptLayout, setReceiptLayout] = useState<ReceiptLayout>(DEFAULT_RECEIPT_LAYOUT);
   const [settingsPanel, setSettingsPanel] = useState<SettingsPanel>('services');
+  const [myPerms, setMyPerms] = useState<Set<string>>(new Set());
   const [outletOverrides, setOutletOverrides] = useState<any>({});
   const [settingViewOutlet, setSettingViewOutlet] = useState('ALL');
 
@@ -179,27 +182,28 @@ export default function Dashboard() {
     if (!ownerStr) { window.location.href = '/login'; return; }
     const user = JSON.parse(ownerStr);
     const role = String(user.role || '').toLowerCase();
-    if (isWorkspaceRole(role) && !canAccessSettings(role)) {
-      window.location.href = '/workspace';
-      return;
-    }
-    if (!canAccessSettings(role) && !isOwnerRole(role)) {
-      window.location.href = homePathForRole(role);
-      return;
-    }
-    setCurrentUserRole(role);
-    setCurrentUserName(user.name);
-    const { tab, panel } = readOwnerSearch();
-    if (tab === 'history' || tab === 'transaksi') setActiveTab('history');
-    else if (tab === 'loans') setActiveTab('loans');
-    else if (tab === 'employees') setActiveTab('employees');
-    else if (tab === 'delete_requests') setActiveTab('delete_requests');
-    else if (tab === 'approvals' || tab === 'persetujuan') setActiveTab('approvals');
-    else if (tab === 'settings') setActiveTab('settings');
-    if (panel) {
-      setSettingsPanel(panel);
-      setActiveTab('settings');
-    }
+    let cancelled = false;
+    void (async () => {
+      if (!(await allowOwnerAreaPage('view.owner_dashboard')) || cancelled) return;
+      setMyPerms(await loadMyPermissions());
+      if (cancelled) return;
+      setCurrentUserRole(role);
+      setCurrentUserName(user.name);
+      const { tab, panel } = readOwnerSearch();
+      if (tab === 'history' || tab === 'transaksi') setActiveTab('history');
+      else if (tab === 'loans') setActiveTab('loans');
+      else if (tab === 'employees') setActiveTab('employees');
+      else if (tab === 'delete_requests') setActiveTab('delete_requests');
+      else if (tab === 'approvals' || tab === 'persetujuan') setActiveTab('approvals');
+      else if (tab === 'settings') setActiveTab('settings');
+      if (panel) {
+        setSettingsPanel(panel);
+        setActiveTab('settings');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -882,7 +886,8 @@ export default function Dashboard() {
     link.click();
   };
 
-  const isManagementAdmin = canAccessSettings(currentUserRole);
+  // Tab pengaturan: owner/supervisor, atau role yang diberi hak mengubah pengaturan oleh owner.
+  const isManagementAdmin = canAccessSettings(currentUserRole) || [...myPerms].some((k) => k.startsWith('settings.'));
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-3 md:p-8 pb-32">
@@ -1488,7 +1493,10 @@ export default function Dashboard() {
                     </div>
                   </div>
                 </div>
-                <button onClick={handleSaveSettings} disabled={isSaving} className="w-full bg-indigo-600 text-white font-black py-4 rounded-xl shadow-lg mt-4">{isSaving ? 'Menyimpan...' : '💾 SIMPAN SEMUA PENGATURAN'}</button>
+                {settingsPanel === 'access' && isOwnerRole(currentUserRole) && <RoleAccessPanel />}
+                {settingsPanel !== 'access' && (
+                  <button onClick={handleSaveSettings} disabled={isSaving} className="w-full bg-indigo-600 text-white font-black py-4 rounded-xl shadow-lg mt-4">{isSaving ? 'Menyimpan...' : '💾 SIMPAN SEMUA PENGATURAN'}</button>
+                )}
               </div>
             )}
 

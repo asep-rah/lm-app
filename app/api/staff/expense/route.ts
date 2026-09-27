@@ -6,6 +6,7 @@ import { clientIp, insertAuditLog, insertErrorLog, paymentServiceDb } from '@/li
 import { createMemoryRateLimiter, isSameOriginRequest } from '@/lib/requestGuards';
 import { insertWithFallbackOn, updateWithFallbackOn } from '@/lib/safeWrite';
 import { requireStaff } from '@/lib/staffAuth/owner';
+import { requirePermission } from '@/lib/staffAuth/permissions';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,8 +15,6 @@ const noStore = { 'Cache-Control': 'no-store' };
 const deny = (status: number, error: string) => NextResponse.json({ error }, { status, headers: noStore });
 const text = (v: unknown, max: number) => String(v ?? '').replace(/[\u0000-\u0008\u000b-\u001f]/g, ' ').trim().slice(0, max);
 const PAID_FROM = new Set<string>(EXPENSE_PAID_FROM.map((p) => p.value));
-/** Revisi nominal pengeluaran: owner + tim keuangan (Finance Workspace). */
-const REVISE_ROLES = ['owner', 'supervisor', 'finance', 'head_finance', 'head', 'head_management'];
 const MAX_AMOUNT = 1_000_000_000;
 const lockedMsg = (lock: string) => `Periode sudah ditutup buku (s.d. ${lock}). Hubungi owner.`;
 
@@ -24,7 +23,7 @@ const lockedMsg = (lock: string) => `Periode sudah ditutup buku (s.d. ${lock}). 
  * mengubah pengeluaran (beban palsu atau mengubah nominal lama).
  *  - op 'create': staf login (POS, Admin Ops, pembayaran pengajuan pembelian).
  *    created_by = staf yang login. Pengajuan yang sama tidak tercatat dua kali.
- *  - op 'update': revisi nominal/keterangan oleh owner / tim keuangan; nilai lama
+ *  - op 'update': revisi nominal/keterangan (hak 'expense.revise'); nilai lama
  *    & baru tercatat di audit_logs.
  * Tutup buku diperiksa di sini (trigger DB hanya mengunci browser).
  */
@@ -42,7 +41,7 @@ export async function POST(req: NextRequest) {
     if (op === 'update') {
       const id = text(body.id, 64);
       if (!id) return deny(400, 'Pengeluaran tidak valid.');
-      const me = await requireStaff(req, db, REVISE_ROLES, 'Hanya owner / tim keuangan yang boleh merevisi pengeluaran.');
+      const me = await requirePermission(req, db, 'expense.revise');
       if ('error' in me) return me.error;
       const { data: old } = await db.from('expenses').select('id, outlet_id, amount, description, created_at').eq('id', id).maybeSingle();
       if (!old) return deny(404, 'Pengeluaran tidak ditemukan.');

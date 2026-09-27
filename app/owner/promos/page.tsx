@@ -1,10 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { allowOwnerAreaPage } from '@/lib/staffPermissionsClient';
 import OwnerChrome from '@/components/owner/OwnerChrome';
 import { supabase } from '@/lib/supabaseClient';
 import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
-import { canAccessSettings, homePathForRole, isOwnerRole } from '@/lib/staffSession';
 import {
   ALL_OUTLET_TARGET,
   isAllOutletTarget,
@@ -77,18 +77,20 @@ export default function OwnerPromoBannersPage() {
       window.location.href = '/login';
       return;
     }
-    const role = String(JSON.parse(raw).role || '').toLowerCase();
-    if (!canAccessSettings(role) && !isOwnerRole(role)) {
-      window.location.href = homePathForRole(role);
-      return;
-    }
-    const tab = new URLSearchParams(window.location.search).get('tab');
-    if (tab === 'voucher') {
-      window.location.replace('/owner/vouchers');
-      return;
-    }
-    setReady(true);
-    load();
+    let cancelled = false;
+    void (async () => {
+      if (!(await allowOwnerAreaPage('view.vouchers')) || cancelled) return;
+      const tab = new URLSearchParams(window.location.search).get('tab');
+      if (tab === 'voucher') {
+        window.location.replace('/owner/vouchers');
+        return;
+      }
+      setReady(true);
+      load();
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const visiblePromos = promos;

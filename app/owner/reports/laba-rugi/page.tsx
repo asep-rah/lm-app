@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { allowOwnerAreaPage } from '@/lib/staffPermissionsClient';
 import OwnerChrome from '@/components/owner/OwnerChrome';
 import PnlStatement from '@/components/owner/PnlStatement';
-import { canAccessSettings, homePathForRole, isOwnerRole } from '@/lib/staffSession';
 import { loadOwnerFinanceBundle, filterByOutlet } from '@/lib/ownerFinanceData';
 import { settlementForJournal } from '@/lib/financeSettlement';
 import {
@@ -40,13 +40,15 @@ export default function LabaRugiPage() {
       return;
     }
     const user = JSON.parse(raw);
-    const role = String(user.role || '').toLowerCase();
-    if (!canAccessSettings(role) && !isOwnerRole(role)) {
-      window.location.href = homePathForRole(role);
-      return;
-    }
-    setAdminName(String(user.name || 'Owner'));
-    setReady(true);
+    let cancelled = false;
+    void (async () => {
+      if (!(await allowOwnerAreaPage('view.finance_reports')) || cancelled) return;
+      setAdminName(String(user.name || 'Owner'));
+      setReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {

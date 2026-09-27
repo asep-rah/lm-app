@@ -20,12 +20,16 @@ state.employees = [
   { id: '1', name: 'Owner', role: 'owner', username: 'owner' },
   { id: '3', name: 'Kasir A', role: 'kasir', username: 'kasir' },
   { id: '4', name: 'CS Rina', role: 'cs', username: 'cs' },
-  { id: '5', name: 'Fina', role: 'finance', username: 'fina' }
+  { id: '5', name: 'Fina', role: 'finance', username: 'fina' },
+  { id: '6', name: 'Spv Budi', role: 'supervisor', username: 'spv' }
 ];
+state.role_permissions = [];
 state.customers = [{ id: 'c1', phone: '081234567890', name: 'Bu Ani', registered_by: 'Kasir A' }];
 state.employee_loans = [
   { id: 'L1', employee_name: 'Kasir A', amount: 100000, status: 'pending' },
-  { id: 'L2', employee_name: 'Kasir A', amount: 50000, status: 'pending' }
+  { id: 'L2', employee_name: 'Kasir A', amount: 50000, status: 'pending' },
+  { id: 'L3', employee_name: 'Driver D', amount: 40000, status: 'pending' },
+  { id: 'L4', employee_name: 'CS Rina', amount: 30000, status: 'pending' }
 ];
 state.transactions = [
   { id: 't1', outlet_id: OUTLET, amount: 100000, delivery_fee: 0, order_type: 'Offline', payment_method: 'Cash', is_paid: true, payment_status: 'paid', status: 'Selesai', created_at: '2026-01-10T03:00:00.000Z' },
@@ -289,6 +293,45 @@ await step('Kasbon decisions: owner only; approve once; paid only after approval
   assert.equal((await call('/api/owner/employee-loan', { body: { id: 'L2', action: 'reject' }, cookie: staff('1', 'owner') })).status, 200);
   assert.equal(state.employee_loans.find((l) => l.id === 'L2').status, 'Rejected');
   assert.ok(state.audit_logs.some((a) => a.action === 'employee_loan_approve' && a.entity_id === 'L1'));
+});
+
+await step('Supervisor (default rights): saves prices; stale bagi hasil / buku copies kept; cannot change bagi hasil; decides kasbon', async () => {
+  const ov = { o1: { svc1: { price: 11000 } }, __profit_share: { o1: 30 }, __outlet_books: { o1: { cash: 10 } } };
+  state.app_settings[0].outlet_overrides = JSON.stringify(ov);
+  const stale = { ...ov, o1: { svc1: { price: 12000 } }, __profit_share: { o1: 99 }, __outlet_books: { o1: { cash: 0 } } };
+  const r = await call('/api/owner/app-settings', { body: { attempts: [{ outlet_overrides: JSON.stringify(stale), basic_salary: state.app_settings[0].basic_salary ?? null }] }, cookie: staff('6', 'supervisor') });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const saved = JSON.parse(state.app_settings[0].outlet_overrides);
+  assert.equal(saved.o1.svc1.price, 12000);
+  assert.deepEqual(saved.__profit_share, { o1: 30 });
+  assert.deepEqual(saved.__outlet_books, { o1: { cash: 10 } });
+  const share = await call('/api/owner/app-settings', { body: { attempts: [{ profit_share_by_outlet: { o1: 90 } }] }, cookie: staff('6', 'supervisor') });
+  assert.equal(share.status, 403);
+  assert.equal(share.json?.code, 'PERMISSION_DENIED');
+  assert.equal((await call('/api/owner/employee-loan', { body: { id: 'L3', action: 'approve' }, cookie: staff('6', 'supervisor') })).status, 200);
+  assert.equal((await call('/api/owner/void-transaction', { body: { transactionId: 't1', reason: 'coba void' }, cookie: staff('6', 'supervisor') })).status, 403);
+});
+await step('Hak akses: owner only; owner row cannot be set; granted right works; reset returns to default; audited', async () => {
+  const mine = await call('/api/staff/permissions', { method: 'GET', cookie: staff('3', 'kasir') });
+  assert.equal(mine.status, 200);
+  assert.deepEqual(mine.json.permissions, []);
+  assert.equal(mine.json.matrix, undefined);
+  const ownerView = await call('/api/staff/permissions', { method: 'GET', cookie: staff('1', 'owner') });
+  assert.ok(ownerView.json.matrix?.supervisor?.includes('kasbon.decide'));
+  assert.equal((await call('/api/owner/role-permissions', { body: { role: 'kasir', permissions: ['kasbon.decide'] }, cookie: staff('6', 'supervisor') })).status, 403);
+  assert.equal((await call('/api/owner/role-permissions', { body: { role: 'owner', permissions: [] }, cookie: staff('1', 'owner') })).status, 400);
+  const grant = await call('/api/owner/role-permissions', { body: { role: 'kasir', permissions: ['kasbon.decide', 'root.all'] }, cookie: staff('1', 'owner') });
+  assert.equal(grant.status, 200, JSON.stringify(grant.json));
+  assert.deepEqual(state.role_permissions.find((r) => r.role === 'kasir').permissions, ['kasbon.decide']);
+  assert.equal((await call('/api/owner/employee-loan', { body: { id: 'L4', action: 'reject' }, cookie: staff('3', 'kasir') })).status, 200);
+  const deny = await call('/api/owner/role-permissions', { body: { role: 'supervisor', permissions: [] }, cookie: staff('1', 'owner') });
+  assert.equal(deny.status, 200);
+  assert.equal((await call('/api/owner/app-settings', { body: { attempts: [{ receipt_terms: 'baru' }] }, cookie: staff('6', 'supervisor') })).status, 403);
+  assert.equal((await call('/api/owner/role-permissions', { body: { role: 'supervisor', reset: true }, cookie: staff('1', 'owner') })).status, 200);
+  assert.equal(state.role_permissions.some((r) => r.role === 'supervisor'), false);
+  assert.equal((await call('/api/owner/app-settings', { body: { attempts: [{ receipt_terms: 'baru' }] }, cookie: staff('6', 'supervisor') })).status, 200);
+  assert.ok(state.audit_logs.some((a) => a.action === 'role_permissions_updated' && a.entity_id === 'kasir'));
+  assert.ok(state.audit_logs.some((a) => a.action === 'role_permissions_reset' && a.entity_id === 'supervisor'));
 });
 
 process.kill(-app.pid, 'SIGKILL');

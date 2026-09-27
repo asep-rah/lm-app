@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { validateSettlement } from '@/lib/financeSettlement';
 import { clientIp, insertAuditLog, insertErrorLog, paymentServiceDb } from '@/lib/paymentSecurity';
 import { isSameOriginRequest } from '@/lib/requestGuards';
-import { requireOwner } from '@/lib/staffAuth/owner';
+import { requirePermission } from '@/lib/staffAuth/permissions';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,11 +15,11 @@ type Db = ReturnType<typeof paymentServiceDb>;
 
 /**
  * Pembayaran bagi hasil / THR crew yang dicatat owner (lib/financeSettlement).
- * Hanya owner: role dibaca ulang dari employees (sesi bertanda tangan tidak
+ * Hak 'finance.settlement' (default owner): role dibaca ulang dari employees (sesi bertanda tangan tidak
  * dipercaya untuk role). Setiap catat/batal masuk audit_logs. Tidak ada hapus.
  */
-const currentOwner = (req: NextRequest, db: Db) =>
-  requireOwner(req, db, 'Hanya owner yang boleh mencatat pembayaran bagi hasil / THR.');
+const canRead = (req: NextRequest, db: Db) => requirePermission(req, db, ['finance.settlement', 'view.finance_reports']);
+const canRecord = (req: NextRequest, db: Db) => requirePermission(req, db, 'finance.settlement');
 
 const failed = async (e: unknown, code: string) => {
   await insertErrorLog({ source: 'finance_settlements', code, message: String((e as Error)?.message || e).slice(0, 300) });
@@ -29,7 +29,7 @@ const failed = async (e: unknown, code: string) => {
 export async function GET(req: NextRequest) {
   try {
     const db = paymentServiceDb();
-    const me = await currentOwner(req, db);
+    const me = await canRead(req, db);
     if ('error' in me) return me.error;
     const { data, error } = await db.from(TABLE).select('*').order('paid_at', { ascending: true }).limit(5000);
     if (error) throw new Error(`${error.code ?? ''} ${error.message}`.trim());
@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   try {
     const db = paymentServiceDb();
-    const me = await currentOwner(req, db);
+    const me = await canRecord(req, db);
     if ('error' in me) return me.error;
     const audit = (action: string, id: string, meta: Record<string, unknown>, amount?: number) =>
       insertAuditLog({

@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { clientIp, insertAuditLog, insertErrorLog, paymentServiceDb } from '@/lib/paymentSecurity';
 import { isSameOriginRequest } from '@/lib/requestGuards';
 import { updateWithFallbackOn } from '@/lib/safeWrite';
-import { requireOwner } from '@/lib/staffAuth/owner';
+import { requirePermission } from '@/lib/staffAuth/permissions';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,7 +10,7 @@ const noStore = { 'Cache-Control': 'no-store' };
 const deny = (status: number, error: string) => NextResponse.json({ error }, { status, headers: noStore });
 
 /**
- * Keputusan kasbon staf oleh owner: approve / reject / paid (lunas). Browser
+ * Keputusan kasbon staf (hak 'kasbon.decide', default owner & supervisor): approve / reject / paid (lunas). Browser
  * tidak lagi bisa mengubah employee_loans (menyetujui kasbon sendiri, mengubah
  * nominal / potongan). Pengajuan tetap dari POS dengan status 'pending'
  * (dijaga trigger). Semua keputusan tercatat di audit_logs.
@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const db = paymentServiceDb();
-    const me = await requireOwner(req, db, 'Hanya owner yang boleh memutuskan kasbon.');
+    const me = await requirePermission(req, db, 'kasbon.decide');
     if ('error' in me) return me.error;
     const { data: loan } = await db.from('employee_loans').select('*').eq('id', id).maybeSingle();
     if (!loan) return deny(404, 'Kasbon tidak ditemukan.');

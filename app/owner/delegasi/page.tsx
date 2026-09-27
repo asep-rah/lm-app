@@ -1,11 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { allowOwnerAreaPage } from '@/lib/staffPermissionsClient';
 import OwnerChrome from '@/components/owner/OwnerChrome';
 import HeadTaskDelegator from '@/components/HeadTaskDelegator';
 import SupervisorComplaintPanel from '@/components/SupervisorComplaintPanel';
 import { supabase } from '@/lib/supabaseClient';
-import { getStaffSession, canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
+import { getStaffSession } from '@/lib/staffSession';
 import { isTaskCompleted, isTaskOverdueOpen, tasksVisibleForRole } from '@/lib/taskRoles';
 import { completeTaskWithSlaCheck } from '@/utils/taskSlaEvaluator';
 import StatusBadge from '@/components/ui/StatusBadge';
@@ -49,17 +50,16 @@ export default function OwnerDelegasiPage() {
     }
     const user = JSON.parse(raw);
     const r = String(user.role || '').toLowerCase();
-    if (isWorkspaceRole(r) && !canAccessSettings(r)) {
-      window.location.href = '/workspace';
-      return;
-    }
-    if (!canAccessSettings(r) && !isOwnerRole(r)) {
-      window.location.href = homePathForRole(r);
-      return;
-    }
-    setName(user.name || '');
-    setRole(r);
-    setReady(true);
+    let cancelled = false;
+    void (async () => {
+      if (!(await allowOwnerAreaPage('view.delegation')) || cancelled) return;
+      setName(user.name || '');
+      setRole(r);
+      setReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {

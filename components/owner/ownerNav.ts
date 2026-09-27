@@ -1,9 +1,9 @@
-export type SettingsPanel = 'services' | 'outlets' | 'supervisor' | 'receipt' | 'payroll';
+export type SettingsPanel = 'services' | 'outlets' | 'supervisor' | 'receipt' | 'payroll' | 'access';
 
 /** Soft-switch tab di `/owner` tanpa reload penuh. */
 export const OWNER_TAB_EVENT = 'lm:owner-tab';
 
-const SETTINGS_PANELS: SettingsPanel[] = ['services', 'outlets', 'supervisor', 'receipt', 'payroll'];
+const SETTINGS_PANELS: SettingsPanel[] = ['services', 'outlets', 'supervisor', 'receipt', 'payroll', 'access'];
 
 export const REMOTE_OWNER_TABS = new Set([
   'kpi',

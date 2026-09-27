@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { clientIp, insertAuditLog, insertErrorLog, paymentServiceDb } from '@/lib/paymentSecurity';
 import { isSameOriginRequest } from '@/lib/requestGuards';
-import { requireOwner } from '@/lib/staffAuth/owner';
+import { requirePermission } from '@/lib/staffAuth/permissions';
 import { softVoidTransaction } from '@/lib/voidTx';
 
 export const dynamic = 'force-dynamic';
@@ -12,7 +12,7 @@ const deny = (status: number, error: string) => NextResponse.json({ error }, { s
 /**
  * Owner menyetujui void (soft-void) satu transaksi. Browser tidak lagi boleh
  * mengubah is_void / voided_at (trigger transactions_guard_payment); void hanya
- * lewat sini: owner (dibaca ulang dari employees), alasan wajib, tercatat di audit_logs.
+ * lewat sini: hak 'transaction.void' (default owner; peran dibaca ulang dari employees), alasan wajib, tercatat di audit_logs.
  */
 export async function POST(req: NextRequest) {
   if (!isSameOriginRequest(req.headers)) return deny(403, 'Permintaan ditolak.');
@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
   if (reason.length < 3) return deny(400, 'Tulis alasan void.');
   try {
     const db = paymentServiceDb();
-    const me = await requireOwner(req, db, 'Hanya owner yang boleh menyetujui void transaksi.');
+    const me = await requirePermission(req, db, 'transaction.void');
     if ('error' in me) return me.error;
     const { data: tx } = await db.from('transactions').select('id, receipt_number, amount, outlet_id, is_void').eq('id', txId).maybeSingle();
     if (!tx) return deny(404, 'Transaksi tidak ditemukan.');

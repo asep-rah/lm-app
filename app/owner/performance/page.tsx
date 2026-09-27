@@ -1,10 +1,10 @@
 'use client';
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { allowOwnerAreaPage } from '@/lib/staffPermissionsClient';
 import { supabase } from '@/lib/supabaseClient';
 import Link from 'next/link';
 import OwnerChrome from '@/components/owner/OwnerChrome';
-import { canAccessSettings, homePathForRole, isOwnerRole } from '@/lib/staffSession';
 import {
   MONTHS_ID,
   defaultPeriodFilter,
@@ -51,14 +51,16 @@ export default function OwnerPerformancePage() {
       window.location.href = '/login';
       return;
     }
-    const role = String(JSON.parse(raw).role || '').toLowerCase();
-    if (!canAccessSettings(role) && !isOwnerRole(role)) {
-      window.location.href = homePathForRole(role);
-      return;
-    }
-    const q = new URLSearchParams(window.location.search).get('view') || 'outlet';
-    if (q in VIEWS) setView(q as ViewKey);
-    setReady(true);
+    let cancelled = false;
+    void (async () => {
+      if (!(await allowOwnerAreaPage('view.performance')) || cancelled) return;
+      const q = new URLSearchParams(window.location.search).get('view') || 'outlet';
+      if (q in VIEWS) setView(q as ViewKey);
+      setReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const load = async () => {

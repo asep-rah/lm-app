@@ -567,6 +567,15 @@ A: `docs/SECURITY_AND_MAINTENANCE.md` (env, SQL, checklist fraud mingguan).
 
 ## 5. Lampiran teknis singkat
 
+### 5.0 Hak akses role (diatur owner)
+
+Owner → Pengaturan → **Hak akses role**. Per role dicentang:
+
+- **Boleh memantau** — halaman area owner yang boleh dibuka (dashboard owner, laporan keuangan, CRM, performa & KPI, mesin, delegasi, voucher & promo). Staf workspace melihat tautannya di kartu "Akses tambahan".
+- **Boleh menyetujui / mengubah** — harga & komisi layanan, voucher & promo, struk, gaji pokok & mapping supervisor, COA, persen bagi hasil, buku outlet, kasbon, revisi pengeluaran, void, tutup buku, pembayaran bagi hasil/THR/pencairan Mayar. Semua dicek ulang di server.
+
+Owner selalu punya semua hak dan satu-satunya yang boleh mengatur hak akses. Role yang belum diatur memakai bawaan (`lib/accessControl.ts`): Supervisor = semua halaman pantau + harga layanan, voucher, struk, gaji/mapping, COA, kasbon, revisi pengeluaran; Finance & Head Management = COA + revisi pengeluaran; role lain tanpa hak tambahan. Batasan "memantau" saat ini mengatur halaman di aplikasi; data laporan masih bisa dibaca dari browser sampai tahap pengamanan baca data.
+
 ### 5.1 Endpoint kritis
 
 | Method | Path | Auth |
@@ -575,11 +584,13 @@ A: `docs/SECURITY_AND_MAINTENANCE.md` (env, SQL, checklist fraud mingguan).
 | POST | `/api/webhooks/mayar` | Webhook secret / signature |
 | GET | `/api/pay/check-status` | Sesuai implementasi route (ops/order context) |
 | POST | `/api/pay/mark-manual` | Sesi staf + role manual; tulis dengan service role; diaudit |
-| POST | `/api/owner/void-transaction` | Sesi staf + role owner; alasan wajib; diaudit (`transaction_voided`) |
-| POST | `/api/owner/app-settings` | Sesi staf + role owner (tim keuangan: hanya `coa_categories`); kolom di-whitelist; diaudit (`app_settings_updated`) |
-| POST | `/api/staff/expense` | `op: create` sesi staf (created_by = staf login, cek tutup buku, pengajuan pembelian tidak dobel); `op: update` owner/tim keuangan, nilai lama & baru diaudit |
+| POST | `/api/owner/void-transaction` | Sesi staf + hak `transaction.void`; alasan wajib; diaudit (`transaction_voided`) |
+| POST | `/api/owner/app-settings` | Sesi staf; hak dicek per kolom yang berubah (`settings.*`); kunci fitur lain di `outlet_overrides` yang tidak boleh diubah dikembalikan ke nilai DB; diaudit (`app_settings_updated`) |
+| POST | `/api/staff/expense` | `op: create` sesi staf (created_by = staf login, cek tutup buku, pengajuan pembelian tidak dobel); `op: update` hak `expense.revise`, nilai lama & baru diaudit |
 | POST | `/api/staff/membership-log` | Sesi staf; harga/saldo/komisi dari paket (`lib/memberPackages.ts`); diaudit (`membership_sold`) |
-| POST | `/api/owner/employee-loan` | Sesi staf + role owner; `approve` / `reject` (hanya pending) / `paid`; diaudit |
+| POST | `/api/owner/employee-loan` | Sesi staf + hak `kasbon.decide`; `approve` / `reject` (hanya pending) / `paid`; diaudit |
+| GET | `/api/staff/permissions` | Sesi staf; hak akses sendiri (owner: seluruh matriks) |
+| POST | `/api/owner/role-permissions` | Sesi staf + role owner; atur / kembalikan hak satu role; diaudit |
 | POST | `/api/pay/resync` | Bearer ops + role resync |
 | POST | `/api/deposit/mutate` | Bearer ops + role manual (termasuk kasir) |
 | GET | `/api/cron/sync-payments` | Bearer `CRON_SECRET` |
@@ -588,8 +599,8 @@ A: `docs/SECURITY_AND_MAINTENANCE.md` (env, SQL, checklist fraud mingguan).
 | POST | `/api/staff/pickup-pin` | Sesi staf (cookie) + role driver yang ditugaskan |
 | POST | `/api/staff/cash-deposit` | Sesi staf (kasir = staf yang login); setoran PENDING |
 | POST | `/api/staff/cash-closing` | Sesi staf; kas sistem dari buku besar |
-| GET/POST | `/api/owner/period-lock` | Sesi staf + role owner; buka kembali wajib alasan; diaudit |
-| GET/POST | `/api/owner/finance-settlements` | Sesi staf (cookie) + role owner (dibaca ulang dari employees); diaudit |
+| GET/POST | `/api/owner/period-lock` | Sesi staf; GET: hak `period.lock` atau `view.finance_reports`; POST: hak `period.lock`; buka kembali wajib alasan; diaudit |
+| GET/POST | `/api/owner/finance-settlements` | Sesi staf (role dibaca ulang dari employees); GET: hak `finance.settlement` atau `view.finance_reports`; POST: hak `finance.settlement`; diaudit |
 | GET/POST | `/api/customer/addresses` | Sesi pelanggan terverifikasi (nomor legacy selama login lama aktif); hanya alamat nomor sendiri |
 
 ### 5.2 Migrasi SQL wajib (urut)

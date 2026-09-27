@@ -8,10 +8,10 @@
 --   * menambah membership_logs → omset & komisi palsu;
 --   * menyetujui kasbon sendiri / mengubah nominal & potongan (employee_loans).
 -- Sekarang aplikasi menulis lewat:
---   * /api/owner/app-settings     (owner; tim keuangan hanya COA)
---   * /api/staff/expense          (staf login; revisi: owner / tim keuangan)
+--   * /api/owner/app-settings     (hak per kolom yang berubah, lihat Hak akses role)
+--   * /api/staff/expense          (staf login; revisi: hak expense.revise)
 --   * /api/staff/membership-log   (staf login; harga & komisi dari paket)
---   * /api/owner/employee-loan    (owner: setujui / tolak / lunas)
+--   * /api/owner/employee-loan    (hak kasbon.decide: setujui / tolak / lunas)
 -- semuanya memakai service role, memeriksa tutup buku, dan tercatat di audit_logs.
 -- Pengajuan kasbon tetap dari POS, tetapi selalu berstatus 'pending'.
 -- SELECT tidak berubah (laporan di browser masih membaca tabel ini).

@@ -18,6 +18,7 @@ import { completeTaskWithSlaCheck } from '@/utils/taskSlaEvaluator';
 import HeadTaskDelegator from '@/components/HeadTaskDelegator';
 import KpiRoleMonitoring from '@/components/KpiRoleMonitoring';
 import FinanceWorkspacePanel from '@/components/FinanceWorkspacePanel';
+import WorkspaceGrantedLinks from '@/components/WorkspaceGrantedLinks';
 import RequisitionForm from '@/components/RequisitionForm';
 import { prAmount, prQty } from '@/lib/cmsRequisition';
 import { toast } from '@/lib/toast';
@@ -270,6 +271,7 @@ export default function StaffWorkspace() {
 
       <main className="max-w-6xl mx-auto px-4 py-5 space-y-4">
         {role === 'supervisor' && <WasherFraudAlertListener />}
+        <WorkspaceGrantedLinks />
         {(role === 'supervisor' || role === 'admin_ops' || role === 'admin' || role === 'head' || role === 'head_management') && session.outletId && (
           <section className="bg-white border border-cyan-100 rounded-2xl p-4 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
             <OperatorQueueBoard outletId={session.outletId} actorId={session.id} compact />

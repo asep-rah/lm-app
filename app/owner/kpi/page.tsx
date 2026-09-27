@@ -1,11 +1,12 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { allowOwnerAreaPage } from '@/lib/staffPermissionsClient';
 import Link from 'next/link';
 import OwnerChrome from '@/components/owner/OwnerChrome';
 import { fetchRoleKpis, type KpiCard, type KpiMetricLine } from '@/lib/kpiMetrics';
 import { currentMonthYear } from '@/lib/kpiCatalog';
-import { canAccessSettings, canAccessKpiSettings, homePathForRole, isOwnerRole, isWorkspaceRole, kpiKeysVisibleForRole } from '@/lib/staffSession';
+import { canAccessKpiSettings, kpiKeysVisibleForRole } from '@/lib/staffSession';
 import StatusBadge from '@/components/ui/StatusBadge';
 
 const fmtHours = (h: number) => {
@@ -66,17 +67,16 @@ export default function OwnerKpiPage() {
       return;
     }
     const role = String(JSON.parse(raw).role || '').toLowerCase();
-    if (isWorkspaceRole(role) && !canAccessSettings(role)) {
-      window.location.href = '/workspace';
-      return;
-    }
-    if (!canAccessSettings(role) && !isOwnerRole(role)) {
-      window.location.href = homePathForRole(role);
-      return;
-    }
-    setCanEditTargets(canAccessKpiSettings(role));
-    setViewerRole(role);
-    setReady(true);
+    let cancelled = false;
+    void (async () => {
+      if (!(await allowOwnerAreaPage('view.performance')) || cancelled) return;
+      setCanEditTargets(canAccessKpiSettings(role));
+      setViewerRole(role);
+      setReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {

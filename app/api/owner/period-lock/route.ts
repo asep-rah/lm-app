@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { clientIp, insertAuditLog, insertErrorLog, paymentServiceDb } from '@/lib/paymentSecurity';
 import { isSameOriginRequest } from '@/lib/requestGuards';
-import { requireOwner } from '@/lib/staffAuth/owner';
+import { requirePermission } from '@/lib/staffAuth/permissions';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,7 +29,7 @@ const monthEnd = (raw: string) => {
 export async function GET(req: NextRequest) {
   try {
     const db = paymentServiceDb();
-    const me = await requireOwner(req, db, 'Hanya owner yang boleh melihat/mengatur tutup buku.');
+    const me = await requirePermission(req, db, ['period.lock', 'view.finance_reports']);
     if ('error' in me) return me.error;
     const { data, error } = await db.from(TABLE).select('*');
     if (error) throw new Error(`${error.code ?? ''} ${error.message}`.trim());
@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const db = paymentServiceDb();
-    const me = await requireOwner(req, db, 'Hanya owner yang boleh menutup buku.');
+    const me = await requirePermission(req, db, 'period.lock');
     if ('error' in me) return me.error;
     const { data: outlet } = await db.from('outlets').select('id, name').eq('id', outletId).maybeSingle();
     if (!outlet) return deny(400, 'Outlet tidak ditemukan.');

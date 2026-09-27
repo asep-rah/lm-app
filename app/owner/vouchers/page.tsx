@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useState, type ReactNode } from 'react';
+import { allowOwnerAreaPage } from '@/lib/staffPermissionsClient';
 import OwnerChrome from '@/components/owner/OwnerChrome';
 import { supabase } from '@/lib/supabaseClient';
-import { canAccessSettings, homePathForRole, isOwnerRole } from '@/lib/staffSession';
 import {
   benefitLabel,
   loadVoucherCodes,
@@ -68,13 +68,15 @@ export default function OwnerVouchersPage() {
       window.location.href = '/login';
       return;
     }
-    const role = String(JSON.parse(raw).role || '').toLowerCase();
-    if (!canAccessSettings(role) && !isOwnerRole(role)) {
-      window.location.href = homePathForRole(role);
-      return;
-    }
-    setReady(true);
-    load();
+    let cancelled = false;
+    void (async () => {
+      if (!(await allowOwnerAreaPage('view.vouchers')) || cancelled) return;
+      setReady(true);
+      load();
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const resetCreate = () => {

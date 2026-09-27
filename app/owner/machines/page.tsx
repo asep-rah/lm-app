@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { allowOwnerAreaPage } from '@/lib/staffPermissionsClient';
 import OwnerShowcaseNav from '@/components/OwnerShowcaseNav';
 import { supabase } from '@/lib/supabaseClient';
-import { canAccessSettings, homePathForRole, isOwnerRole } from '@/lib/staffSession';
 import {
   defaultPayloadKg,
   listOutletMachines,
@@ -46,20 +46,22 @@ export default function OwnerMachinesPage() {
       window.location.href = '/login';
       return;
     }
-    const role = String(JSON.parse(raw).role || '').toLowerCase();
-    if (!canAccessSettings(role) && !isOwnerRole(role)) {
-      window.location.href = homePathForRole(role);
-      return;
-    }
-    setReady(true);
-    (async () => {
-      const { data } = await supabase.from('outlets').select('id, name').order('name');
-      const rows = data || [];
-      setOutlets(rows);
-      const first = rows[0]?.id || '';
-      setOutletId(first);
-      if (first) await loadMachines(first);
+    let cancelled = false;
+    void (async () => {
+      if (!(await allowOwnerAreaPage('view.machines')) || cancelled) return;
+      setReady(true);
+      (async () => {
+        const { data } = await supabase.from('outlets').select('id, name').order('name');
+        const rows = data || [];
+        setOutlets(rows);
+        const first = rows[0]?.id || '';
+        setOutletId(first);
+        if (first) await loadMachines(first);
+      })();
     })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
