@@ -111,7 +111,7 @@ async function runSync(rows: any[]) {
             customerPhone: tx.customer_phone,
             paidVia: 'CRON_SYNC',
             pickupId: tx.pickup_id
-          });
+          }, paymentServiceDb());
           if (!payErr) {
             synced += 1;
             results.push({ id: tx.id, status: 'paid' });
@@ -149,7 +149,7 @@ async function runSync(rows: any[]) {
           customerPhone: tx.customer_phone,
           paidVia: 'CRON_SYNC',
           pickupId: tx.pickup_id
-        });
+        }, paymentServiceDb());
         if (!payErr) {
           synced += 1;
           results.push({ id: tx.id, status: 'paid_settlement' });

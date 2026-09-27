@@ -122,7 +122,7 @@ export async function POST(req: Request) {
       agentName: 'Mayar Mock',
       customerPhone: body.customerPhone || tx.customer_phone,
       paidVia: 'CHECK_STATUS'
-    });
+    }, paymentServiceDb());
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });

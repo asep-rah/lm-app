@@ -28,7 +28,8 @@ import StatusBadge from '@/components/ui/StatusBadge';
 import ChatAttachment, { visibleChatText } from '@/components/ChatAttachment';
 import PhotoLightbox from '@/components/PhotoLightbox';
 import { confirmPaymentProof, fileToCompressedDataUrl, uploadChatAttachment } from '@/lib/uploadProof';
-import { confirmTransactionPayment, isPaymentLocked } from '@/lib/paymentVerify';
+import { isPaymentLocked } from '@/lib/paymentVerify';
+import { isStaffSessionError, staffRelogin } from '@/lib/staffRelogin';
 import ManualMarkPaidModal from '@/components/payment/ManualMarkPaidModal';
 import { sendInvoiceToLiveChat } from '@/lib/chatInvoice';
 import ChatInvoiceCard from '@/components/ChatInvoiceCard';
@@ -742,16 +743,24 @@ export default function CsCommandCenter() {
       const url =
         (await confirmPaymentProof(payFile, `pay_${payModal.id}`).catch(() => '')) ||
         (await fileToCompressedDataUrl(payFile));
-      const { error } = await confirmTransactionPayment({
-        transactionId: payModal.id,
-        proofUrl: url,
-        receipt: payModal.receipt_number,
-        agentName: agent.name,
-        customerPhone: phone || payModal.customer_phone,
-        amount: Number(payModal.amount) || 0
+      // Status lunas hanya diubah server (sesi staf, diaudit); browser tidak bisa lagi menandai lunas.
+      const res = await fetch('/api/pay/mark-manual', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transactionId: payModal.id,
+          proofUrl: url,
+          receipt: payModal.receipt_number,
+          customerPhone: phone || payModal.customer_phone,
+          amount: Number(payModal.amount) || 0,
+          note: `Bukti transfer dikonfirmasi CS (${agent.name || 'CS'})`
+        })
       });
-      if (error) {
-        toast('Gagal konfirmasi: ' + error.message, 'err');
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (isStaffSessionError(out) && confirm(`${out?.error || 'Sesi login berakhir.'}\n\nMasuk ulang sekarang?`)) staffRelogin();
+        else toast('Gagal konfirmasi: ' + (out?.error || res.status), 'err');
         return;
       }
       toast('Pembayaran dikonfirmasi. POS terbuka untuk produksi.', 'ok');

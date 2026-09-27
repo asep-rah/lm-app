@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabaseClient';
-import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
+import { insertWithFallback, updateWithFallbackOn, type WriteDb } from '@/lib/safeWrite';
 import { canonicalPhone, insertChatMessage } from '@/lib/csChat';
 import { notifyCustomerPayment } from '@/lib/notifications';
 import { maybeAwardLoyalty } from '@/lib/crm-automation';
@@ -96,10 +96,15 @@ export async function createPaymentVerifyTask(tx: {
   return { error };
 }
 
-export async function completePaymentVerifyTasks(transactionId: string, receipt?: string) {
+/**
+ * db: klien yang menulis. Server (webhook, cron, /api/pay/*) WAJIB memberi
+ * klien service role — browser tidak boleh lagi mengubah status bayar
+ * (trigger transactions_guard_payment).
+ */
+export async function completePaymentVerifyTasks(transactionId: string, receipt?: string, db: WriteDb = supabase) {
   const ids = new Set<string>();
 
-  const { data: bySource } = await supabase
+  const { data: bySource } = await db
     .from('system_tasks')
     .select('id, status')
     .eq('source_id', transactionId)
@@ -111,7 +116,7 @@ export async function completePaymentVerifyTasks(transactionId: string, receipt?
   }
 
   if (receipt) {
-    const { data: byTitle } = await supabase
+    const { data: byTitle } = await db
       .from('system_tasks')
       .select('id, title, source_type, status')
       .eq('source_type', 'PAYMENT_VERIFY')
@@ -125,7 +130,7 @@ export async function completePaymentVerifyTasks(transactionId: string, receipt?
   }
 
   for (const id of ids) {
-    await updateWithFallback('system_tasks', [{ status: 'completed' }], { column: 'id', value: id });
+    await updateWithFallbackOn(db, 'system_tasks', [{ status: 'completed' }], { column: 'id', value: id });
   }
 }
 
@@ -139,21 +144,22 @@ export async function markInvoicePaid(opts: {
   paidVia?: string;
   note?: string;
   bankRef?: string;
-}) {
-  const { data: existing } = await supabase
+}, db: WriteDb = supabase) {
+  const { data: existing } = await db
     .from('transactions')
     .select('id, is_paid, payment_status, status, amount, customer_phone, receipt_number')
     .eq('id', opts.transactionId)
     .maybeSingle();
 
   if (existing && !isPaymentLocked(existing)) {
-    await completePaymentVerifyTasks(opts.transactionId, opts.receipt || existing.receipt_number);
+    await completePaymentVerifyTasks(opts.transactionId, opts.receipt || existing.receipt_number, db);
     return { error: null, alreadyPaid: true as const };
   }
 
   const paidAt = new Date().toISOString();
   const paidVia = opts.paidVia || 'MANUAL_VERIFIED';
-  const { error } = await updateWithFallback(
+  const { error } = await updateWithFallbackOn(
+    db,
     'transactions',
     [
       {
@@ -189,7 +195,7 @@ export async function markInvoicePaid(opts: {
   );
   if (error) return { error };
 
-  await completePaymentVerifyTasks(opts.transactionId, opts.receipt || existing?.receipt_number);
+  await completePaymentVerifyTasks(opts.transactionId, opts.receipt || existing?.receipt_number, db);
 
   const phone = opts.customerPhone || existing?.customer_phone;
   if (phone) {
@@ -273,26 +279,26 @@ export async function markGatewayPaid(opts: {
   customerPhone?: string;
   paidVia?: string;
   pickupId?: string | null;
-}) {
-  const { data: existing } = await supabase
+}, db: WriteDb = supabase) {
+  const { data: existing } = await db
     .from('transactions')
     .select('id, is_paid, payment_status, status, amount, customer_phone, receipt_number')
     .eq('id', opts.transactionId)
     .maybeSingle();
 
   if (existing && !isPaymentLocked(existing)) {
-    await completePaymentVerifyTasks(opts.transactionId, opts.receipt || existing.receipt_number);
+    await completePaymentVerifyTasks(opts.transactionId, opts.receipt || existing.receipt_number, db);
     return { error: null, alreadyPaid: true as const };
   }
 
   const agent = opts.agentName || 'Mayar QRIS';
   const paidVia = opts.paidVia || 'GATEWAY';
-  const { error } = await updateWithFallback('transactions', gatewayPaidAttempts(agent, paidVia), {
+  const { error } = await updateWithFallbackOn(db, 'transactions', gatewayPaidAttempts(agent, paidVia), {
     column: 'id',
     value: opts.transactionId
   });
   if (error) return { error };
-  await completePaymentVerifyTasks(opts.transactionId, opts.receipt || existing?.receipt_number);
+  await completePaymentVerifyTasks(opts.transactionId, opts.receipt || existing?.receipt_number, db);
   const phone = opts.customerPhone || existing?.customer_phone;
   if (phone) {
     const nominal = Number(opts.amount || existing?.amount || 0).toLocaleString('id-ID');

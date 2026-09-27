@@ -1,4 +1,4 @@
-import { updateWithFallback } from '@/lib/safeWrite';
+import { updateWithFallbackOn, type WriteDb } from '@/lib/safeWrite';
 import { supabase } from '@/lib/supabaseClient';
 
 /** Transaksi batal/cancel/void tidak masuk omset, ROI, atau KPI. */
@@ -41,7 +41,9 @@ const parseItems = (raw: unknown): any[] => {
  */
 export async function softVoidTransaction(
   txId: string,
-  opts?: { reason?: string; approvedBy?: string }
+  opts?: { reason?: string; approvedBy?: string },
+  /** Server: klien service role (/api/owner/void-transaction). Browser tidak boleh lagi me-void. */
+  db: WriteDb = supabase
 ): Promise<{ error: { message: string } | null }> {
   const id = String(txId || '').trim();
   if (!id) return { error: { message: 'transaction id kosong' } };
@@ -49,7 +51,7 @@ export async function softVoidTransaction(
   const by = String(opts?.approvedBy || '').slice(0, 120) || null;
   const now = new Date().toISOString();
 
-  const { data: existing } = await supabase
+  const { data: existing } = await db
     .from('transactions')
     .select('id, items, pickup_id, amount, outlet_id, receipt_number')
     .eq('id', id)
@@ -91,13 +93,13 @@ export async function softVoidTransaction(
     }
   ];
 
-  const { error } = await updateWithFallback('transactions', payloads, { column: 'id', value: id });
+  const { error } = await updateWithFallbackOn(db, 'transactions', payloads, { column: 'id', value: id });
 
   if (error) return { error };
 
   // Hapus jejak omset kas dari jurnal POS (jika ada).
   try {
-    await supabase.from('cashflow_logs').delete().eq('reference_id', id);
+    await db.from('cashflow_logs').delete().eq('reference_id', id);
   } catch {
     /* tabel/kolom opsional */
   }
@@ -106,7 +108,8 @@ export async function softVoidTransaction(
   const pickupId = existing?.pickup_id ? String(existing.pickup_id) : '';
   if (pickupId) {
     try {
-      await updateWithFallback(
+      await updateWithFallbackOn(
+        db,
         'pickup_orders',
         [{ status: 'Batal' }, { status: 'Dibatalkan' }],
         { column: 'id', value: pickupId }
@@ -118,7 +121,7 @@ export async function softVoidTransaction(
 
   // Audit table delete_requests (jika dipakai).
   try {
-    await supabase.from('delete_requests').delete().eq('transaction_id', id);
+    await db.from('delete_requests').delete().eq('transaction_id', id);
   } catch {
     /* ignore */
   }
