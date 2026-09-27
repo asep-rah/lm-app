@@ -31,6 +31,10 @@ export type PnlSource = {
   exps: any[];
   depreciation?: number;
   depreciationByOutlet?: Record<string, number>;
+  /** Closing shift kasir (cash_closings): selisih kurang → 600027 Kerugian, lebih → 400008. */
+  closings?: any[];
+  /** Pencairan saldo Mayar (finance_settlements gateway_payout): fee → 600028 Biaya MDR. */
+  payouts?: any[];
 };
 
 export const PNL_PROFIT_SHARE_RATE = 0.2;
@@ -220,6 +224,18 @@ export function buildPnlMonth(source: PnlSource, ref: PnlMonthRef, shareRate = P
     extraMap[label] = (extraMap[label] || 0) + amt;
   });
 
+  (source.closings || []).forEach((c) => {
+    if (String(c?.expected_source || '') !== 'ledger' || !inMonth(c.created_at, ref)) return;
+    const diff = Math.round(Number(c.cash_difference) || 0);
+    if (diff < 0) opex['600027'] += -diff;
+    else if (diff > 0) revenue['400008'] += diff;
+  });
+
+  (source.payouts || []).forEach((p) => {
+    if (p?.kind !== 'gateway_payout' || p?.voided_at || !inMonth(p.paid_at, ref)) return;
+    opex['600028'] += Math.max(0, Number(p.fee) || 0);
+  });
+
   if ((source.depreciation || 0) > 0) opex['600029'] += Number(source.depreciation) || 0;
 
   const extraOpex = Object.entries(extraMap)
@@ -318,6 +334,8 @@ export function buildPnlByOutlets(
         txs: source.txs.filter((t) => t.outlet_id === id),
         mems: source.mems.filter((m) => m.outlet_id === id),
         exps: source.exps.filter((e) => e.outlet_id === id),
+        closings: (source.closings || []).filter((c) => c.outlet_id === id),
+        payouts: (source.payouts || []).filter((p) => p.outlet_id === id),
         depreciation: depOf(id)
       },
       ref,

@@ -103,6 +103,10 @@ create table audit_logs (
 grant all on outlets, pickup_orders, system_tasks, transactions, app_settings, customers,
   customer_addresses, employees, driver_attendance to anon, authenticated, service_role;
 revoke select (password), update (password), insert (password) on employees from anon, authenticated;
+-- Sama dengan produksi setelah 20261004 / 20261006: alamat pelanggan hanya lewat server.
+revoke insert, update, delete, select on customer_addresses from anon, authenticated;
+revoke truncate, references, trigger on outlets, pickup_orders, system_tasks, transactions, app_settings, customers,
+  customer_addresses, employees, driver_attendance from anon, authenticated;
 grant all on error_logs, audit_logs to service_role;
 alter table error_logs enable row level security;
 alter table audit_logs enable row level security;

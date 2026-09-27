@@ -3,6 +3,8 @@ import { findCashDeposit, settleCashDeposit } from '@/lib/cashDepositQris';
 import { creditDepositTopup, findDepositTopup } from '@/lib/depositTopup';
 import { markGatewayPaid } from '@/lib/paymentVerify';
 import { paymentServiceDb } from '@/lib/paymentSecurity';
+import { isMockPaymentsEnabled } from '@/lib/mayar';
+import { serverDeployEnv } from '@/lib/supabaseServer';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,7 +13,15 @@ export const dynamic = 'force-dynamic';
  * Tidak fetch ke /api/mayar/webhook sendiri — self-fetch di Next.js sering deadlock
  * (loading 40–50s lalu gagal).
  */
+/**
+ * Hanya untuk uji (preview/dev dengan mock payment aktif). Di produksi route ini
+ * TIDAK ADA: tanpa penjagaan ini siapa pun bisa menandai transaksi lunas,
+ * menambah saldo deposit, atau menandai setoran BALANCED tanpa membayar.
+ */
+const simulateAllowed = () => serverDeployEnv() !== 'production' && isMockPaymentsEnabled();
+
 export async function POST(req: Request) {
+  if (!simulateAllowed()) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   try {
     const body = await req.json().catch(() => ({}));
     if (!body.transactionId && !body.topupId && !body.cashDepositId && !body.receipt) {

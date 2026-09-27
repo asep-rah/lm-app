@@ -53,6 +53,8 @@ Urutan di SQL Editor:
 11. `20261001_customer_phone_keys_international.sql` — fungsi deposit `customer_phone_keys` mengenali nomor luar negeri (`+kode negara…`) tanpa membuat kembaran nomor Indonesia. Hasil untuk semua bentuk nomor Indonesia identik dengan sebelumnya. Jalankan **sebelum** deploy fitur nomor luar negeri.
 12. `20261002_outlet_capacity_manual.sql` — status "outlet penuh" (`outlets.is_overcapacity`) hanya diubah server lewat `/api/staff/outlet-capacity` (owner/supervisor, tercatat di `audit_logs`). Trigger menolak perubahan kolom ini dari browser (anon/authenticated); service_role hanya boleh UPDATE kolom ini. Jalankan **sebelum** deploy.
 13. `20261003_pickup_pin_correction.sql` — service_role hanya boleh UPDATE `latitude`/`longitude` di `pickup_orders` dan `customer_addresses` (koreksi titik oleh driver, `/api/staff/pickup-pin`).
+16. `20261006_security_phase1.sql` — tahap 1 pengetatan hak browser: TRUNCATE/REFERENCES/TRIGGER dicabut di semua tabel; DELETE dicabut kecuali 6 tabel yang memang dihapus dari aplikasi; **saldo deposit (`customers.deposit_balance`) tidak bisa diubah dari browser** (trigger); `cash_deposits` & `deposit_topups` hanya ditulis server; `customer_addresses` tidak bisa dibaca dari browser. Jalankan **sesudah** deploy.
+17. `20261007_finance_controls.sql` — `expenses.paid_from`, pencairan Mayar (`finance_settlements` kind `gateway_payout` + `fee`), `cash_closings` (closing dari buku besar, hanya server), dan **tutup buku** (`finance_period_locks` + trigger `guard_finance_period` pada transactions/expenses/membership_logs). Jalankan **sebelum** deploy (kolom baru dipakai form).
 15. `20261005_finance_settlements.sql` — tabel pembayaran bagi hasil / THR (`finance_settlements`). Hanya service_role (insert + batal). anon/authenticated tidak punya akses. Jalankan **sebelum** tombol "Catat pembayaran" dipakai.
 14. `20261004_customer_addresses_server_only.sql` — anon/authenticated **tidak bisa lagi** INSERT/UPDATE/DELETE `customer_addresses` (dulu `grant all`, siapa pun bisa mengubah alamat pelanggan lain). Pelanggan menyimpan alamat lewat `/api/customer/addresses` (hanya baris nomornya sendiri). SELECT dari browser masih ada untuk dashboard CS; pindah ke server adalah langkah terpisah. Jalankan **sesudah** deploy (versi lama aplikasi menulis alamat langsung dari browser).
 
@@ -64,6 +66,9 @@ Cek cepat:
 - Coba dari browser console dengan anon key: `delete` transaksi harus gagal; `rpc('credit_customer_deposit')` harus gagal.
 - Dengan anon key: `storage.from('satuan-item-photos').list()` kosong, `download`/`createSignedUrl` gagal.
 - Dengan anon key: `from('customer_addresses').update({ full_address: 'x' }).eq('id', '…')` harus gagal (permission denied).
+- Dengan anon key: `from('customers').update({ deposit_balance: 999999 })` harus gagal ("Saldo deposit hanya bisa diubah lewat server").
+- `POST /api/mayar/simulate` di produksi harus 404.
+- Operasi pembayaran (`/api/deposit/mutate`, `/api/pay/mark-manual`, `/api/owner/employees`, `/api/order/create`, `/api/pay/resync`, `/api/owner/system-health`) memakai **sesi login staf** (cookie bertanda tangan, role dari `employees`). `NEXT_PUBLIC_PAYMENT_OPS_SECRET` harus **dihapus** dan `PAYMENT_OPS_SECRET` diganti, karena nilai NEXT_PUBLIC_* terbaca di JavaScript publik. Panel Diagnosis menampilkan peringatan merah selama variabel itu masih ada.
 
 ### Reset data (opsional, sekali jalan)
 

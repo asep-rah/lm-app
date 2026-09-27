@@ -21,7 +21,7 @@ export async function GET(req: Request) {
     'resync'
   );
   if (!auth.ok) {
-    return NextResponse.json({ error: auth.error }, { status: auth.status });
+    return NextResponse.json({ error: auth.error, code: auth.code }, { status: auth.status });
   }
 
   const summaryOnly = url.searchParams.get('summary') === '1';
@@ -108,7 +108,9 @@ export async function GET(req: Request) {
       env: envAuditFlags(),
       customerLogin: customerWaLoginChecks(),
       // Tombol staf yang aman (status outlet penuh, chat driver, foto satuan) butuh ini.
-      staffSessionConfigured: Boolean(staffSessionSecret())
+      staffSessionConfigured: Boolean(staffSessionSecret()),
+      // Rahasia operasi pembayaran yang ikut terkirim ke browser = rahasia publik.
+      publicPaymentOpsSecret: Boolean(String(process.env.NEXT_PUBLIC_PAYMENT_OPS_SECRET || '').trim())
     });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || 'Gagal muat diagnosis', env: envAuditFlags() }, { status: 500 });

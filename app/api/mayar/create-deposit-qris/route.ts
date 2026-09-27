@@ -1,4 +1,5 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, type NextRequest } from 'next/server';
+import { readStaffSession, staffSessionError, staffSessionProblem } from '@/lib/staffAuth/server';
 import { serverSupabase } from '@/lib/supabaseServer';
 import { createMayarPayment, isMayarKeyValid } from '@/lib/mayar';
 import { cashDepositReceiptOf, insertPendingCashDepositDb, netDepositOf } from '@/lib/cashDepositQris';
@@ -8,11 +9,17 @@ export const dynamic = 'force-dynamic';
 
 const supabase = serverSupabase();
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
+  // Sesi staf wajib: kasir = staf yang login (bukan kasir_id dari body).
+  const session = readStaffSession(req);
+  if (!session) {
+    const e = staffSessionError(staffSessionProblem(req) === 'not_configured' ? 'not_configured' : 'missing');
+    return NextResponse.json(e.body, { status: e.status });
+  }
   try {
     const body = await req.json().catch(() => ({}));
     const outletRaw = String(body.outlet_id || body.outletId || '').trim();
-    const kasirRaw = String(body.kasir_id || body.kasirId || body.cashier_id || body.created_by || '').trim();
+    const kasirRaw = String(session.sid);
     const physical = Math.round(Number(body.physical_cash ?? body.amount_cash ?? body.net_deposit_amount) || 0);
     const adminFee = Math.max(0, Math.round(Number(body.admin_fee ?? body.adminFee) || 0));
     const net = Math.round(Number(body.net_deposit_amount ?? netDepositOf(physical, adminFee)) || 0);

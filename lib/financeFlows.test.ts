@@ -36,9 +36,9 @@ const sale = (o: Record<string, unknown> = {}) => ({
 const exp = (o: Record<string, unknown> = {}) => ({ id: `e-${Math.random().toString(36).slice(2)}`, outlet_id: OUT, description: 'x', ...o });
 
 type Rows = Record<string, unknown>[];
-type Args = { txs?: Rows; mems?: Rows; exps?: Rows; deposits?: Rows; settlements?: FinanceSettlement[]; asOf?: { year: number; month: number } };
+type Args = { txs?: Rows; mems?: Rows; exps?: Rows; deposits?: Rows; closings?: Rows; settlements?: FinanceSettlement[]; asOf?: { year: number; month: number } };
 const sheetOf = (a: Args) => {
-  const args = { txs: a.txs || [], mems: a.mems || [], exps: a.exps || [], books: [book()], asOf: a.asOf || sep, deposits: a.deposits, settlements: a.settlements };
+  const args = { txs: a.txs || [], mems: a.mems || [], exps: a.exps || [], books: [book()], asOf: a.asOf || sep, deposits: a.deposits, settlements: a.settlements, closings: a.closings };
   const s = buildBalanceSheet(args);
   assert.equal(Math.round(s.totalAssets - s.totalPasiva), 0, 'aset = liabilitas + ekuitas');
   assert.deepEqual(journalGroupBalanceIssues(buildJournal({ ...args, ref: args.asOf, mode: 'through' })), []);
@@ -157,7 +157,7 @@ describe('3. + 4. bagi hasil / THR payments and the THR savings', () => {
   });
   it('settlement validation', () => {
     const ok = validateSettlement({ outletId: OUT, kind: 'thr', amount: 150000, paidAt: '2026-09-20', source: 'dana_thr', note: ' Lebaran ' }, '2026-09-25');
-    assert.deepEqual(ok, { ok: true, draft: { outlet_id: OUT, kind: 'thr', amount: 150000, paid_at: '2026-09-20', source: 'dana_thr', note: 'Lebaran' } });
+    assert.deepEqual(ok, { ok: true, draft: { outlet_id: OUT, kind: 'thr', amount: 150000, fee: 0, paid_at: '2026-09-20', source: 'dana_thr', note: 'Lebaran' } });
     const bad = [
       { outletId: 'x', kind: 'thr', amount: 1, paidAt: '2026-09-20', source: 'bank' },
       { outletId: OUT, kind: 'bonus', amount: 1, paidAt: '2026-09-20', source: 'bank' },
@@ -190,5 +190,48 @@ describe('6. void in a later month is reversed in the void month (P&L and neraca
     // Oktober rugi karena pembalikan (tidak ada bagi hasil negatif).
     assert.equal(s10.profitShare, 20000);
     assert.equal(buildPnlMonth({ txs: [v], mems: [], exps: [] }, oct).bagiHasil, 0);
+  });
+});
+
+describe('finance controls: expense source, Mayar payout + MDR, closing difference', () => {
+  it('expense paid from bank / Mayar / owner reduces the right account', () => {
+    const s = sheetOf({
+      txs: [sale({ amount: 500000 })],
+      exps: [
+        exp({ amount: 100000, category: '600019 · Beban Sewa Ruko', paid_from: 'bank', created_at: '2026-09-11T10:00:00.000Z' }),
+        exp({ amount: 20000, category: '600003 · Beban Listrik', paid_from: 'owner', created_at: '2026-09-11T10:00:00.000Z' }),
+        exp({ amount: 5000, category: '600006 · ATK', created_at: '2026-09-11T10:00:00.000Z' })
+      ]
+    });
+    assert.equal(s.cash, 10_000_000 - 100000);
+    assert.equal(s.paidInCapital, 10_000_000 + 20000, 'owner paying personally = capital contribution');
+    assert.equal(s.undepositedCash, 500000 - 5000, 'no source = drawer (old data unchanged)');
+  });
+  it('Mayar payout: clearing → bank, fee → 600028 Biaya MDR in the journal and the P&L', () => {
+    const payout: FinanceSettlement = { id: 'p1', outlet_id: OUT, kind: 'gateway_payout', amount: 97000, fee: 3000, paid_at: '2026-09-20T12:00:00+07:00', source: 'clearing' };
+    const qris = sale({ amount: 100000, payment_method: 'QRIS', paid_via: 'GATEWAY', paid_at: '2026-09-10T11:00:00.000Z' });
+    const s = sheetOf({ txs: [qris], settlements: [payout] });
+    assert.equal(s.gatewayClearing, 0);
+    assert.equal(s.cash, 10_000_000 + 97000);
+    const pnl = buildPnlMonth({ txs: [qris], mems: [], exps: [], payouts: [payout] }, sep);
+    assert.equal(pnl.opex['600028'], 3000);
+    assert.equal(pnl.bagiHasil, Math.round((100000 - 3000) * 0.2));
+  });
+  it('closing difference: minus → 600027 Kerugian, plus → 400008; old closings ignored', () => {
+    const closings = [
+      { id: 'c1', outlet_id: OUT, cash_difference: -7000, expected_source: 'ledger', created_at: '2026-09-12T20:00:00.000Z' },
+      { id: 'c2', outlet_id: OUT, cash_difference: 2000, expected_source: 'ledger', created_at: '2026-09-13T20:00:00.000Z' },
+      { id: 'c3', outlet_id: OUT, cash_difference: -999999, created_at: '2026-09-13T20:00:00.000Z' }
+    ];
+    const s = sheetOf({ txs: [sale({ amount: 100000 })], closings });
+    assert.equal(s.undepositedCash, 100000 - 7000 + 2000);
+    const pnl = buildPnlMonth({ txs: [sale({ amount: 100000 })], mems: [], exps: [], closings }, sep);
+    assert.equal(pnl.opex['600027'], 7000);
+    assert.equal(pnl.revenue['400008'], 2000);
+  });
+  it('payout validation: only from Mayar balance, fee not negative', () => {
+    assert.equal(validateSettlement({ outletId: OUT, kind: 'gateway_payout', amount: 97000, fee: 3000, paidAt: '2026-09-20', source: 'clearing' }, '2026-09-25').ok, true);
+    assert.equal(validateSettlement({ outletId: OUT, kind: 'gateway_payout', amount: 97000, paidAt: '2026-09-20', source: 'bank' }, '2026-09-25').ok, false);
+    assert.equal(validateSettlement({ outletId: OUT, kind: 'gateway_payout', amount: 97000, fee: -1, paidAt: '2026-09-20', source: 'clearing' }, '2026-09-25').ok, false);
   });
 });

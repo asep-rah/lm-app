@@ -14,7 +14,7 @@ export async function POST(req: Request) {
     const body = await req.json().catch(() => ({}));
     const auth = await requirePaymentOpsAuth(req, body, 'manual');
     if (!auth.ok) {
-      return NextResponse.json({ error: auth.error }, { status: auth.status });
+      return NextResponse.json({ error: auth.error, code: auth.code }, { status: auth.status });
     }
 
     const lines = Array.isArray(body.lines) ? body.lines : Array.isArray(body.items) ? body.items : [];

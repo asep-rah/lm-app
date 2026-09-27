@@ -26,6 +26,7 @@ export default function SystemHealthPage() {
   const [webhooks, setWebhooks] = useState<any[]>([]);
   const [pending, setPending] = useState<any[]>([]);
   const [staffSessionConfigured, setStaffSessionConfigured] = useState(true);
+  const [publicPaymentOpsSecret, setPublicPaymentOpsSecret] = useState(false);
   const [customerLogin, setCustomerLogin] = useState<{
     whatsapp: boolean;
     legacy: boolean;
@@ -62,6 +63,7 @@ export default function SystemHealthPage() {
       setPending(json.pending || []);
       setCustomerLogin(json.customerLogin || null);
       setStaffSessionConfigured(json.staffSessionConfigured !== false);
+      setPublicPaymentOpsSecret(json.publicPaymentOpsSecret === true);
     } catch (e: any) {
       toast(e?.message || 'Gagal muat diagnosis (cek PAYMENT_OPS_SECRET)', 'err');
       setErrors([]);
@@ -170,6 +172,16 @@ export default function SystemHealthPage() {
                 Tanpa ini, tombol staf yang butuh sesi aman — status outlet penuh, chat driver, foto item satuan — selalu
                 ditolak. Isi string acak minimal 32 karakter (<code>openssl rand -base64 48</code>), Redeploy Production, lalu
                 semua staf keluar dan masuk lagi.
+              </p>
+            </section>
+          )}
+          {publicPaymentOpsSecret && (
+            <section className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-[12px] text-rose-800 space-y-1" role="alert">
+              <p className="font-black">NEXT_PUBLIC_PAYMENT_OPS_SECRET masih terisi (rahasia ikut ke browser)</p>
+              <p>
+                Semua nilai NEXT_PUBLIC_* terbaca siapa pun di file JavaScript aplikasi. Operasi pembayaran sekarang memakai sesi login
+                staf, jadi: hapus NEXT_PUBLIC_PAYMENT_OPS_SECRET di Vercel, ganti PAYMENT_OPS_SECRET dengan nilai baru
+                (<code>openssl rand -base64 48</code>), lalu Redeploy Production.
               </p>
             </section>
           )}

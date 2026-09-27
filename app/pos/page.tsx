@@ -32,6 +32,7 @@ import FileProofInput from '@/components/FileProofInput';
 import { createPaymentVerifyTask, isCsVerifiedPaid, isNonCashVerifyMethod, isPaymentLocked, PENDING_PAY_STATUS } from '@/lib/paymentVerify';
 import { sendInvoiceToLiveChat } from '@/lib/chatInvoice';
 import { requestMayarInvoice, simulateMayarAutoPay } from '@/lib/mayar';
+import { isStaffSessionError, staffRelogin } from '@/lib/staffRelogin';
 import { paymentOpsClientHeaders } from '@/lib/requirePaymentOpsAuth';
 import { toast } from '@/lib/toast';
 import WalkInPaySuccessModal from '@/components/pos/WalkInPaySuccessModal';
@@ -488,66 +489,24 @@ const handleSubmitDeposit = async () => {
   }
   if (outletUuid !== selectedOutlet) setSelectedOutlet(outletUuid);
 
-  const { data: authData } = await supabase.auth.getUser();
-  let currentProfile: any = null;
+  // Disimpan oleh server (sesi staf wajib; kasir = staf yang login). Browser tidak
+  // lagi menulis cash_deposits / biaya admin langsung.
+  let res: Response;
   try {
-    currentProfile = JSON.parse(localStorage.getItem('laundry_user') || 'null');
+    res = await fetch('/api/staff/cash-deposit', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outletId: outletUuid, amountCash: amount, adminFee: fee, method: depositMethod, note: proofUrl })
+    });
   } catch {
-    currentProfile = null;
+    return alert('❌ Koneksi bermasalah. Setoran belum tersimpan.');
   }
-  const activeCashierId =
-    authData?.user?.id ||
-    currentProfile?.id ||
-    localStorage.getItem('user_id') ||
-    employeeId ||
-    (await resolveCashierSessionId(employeeId, supabase, currentProfile));
-  const cashierId = cashierIdForColumn(activeCashierId);
-  if (!cashierId || !activeCashierId) {
-    return alert(CASHIER_SESSION_MISSING);
-  }
-  const shiftUuid = uuidOrNull(currentProfile?.shift_id);
-
-  const depositRow: Record<string, unknown> = {
-    outlet_id: outletUuid,
-    cashier_id: cashierId,
-    kasir_id: String(activeCashierId),
-    created_by: cashierId,
-    amount_cash: amount,
-    admin_fee: fee,
-    net_deposit_amount: Math.max(0, amount - fee),
-    deposit_method: depositMethod,
-    qr_payment_status: 'pending',
-    status: 'PENDING',
-    proof_url: proofUrl || 'Setor via QRIS Meja Kasir'
-  };
-  if (shiftUuid) depositRow.shift_id = shiftUuid;
-
-  const { error: depositErr } = await insertWithFallback('cash_deposits', [
-    depositRow,
-    {
-      outlet_id: outletUuid,
-      cashier_id: cashierId,
-      amount_cash: amount,
-      admin_fee: fee,
-      deposit_method: depositMethod,
-      qr_payment_status: 'pending',
-      proof_url: depositRow.proof_url
-    },
-    { outlet_id: outletUuid, cashier_id: cashierId, amount_cash: amount }
-  ]);
-
-  if (depositErr) return alert('❌ Gagal menyimpan setoran: ' + depositErr.message);
-
-  if (fee > 0) {
-    await insertWithFallback('expenses', [
-      {
-        outlet_id: outletUuid,
-        amount: fee,
-        notes: `Biaya Admin Top-Up Setoran Cash (${depositMethod})`,
-        category: 'Biaya Admin'
-      },
-      { outlet_id: outletUuid, amount: fee, notes: `Biaya Admin Top-Up Setoran Cash (${depositMethod})` }
-    ]);
+  const saved = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (isStaffSessionError(saved) && confirm(`${saved?.error || 'Sesi login berakhir.'}\n\nMasuk ulang sekarang?`)) staffRelogin();
+    else alert('❌ Gagal menyimpan setoran: ' + (saved?.error || res.status));
+    return;
   }
 
   alert('✅ Setoran berhasil diajukan! Finance akan memverifikasi mutasi masuk pada QRIS.');
@@ -566,59 +525,27 @@ const handleSubmitClosingShift = async () => {
     return alert('❌ Outlet tidak valid untuk closing. Pilih cabang ulang.');
   }
 
-  // Hitung total penerimaan tunai sistem hari ini untuk outlet aktif
-  const { data: cashOrders } = await supabase
-    .from('transactions')
-    .select('total_amount, amount_paid')
-    .eq('outlet_id', outletUuid)
-    .ilike('payment_method', '%cash%');
-
-  const expectedSystemCash = (cashOrders || []).reduce((acc, curr) => acc + (Number(curr.amount_paid) || Number(curr.total_amount) || 0), 0);
-  const cashDifference = physicalAmount - expectedSystemCash;
-
-  let staff: any = null;
+  // Kas sistem dihitung server dari buku besar (saldo Kas Tunai Belum Disetor), bukan
+  // dari semua transaksi tunai sepanjang masa. Selisih dijurnal otomatis oleh laporan.
+  let res: Response;
   try {
-    staff = JSON.parse(localStorage.getItem('laundry_user') || 'null');
+    res = await fetch('/api/staff/cash-closing', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outletId: outletUuid, physicalCash: physicalAmount, notes: closingNotes.trim() })
+    });
   } catch {
-    staff = null;
+    return alert('❌ Koneksi bermasalah. Closing belum tersimpan.');
   }
-  const kasirUuid = cashierIdForColumn(employeeId || staff?.id);
-
-  // Catat data closing ke tabel cash_closings / expenses jika ada minus
-  const closingRow: Record<string, unknown> = {
-    outlet_id: outletUuid,
-    system_expected_cash: expectedSystemCash,
-    physical_actual_cash: physicalAmount,
-    cash_difference: cashDifference,
-    notes: closingNotes.trim() || 'Closing Shift Kasir Regular'
-  };
-  if (kasirUuid) closingRow.cashier_id = kasirUuid;
-
-  const { error } = await insertWithFallback('cash_closings', [
-    closingRow,
-    { outlet_id: outletUuid, physical_actual_cash: physicalAmount, notes: closingRow.notes }
-  ]);
-
-  if (error) {
-    return alert('❌ Gagal menyimpan closing shift: ' + error.message);
+  const closing = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (isStaffSessionError(closing) && confirm(`${closing?.error || 'Sesi login berakhir.'}\n\nMasuk ulang sekarang?`)) staffRelogin();
+    else alert('❌ Gagal menyimpan closing shift: ' + (closing?.error || res.status));
+    return;
   }
-
-  // Jika terjadi selisih kas (minus), catat otomatis ke laporan selisih kas
-  if (cashDifference < 0) {
-    await insertWithFallback('expenses', [
-      {
-        outlet_id: outletUuid,
-        amount: Math.abs(cashDifference),
-        notes: `Selisih Minus Kas Laci Shift Kasir (${employeeName || 'Kasir'})`,
-        category: 'Selisih Kas'
-      },
-      {
-        outlet_id: outletUuid,
-        amount: Math.abs(cashDifference),
-        notes: `Selisih Minus Kas Laci Shift Kasir (${employeeName || 'Kasir'})`
-      }
-    ]);
-  }
+  const expectedSystemCash = Number(closing.expected) || 0;
+  const cashDifference = Number(closing.difference) || 0;
 
   alert(
     `✅ Closing Shift Berhasil!\n\n` +

@@ -13,7 +13,7 @@ export async function POST(req: Request) {
     const body = await req.json().catch(() => ({}));
     const auth = await requirePaymentOpsAuth(req, body, 'resync');
     if (!auth.ok) {
-      return NextResponse.json({ error: auth.error }, { status: auth.status });
+      return NextResponse.json({ error: auth.error, code: auth.code }, { status: auth.status });
     }
 
     const transactionId = String(body.transactionId || body.transaction_id || '').trim();

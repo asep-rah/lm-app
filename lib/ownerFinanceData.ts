@@ -10,6 +10,8 @@ export type FinanceBundle = {
   exps: any[];
   /** Setoran kas kasir (cash_deposits). */
   deposits: any[];
+  /** Closing shift kasir (cash_closings). */
+  closings: any[];
   outlets: { id: string; name: string }[];
   /** Data dimuat sejak tanggal ini. */
   since: string;
@@ -57,11 +59,12 @@ export async function loadOwnerFinanceBundle(opts: { since?: string } = {}): Pro
   let tx = await fetchAll('transactions', TX_FULL, sinceIso);
   if (tx.error) tx = await fetchAll('transactions', TX_BASIC, sinceIso);
 
-  const [{ data: outlets }, mems, exps, deposits] = await Promise.all([
+  const [{ data: outlets }, mems, exps, deposits, closings] = await Promise.all([
     supabase.from('outlets').select('id, name').order('name'),
     fetchAll('membership_logs', 'id, outlet_id, price, package_name, customer_phone, order_type, created_at', sinceIso),
     fetchAll('expenses', 'id, outlet_id, amount, category, description, created_at', sinceIso),
-    fetchAll('cash_deposits', '*', sinceIso)
+    fetchAll('cash_deposits', '*', sinceIso),
+    fetchAll('cash_closings', '*', sinceIso)
   ]);
 
   const all = tx.rows.filter((t) => !t.delete_requested);
@@ -72,6 +75,7 @@ export async function loadOwnerFinanceBundle(opts: { since?: string } = {}): Pro
     mems: mems.rows,
     exps: exps.rows,
     deposits: deposits.error ? [] : deposits.rows,
+    closings: closings.error ? [] : closings.rows,
     since: sinceIso,
     truncated: tx.truncated || mems.truncated || exps.truncated
   };

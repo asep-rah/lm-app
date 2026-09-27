@@ -249,6 +249,22 @@ export function depreciationInMonth(store: Record<string, OutletBook>, outletId:
   return booksOf(store, outletId).reduce((s, b) => s + monthDepreciation(b, ref), 0);
 }
 
+/** Pembukuan outlet dari baris app_settings (id=1) — dipakai browser & server. */
+export function booksFromSettings(data: { outlet_books?: unknown; outlet_overrides?: unknown } | null | undefined): Record<string, OutletBook> {
+  const fromCol = parseStore(data?.outlet_books);
+  if (Object.keys(fromCol).length) return fromCol;
+  let nested: unknown = null;
+  try {
+    const ov = typeof data?.outlet_overrides === 'string'
+      ? JSON.parse(String(data.outlet_overrides || '{}'))
+      : (data?.outlet_overrides as any);
+    nested = ov?.__outlet_books;
+  } catch {
+    nested = null;
+  }
+  return parseStore(nested);
+}
+
 export async function loadOutletBooks(): Promise<Record<string, OutletBook>> {
   const { data } = await supabase
     .from('app_settings')
@@ -256,20 +272,8 @@ export async function loadOutletBooks(): Promise<Record<string, OutletBook>> {
     .eq('id', 1)
     .maybeSingle();
 
-  const fromCol = parseStore(data?.outlet_books);
-  if (Object.keys(fromCol).length) return fromCol;
-
-  let nested: unknown = null;
-  try {
-    const ov = typeof data?.outlet_overrides === 'string'
-      ? JSON.parse(data.outlet_overrides || '{}')
-      : data?.outlet_overrides;
-    nested = ov?.__outlet_books;
-  } catch {
-    nested = null;
-  }
-  const fromNested = parseStore(nested);
-  if (Object.keys(fromNested).length) return fromNested;
+  const fromSettings = booksFromSettings(data);
+  if (Object.keys(fromSettings).length) return fromSettings;
 
   try {
     return parseStore(localStorage.getItem(LS_KEY));

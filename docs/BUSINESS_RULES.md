@@ -140,6 +140,9 @@ Approved owner decisions (implemented in `lib/pnlReport.ts`, `lib/paymentParts.t
 7. **Payment parts:** cash → Kas Tunai Belum Disetor (drawer), must be deposited; QRIS/transfer → receivable until paid, then clearing/bank. Split payments are split per part. Counter top ups in cash go to the drawer; online top ups (Mayar) go to clearing. A cashier setoran (`cash_deposits`, BALANCED) moves the net amount from the drawer to QRIS/gateway clearing.
 8. **Void after the sale month** is reversed in the month of the void; the sale month is not rewritten. A void in the same month counts as nothing. A void without `voided_at` is never counted.
 9. **Tabungan THR** (expense category) is money set aside for crew THR: it moves to *Dana Tabungan THR* (asset) and is owed as *Utang THR Crew* (liability). THR paid at hari raya is recorded with the owner "Catat pembayaran" button (from the fund), not as a new expense.
+11. **Expense source:** every expense reduces the account it was paid from (drawer by default; bank, Mayar balance, or the owner's own money = capital contribution).
+12. **Closing shift:** expected cash = the drawer balance of the ledger; the difference is a loss (600027) or other income (400008).
+13. **Period close:** the owner closes a month per outlet. Closed periods reject new/changed amounts from the app; a void is still allowed and is reversed in the void month. Reopening requires a reason and is audited.
 10. **Bagi hasil pengelolaan** accrues monthly exactly as the P&L shows (outlet %, loss month = 0) and stays a liability until the owner records its payment.
 
 ## 16. Role and Authorization Rules

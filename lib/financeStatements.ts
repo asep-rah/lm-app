@@ -72,11 +72,15 @@ export const isThrSavingCategory = (category: unknown) => /tabungan\s*thr/i.test
 export type FinanceSettlement = {
   id: string;
   outlet_id: string | null;
-  kind: 'profit_share' | 'thr';
+  /** profit_share / thr = pembayaran utang; gateway_payout = pencairan saldo Mayar ke bank. */
+  kind: 'profit_share' | 'thr' | 'gateway_payout';
+  /** Nominal yang dibayar / (pencairan) yang MASUK ke rekening bank. */
   amount: number;
+  /** Pencairan: potongan fee/MDR (600028), juga keluar dari clearing. */
+  fee?: number;
   paid_at: string;
-  /** Sumber dana: rekening bank, kas laci, atau dana tabungan THR. */
-  source: 'bank' | 'laci' | 'dana_thr';
+  /** Sumber dana: rekening bank, kas laci, dana tabungan THR, atau saldo Mayar (clearing). */
+  source: 'bank' | 'laci' | 'dana_thr' | 'clearing';
   note?: string | null;
   voided_at?: string | null;
 };
@@ -84,8 +88,28 @@ export type FinanceSettlement = {
 export const SETTLEMENT_SOURCES: Record<FinanceSettlement['source'], { code: string; label: string }> = {
   bank: BS.CASH,
   laci: BS.UNDEPOSITED,
-  dana_thr: BS.THR_FUND
+  dana_thr: BS.THR_FUND,
+  clearing: BS.CLEARING
 };
+
+/** Akun laba rugi yang dipakai jurnal selain kategori pengeluaran (nama = "kode label" COA). */
+const PNL_ACC = {
+  MDR: '600028 Biaya MDR',
+  LOSS: '600027 Kerugian',
+  OTHER_INCOME: `${PNL_REVENUE[3].code} ${PNL_REVENUE[3].label}`
+};
+
+/** Sumber dana pengeluaran (expenses.paid_from); kosong = kas laci (data lama). */
+export const EXPENSE_SOURCES: Record<string, { code: string; label: string }> = {
+  laci: BS.UNDEPOSITED,
+  bank: BS.CASH,
+  clearing: BS.CLEARING,
+  owner: BS.CAPITAL
+};
+const expenseSourceOf = (e: any) => EXPENSE_SOURCES[String(e?.paid_from || '')] || BS.UNDEPOSITED;
+
+/** Closing shift yang dihitung server dari buku besar (baris lama tidak dijurnal). */
+export const isLedgerClosing = (c: any) => String(c?.expected_source || '') === 'ledger';
 
 /** Setoran kas kasir (cash_deposits) yang sudah BALANCED — masuk lewat QRIS Mayar (clearing). */
 const isBalancedCashDeposit = (row: any) => {
@@ -592,6 +616,8 @@ export function buildJournal(opts: {
   deposits?: any[];
   /** Pembayaran bagi hasil / THR yang dicatat owner. */
   settlements?: FinanceSettlement[];
+  /** Closing shift kasir (cash_closings). */
+  closings?: any[];
 }): JournalLine[] {
   const { txs, mems, exps, books, ref, mode } = opts;
   const keep = (iso: string) => (mode === 'month' ? inMonth(iso, ref) : onOrBefore(iso, ref));
@@ -705,10 +731,29 @@ export function buildJournal(opts: {
       );
       return;
     }
+    // Sumber dana: laci (default), bank, saldo Mayar, atau uang pribadi owner (= setoran modal).
+    const src = expenseSourceOf(e);
     rows.push(
       line(e.created_at, akun, desc, amt, 0, g, meta)!,
-      line(e.created_at, acc(BS.UNDEPOSITED.code, BS.UNDEPOSITED.label), desc, 0, amt, g, meta)!
+      line(e.created_at, acc(src.code, src.label), desc, 0, amt, g, meta)!
     );
+  });
+
+  (opts.closings || []).forEach((c) => {
+    if (!isLedgerClosing(c)) return;
+    const diff = Math.round(Number(c.cash_difference) || 0);
+    const date = String(c.created_at || '');
+    if (!diff || !date || !keep(date)) return;
+    const g = `closing-${c.id}`;
+    const laci = acc(BS.UNDEPOSITED.code, BS.UNDEPOSITED.label);
+    const meta = { ref: g, source: 'cash_closing', outletId: c.outlet_id, payStatus: 'undeposited' as const };
+    if (diff < 0) {
+      const desc = `Selisih kurang kas laci saat closing (${c.notes || 'closing shift'})`;
+      rows.push(line(date, PNL_ACC.LOSS, desc, -diff, 0, g, meta)!, line(date, laci, desc, 0, -diff, g, meta)!);
+    } else {
+      const desc = `Selisih lebih kas laci saat closing (${c.notes || 'closing shift'})`;
+      rows.push(line(date, laci, desc, diff, 0, g, meta)!, line(date, PNL_ACC.OTHER_INCOME, desc, 0, diff, g, meta)!);
+    }
   });
 
   (opts.deposits || []).forEach((d) => {
@@ -734,6 +779,19 @@ export function buildJournal(opts: {
     if (p.voided_at) return;
     const amt = Number(p.amount) || 0;
     if (amt <= 0 || !keep(p.paid_at)) return;
+    if (p.kind === 'gateway_payout') {
+      // Pencairan saldo Mayar: masuk bank sebesar yang diterima, fee/MDR menjadi beban.
+      const g = `cair-${p.id}`;
+      const fee = Math.max(0, Number(p.fee) || 0);
+      const desc = `Pencairan saldo Mayar ke bank${p.note ? ` · ${p.note}` : ''}`;
+      const meta = { ref: g, source: 'gateway_payout', outletId: p.outlet_id, payStatus: 'cash' as const };
+      rows.push(
+        line(p.paid_at, acc(BS.CASH.code, BS.CASH.label), desc, amt, 0, g, meta)!,
+        ...(fee > 0 ? [line(p.paid_at, PNL_ACC.MDR, `${desc} · fee/MDR`, fee, 0, g, meta)!] : []),
+        line(p.paid_at, acc(BS.CLEARING.code, BS.CLEARING.label), desc, 0, amt + fee, g, meta)!
+      );
+      return;
+    }
     const liab = p.kind === 'thr' ? BS.THR_PAYABLE : BS.BH;
     const src = SETTLEMENT_SOURCES[p.source] || BS.CASH;
     const g = `bayar-${p.id}`;
@@ -745,7 +803,9 @@ export function buildJournal(opts: {
     );
   });
 
-  rows.push(...profitShareLines({ txs, mems, exps, books, ref, mode, rates: opts.rates }));
+  rows.push(
+    ...profitShareLines({ txs, mems, exps, books, ref, mode, rates: opts.rates, closings: opts.closings, settlements: opts.settlements })
+  );
 
   return rows
     .filter(Boolean)
@@ -768,6 +828,8 @@ function profitShareLines(opts: {
   ref: PnlMonthRef;
   mode: 'month' | 'through';
   rates?: Record<string, number>;
+  closings?: any[];
+  settlements?: FinanceSettlement[];
 }): JournalLine[] {
   const { books, ref, mode, rates } = opts;
   // Sama dengan laporan laba rugi: void dibalik di bulan void (txRevenueSign).
@@ -783,7 +845,14 @@ function profitShareLines(opts: {
   ids.forEach((id) => {
     const book = bookByOutlet(books, id || null);
     const mine = (r: any) => idOf(r) === id && (!book || afterBooksStart(r.created_at, book));
-    const scoped = { txs: live.filter(mine), mems: opts.mems.filter(mine), exps: opts.exps.filter(mine) };
+    const byOutlet = (r: any) => idOf(r) === id;
+    const scoped = {
+      txs: live.filter(mine),
+      mems: opts.mems.filter(mine),
+      exps: opts.exps.filter(mine),
+      closings: (opts.closings || []).filter(byOutlet),
+      payouts: (opts.settlements || []).filter(byOutlet)
+    };
     const dates = [...scoped.txs, ...scoped.mems, ...scoped.exps].map((r) => String(r.created_at || '')).filter(Boolean).sort();
     const start = monthKey(book?.booksStart || dates[0] || '');
     if (!start) return;
@@ -829,6 +898,7 @@ export function buildLedger(opts: {
   rates?: Record<string, number>;
   deposits?: any[];
   settlements?: FinanceSettlement[];
+  closings?: any[];
 }): LedgerRow[] {
   const journal = buildJournal({ ...opts, ref: opts.asOf, mode: 'through' });
   const map: Record<string, { debit: number; kredit: number }> = {};
@@ -864,6 +934,7 @@ export function buildLedgerAccount(opts: {
   rates?: Record<string, number>;
   deposits?: any[];
   settlements?: FinanceSettlement[];
+  closings?: any[];
 }): { account: string; opening: number; mutations: LedgerMutation[]; closing: number } {
   const journal = buildJournal({ ...opts, ref: opts.asOf, mode: 'through' })
     .filter((r) => r.akun === opts.account)
@@ -954,6 +1025,7 @@ export function buildEquity(opts: {
   rates?: Record<string, number>;
   deposits?: any[];
   settlements?: FinanceSettlement[];
+  closings?: any[];
 }): EquityStatement {
   const { ref } = opts;
   const through = buildJournal({ ...opts, ref, mode: 'through' });
@@ -1047,6 +1119,7 @@ export function buildBalanceSheet(opts: {
   rates?: Record<string, number>;
   deposits?: any[];
   settlements?: FinanceSettlement[];
+  closings?: any[];
 }): BalanceSheet {
   const { books, asOf } = opts;
   const journal = buildJournal({ ...opts, ref: asOf, mode: 'through' });
