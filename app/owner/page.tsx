@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import StageTimeline from '@/components/StageTimeline';
 import WasherBatchTimeline from '@/components/pos/WasherBatchTimeline';
+import { depositPaidOf } from '@/lib/paymentParts';
 import { isVoidTransaction } from '@/lib/voidTx';
 import { canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
 import { isMultiOutletRole, staffRolesForForm } from '@/lib/staffRoles';
@@ -32,6 +33,12 @@ import {
   servicesCsvTemplate,
   type DynamicService
 } from '@/lib/servicesCsv';
+
+/**
+ * Omset satu transaksi: bagian yang dibayar dari saldo deposit tidak dihitung
+ * lagi (top up deposit sudah omset saat uangnya masuk) — sama dengan Laba Rugi.
+ */
+const omsetOfTx = (t: any) => Math.max(0, (Number(t?.amount) || 0) - depositPaidOf(t));
 import { sanitizePublicError } from '@/lib/supabaseEnv';
 
 const AICopilotCard = dynamic(() => import('@/components/analytics/AICopilotCard'), { ssr: false });
@@ -383,7 +390,7 @@ export default function Dashboard() {
 
       periodTxs.forEach((t: any) => { 
         if(outStats[t.outlet_id]) {
-          const amt = Number(t.amount) || 0; outStats[t.outlet_id].rev += amt;
+          const amt = omsetOfTx(t); outStats[t.outlet_id].rev += amt;
           if (t.order_type === 'Online') outStats[t.outlet_id].online_rev += amt;
           else outStats[t.outlet_id].offline_rev += amt;
         } 
@@ -422,7 +429,7 @@ export default function Dashboard() {
 
       let combinedData: any[] = []; let inc = 0; let onlineInc = 0; let offlineInc = 0; let exp = 0;
       filteredTxs.forEach((t) => { 
-        const amt = Number(t.amount) || 0; inc += amt;
+        const amt = omsetOfTx(t); inc += amt;
         if (t.order_type === 'Online') onlineInc += amt; else offlineInc += amt;
         combinedData.push({ date: t.created_at, type: 'Income', category: 'Laundry', desc: `${t.service_type} (${t.customer_name})`, amount: amt, rawData: t }); 
       });
@@ -472,7 +479,7 @@ export default function Dashboard() {
       const prevMems = (allMems || []).filter(prevOf).filter((m: any) => selectedOutlet === 'ALL' || m.outlet_id === selectedOutlet);
       const prevExps = (allExps || []).filter(prevOf).filter((e: any) => selectedOutlet === 'ALL' || e.outlet_id === selectedOutlet);
       const prevInc =
-        prevTxs.reduce((s: number, t: any) => s + (Number(t.amount) || 0), 0) +
+        prevTxs.reduce((s: number, t: any) => s + omsetOfTx(t), 0) +
         prevMems.reduce((s: number, m: any) => s + (Number(m.price) || 0), 0);
       const prevExp = prevExps.reduce((s: number, e: any) => s + (Number(e.amount) || 0), 0);
       setPrevStats({ income: prevInc, profit: prevInc - prevExp });

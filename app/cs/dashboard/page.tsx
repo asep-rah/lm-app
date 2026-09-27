@@ -163,7 +163,7 @@ export default function CSDashboard() {
 
     let pkpQuery = supabase
       .from('pickup_orders')
-      .select('*, outlets(name), customer_addresses(*)')
+      .select('*, outlets(name)') // alamat & titik ada di pickup_orders; customer_addresses tidak lagi dibaca dari browser
       .order('created_at', { ascending: false });
 
     if (selectedOutlet !== 'ALL') {
@@ -317,7 +317,7 @@ export default function CSDashboard() {
 
   const handleSendPickupConfirm = (p: any) => {
     const driverInfo = p.driver_name ? ` Driver kami (*${p.driver_name}*) sedang menuju lokasi Anda.` : ' Driver kami akan segera menuju lokasi Anda.';
-    const msg = `Halo Kak! CS Laundrivery di sini 😊\n\nKami telah menerima pesanan penjemputan cucian Anda (*${p.order_number || 'PKP'}*) untuk lokasi: *${p.customer_addresses?.full_address || 'Alamat Tersimpan'}*.${driverInfo}\n\nMohon siapkan cuciannya ya Kak. Terima kasih! 🙏`;
+    const msg = `Halo Kak! CS Laundrivery di sini 😊\n\nKami telah menerima pesanan penjemputan cucian Anda (*${p.order_number || 'PKP'}*) untuk lokasi: *${p.formatted_address || p.address || 'Alamat Tersimpan'}*.${driverInfo}\n\nMohon siapkan cuciannya ya Kak. Terima kasih! 🙏`;
     openWhatsApp(p.customer_phone, msg);
   };
 
@@ -458,14 +458,14 @@ export default function CSDashboard() {
                     <div>
                       <h3 className="font-black text-slate-900 text-base">{p.customer_phone}</h3>
                       <p className="text-xs text-slate-600 mt-0.5">
-                        📍 <b>{p.customer_addresses?.label_name || 'Alamat'}:</b>{' '}
-                        {p.formatted_address || p.address || p.customer_addresses?.full_address || 'Alamat tersimpan'}
+                        📍 <b>Alamat:</b>{' '}
+                        {p.formatted_address || p.address || 'Alamat tersimpan'}
                       </p>
                       <p className="text-[10px] text-blue-800 font-bold mt-1">Outlet: {p.outlets?.name || 'Mencari Outlet...'}</p>
                       <div className="mt-2">
                         <GoogleMapsNavButton
                           order={p}
-                          address={p.formatted_address || p.address || p.customer_addresses?.full_address}
+                          address={p.formatted_address || p.address}
                         />
                       </div>
                     </div>

@@ -338,6 +338,12 @@ Pendapatan dari transaksi + membership; beban dipetakan dari kategori expense / 
 - **Void lintas bulan:** penjualan tetap tercatat di bulan jual, lalu dibalik di bulan void, baik di Laba Rugi maupun di Neraca. Void di bulan yang sama bernilai nol.
 - **Tabungan THR:** pengeluaran berkategori "Tabungan THR" memindahkan uang ke *Dana Tabungan THR* dan dicatat sebagai *Utang THR Crew*. Di Laba Rugi tetap tampil di baris Tabungan THR, formatnya tidak berubah.
 - **Catat pembayaran** (Neraca → *Pembayaran bagi hasil & THR*, khusus owner): pembayaran bagi hasil (dari bank/laci) atau THR (dari Dana Tabungan THR/bank/laci) mengurangi utangnya di neraca. Catatan yang salah bisa **dibatalkan** dengan alasan; datanya tidak dihapus dan tercatat di `audit_logs`. THR yang sudah ditabung **jangan** dicatat lagi sebagai pengeluaran "THR Crew". Butuh migrasi `20261005_finance_settlements.sql`.
+- **Sumber dana pengeluaran** (`paid_from`): kas laci (default, termasuk data lama), rekening bank, saldo Mayar, atau uang pribadi owner (dicatat sebagai setoran modal). Pengeluaran langsung di halaman Expense bisa memilihnya; purchase requisition yang dibayar lewat transfer tercatat dari bank.
+- **Pencairan Mayar** (Neraca → Pembayaran & pencairan): catat dana yang masuk ke rekening dan fee/MDR yang dipotong. Saldo QRIS/Clearing berkurang, bank bertambah, dan fee masuk ke 600028 Biaya MDR di Laba Rugi.
+- **Closing shift** (POS): "Kas sistem" dihitung server dari saldo Kas Tunai Belum Disetor di buku besar. Sebelumnya dihitung dari semua transaksi tunai sepanjang masa, sehingga selisihnya salah. Selisih kurang masuk 600027 Kerugian; selisih lebih masuk 400008 Pendapatan Lainnya. Pengeluaran otomatis "Selisih Kas" tidak lagi dibuat. **Catatan:** pengeluaran "Selisih Kas" lama dari hitungan yang salah sebaiknya ditinjau owner.
+- **Tutup buku** (Neraca → Tutup buku, khusus owner): setelah laporan bulan diperiksa, kunci periodenya per outlet. Transaksi, pengeluaran, dan top up bertanggal sampai tanggal itu tidak bisa ditambah atau diubah nilainya dari aplikasi (void tetap bisa). Membuka kembali periode wajib alasan, dan semuanya tercatat di audit log.
+- **Omset di dashboard owner** sekarang sama dengan Laba Rugi: laundry yang dibayar dengan saldo deposit tidak dihitung lagi.
+- **Komisi top up member** (`membership_logs.commission`, Rp5–20 ribu per paket) hanya ditampilkan sebagai bonus kasir di POS. Komisi ini baru tercatat sebagai beban saat dibayarkan lewat pengeluaran "Bonus Omset Crew".
 - Format Laporan Laba Rugi (COA) **tidak berubah**.
 
 #### Soft Void (pembatalan aman)
@@ -575,6 +581,9 @@ A: `docs/SECURITY_AND_MAINTENANCE.md` (env, SQL, checklist fraud mingguan).
 | GET | `/api/owner/system-health` | Bearer ops + role resync |
 | GET/POST | `/api/owner/employees` | Bearer ops + role resync |
 | POST | `/api/staff/pickup-pin` | Sesi staf (cookie) + role driver yang ditugaskan |
+| POST | `/api/staff/cash-deposit` | Sesi staf (kasir = staf yang login); setoran PENDING |
+| POST | `/api/staff/cash-closing` | Sesi staf; kas sistem dari buku besar |
+| GET/POST | `/api/owner/period-lock` | Sesi staf + role owner; buka kembali wajib alasan; diaudit |
 | GET/POST | `/api/owner/finance-settlements` | Sesi staf (cookie) + role owner (dibaca ulang dari employees); diaudit |
 | GET/POST | `/api/customer/addresses` | Sesi pelanggan terverifikasi (nomor legacy selama login lama aktif); hanya alamat nomor sendiri |
 

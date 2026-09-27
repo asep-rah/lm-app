@@ -20,6 +20,7 @@ import {
 } from '@/lib/financeStatements';
 import NeracaStatement from '@/components/owner/NeracaStatement';
 import SettlementPanel from '@/components/owner/SettlementPanel';
+import PeriodLockPanel from '@/components/owner/PeriodLockPanel';
 import { settlementForJournal } from '@/lib/financeSettlement';
 import { isStaffSessionError } from '@/lib/staffRelogin';
 import { loadProfitShareRates } from '@/lib/profitShare';
@@ -71,6 +72,7 @@ export default function OwnerFinanceKindPage() {
   const [ledgerAccount, setLedgerAccount] = useState<string | null>(null);
   const [truncated, setTruncated] = useState(false);
   const [deposits, setDeposits] = useState<any[]>([]);
+  const [closings, setClosings] = useState<any[]>([]);
   // Pembayaran bagi hasil / THR (owner). Tanpa sesi staf laporan tetap tampil, hanya tanpa pembayaran.
   const [settlementRows, setSettlementRows] = useState<Record<string, unknown>[]>([]);
   const [settlementError, setSettlementError] = useState<{ text: string; relogin: boolean } | null>(null);
@@ -102,6 +104,7 @@ export default function OwnerFinanceKindPage() {
       setMems(b.mems);
       setExps(b.exps);
       setDeposits(b.deposits);
+      setClosings(b.closings);
       setStore(books);
       setRates(share);
     });
@@ -140,8 +143,12 @@ export default function OwnerFinanceKindPage() {
   const books = booksOf(store, outletId);
   const settlements = useMemo(() => settlementRows.map(settlementForJournal), [settlementRows]);
   const extra = useMemo(
-    () => ({ deposits: filterByOutlet(deposits, outletId), settlements: filterByOutlet(settlements, outletId) }),
-    [deposits, settlements, outletId]
+    () => ({
+      deposits: filterByOutlet(deposits, outletId),
+      settlements: filterByOutlet(settlements, outletId),
+      closings: filterByOutlet(closings, outletId)
+    }),
+    [deposits, settlements, closings, outletId]
   );
   const ref: PnlMonthRef = { year, month };
   const years = useMemo(() => {
@@ -208,9 +215,10 @@ export default function OwnerFinanceKindPage() {
       asOf: { year: today.getFullYear(), month: today.getMonth() },
       rates,
       deposits: filterByOutlet(deposits, id),
-      settlements: filterByOutlet(settlements, id)
+      settlements: filterByOutlet(settlements, id),
+      closings: filterByOutlet(closings, id)
     });
-    return { profitShare: s.profitShare, thrPayable: s.thrPayable, thrFund: s.thrFund };
+    return { profitShare: s.profitShare, thrPayable: s.thrPayable, thrFund: s.thrFund, clearing: s.gatewayClearing };
   };
 
   const outletTitle = outletId === 'ALL'
@@ -454,6 +462,7 @@ export default function OwnerFinanceKindPage() {
               loadError={settlementError}
               onChanged={() => setSettlementVersion((v) => v + 1)}
             />
+            <PeriodLockPanel outlets={outlets} />
             <div className="bg-white border rounded-2xl shadow-sm overflow-hidden">
               <div className="px-4 py-3 border-b">
                 <h3 className="text-sm font-black">Rincian aset tetap</h3>

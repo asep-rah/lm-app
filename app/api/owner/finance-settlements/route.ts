@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { validateSettlement } from '@/lib/financeSettlement';
 import { clientIp, insertAuditLog, insertErrorLog, paymentServiceDb } from '@/lib/paymentSecurity';
 import { isSameOriginRequest } from '@/lib/requestGuards';
-import { readStaffSession, staffSessionError, staffSessionProblem } from '@/lib/staffAuth/server';
+import { requireOwner } from '@/lib/staffAuth/owner';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,17 +18,8 @@ type Db = ReturnType<typeof paymentServiceDb>;
  * Hanya owner: role dibaca ulang dari employees (sesi bertanda tangan tidak
  * dipercaya untuk role). Setiap catat/batal masuk audit_logs. Tidak ada hapus.
  */
-async function currentOwner(req: NextRequest, db: Db) {
-  const session = readStaffSession(req);
-  if (!session) {
-    const e = staffSessionError(staffSessionProblem(req) === 'not_configured' ? 'not_configured' : 'missing');
-    return { error: NextResponse.json(e.body, { status: e.status, headers: noStore }) };
-  }
-  const { data: staff } = await db.from('employees').select('id, name, role').eq('id', session.sid).maybeSingle();
-  if (!staff) return { error: deny(401, 'Akun tidak ditemukan. Masuk lagi.') };
-  if (String(staff.role || '').toLowerCase() !== 'owner') return { error: deny(403, 'Hanya owner yang boleh mencatat pembayaran bagi hasil / THR.') };
-  return { staff: { id: String(staff.id), name: String(staff.name || ''), role: String(staff.role || '') } };
-}
+const currentOwner = (req: NextRequest, db: Db) =>
+  requireOwner(req, db, 'Hanya owner yang boleh mencatat pembayaran bagi hasil / THR.');
 
 const failed = async (e: unknown, code: string) => {
   await insertErrorLog({ source: 'finance_settlements', code, message: String((e as Error)?.message || e).slice(0, 300) });

@@ -27,7 +27,7 @@ export async function POST(req: Request) {
     'manual'
   );
   if (!auth.ok) {
-    return NextResponse.json({ error: auth.error }, { status: auth.status });
+    return NextResponse.json({ error: auth.error, code: auth.code }, { status: auth.status });
   }
 
   const action = String(body.action || '').toLowerCase();

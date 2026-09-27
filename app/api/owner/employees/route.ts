@@ -39,7 +39,7 @@ function fail(error: unknown, status = 500) {
 /** List karyawan tanpa kolom password. */
 export async function GET(req: Request) {
   const auth = await authOwner(req);
-  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  if (!auth.ok) return NextResponse.json({ error: auth.error, code: auth.code }, { status: auth.status });
 
   try {
     const db = paymentServiceDb();
@@ -71,7 +71,7 @@ export async function POST(req: Request) {
   }
 
   const auth = await authOwner(req, body);
-  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  if (!auth.ok) return NextResponse.json({ error: auth.error, code: auth.code }, { status: auth.status });
 
   const op = String(body.op || 'create').toLowerCase();
   const db = paymentServiceDb();

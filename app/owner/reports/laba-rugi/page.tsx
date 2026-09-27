@@ -5,6 +5,7 @@ import OwnerChrome from '@/components/owner/OwnerChrome';
 import PnlStatement from '@/components/owner/PnlStatement';
 import { canAccessSettings, homePathForRole, isOwnerRole } from '@/lib/staffSession';
 import { loadOwnerFinanceBundle, filterByOutlet } from '@/lib/ownerFinanceData';
+import { settlementForJournal } from '@/lib/financeSettlement';
 import {
   buildPnlByOutlets,
   buildPnlCsv,
@@ -22,7 +23,9 @@ export default function LabaRugiPage() {
   const [loading, setLoading] = useState(true);
   const [adminName, setAdminName] = useState('Owner');
   const [outlets, setOutlets] = useState<{ id: string; name: string }[]>([]);
-  const [source, setSource] = useState({ txs: [] as any[], mems: [] as any[], exps: [] as any[] });
+  const [source, setSource] = useState({ txs: [] as any[], mems: [] as any[], exps: [] as any[], closings: [] as any[], payouts: [] as any[] });
+  // Fee pencairan Mayar (600028) dibaca dari pembayaran yang dicatat owner (butuh sesi staf).
+  const [payoutsMissing, setPayoutsMissing] = useState(false);
   const [bookStore, setBookStore] = useState<Record<string, OutletBook>>({});
   const [selectedOutlet, setSelectedOutlet] = useState('ALL');
   const [period, setPeriod] = useState('THIS_MONTH');
@@ -55,7 +58,18 @@ export default function LabaRugiPage() {
       if (cancelled) return;
       setOutlets(bundle.outlets);
       // Transaksi void ikut dimuat: dibatalkan di bulan lain → dibalik di bulan void (txRevenueSign).
-      setSource({ txs: [...bundle.txs, ...bundle.voidedTxs], mems: bundle.mems, exps: bundle.exps });
+      const payouts = await fetch('/api/owner/finance-settlements', { cache: 'no-store', credentials: 'same-origin' })
+        .then(async (r) => (r.ok ? ((await r.json())?.settlements as any[]) || [] : null))
+        .catch(() => null);
+      if (cancelled) return;
+      setPayoutsMissing(payouts === null);
+      setSource({
+        txs: [...bundle.txs, ...bundle.voidedTxs],
+        mems: bundle.mems,
+        exps: bundle.exps,
+        closings: bundle.closings,
+        payouts: (payouts || []).map(settlementForJournal)
+      });
       setBookStore(books);
       const next: Record<string, number> = {};
       bundle.outlets.forEach((o) => {
@@ -72,7 +86,9 @@ export default function LabaRugiPage() {
   const scoped = useMemo(() => ({
     txs: filterByOutlet(source.txs, selectedOutlet),
     mems: filterByOutlet(source.mems, selectedOutlet),
-    exps: filterByOutlet(source.exps, selectedOutlet)
+    exps: filterByOutlet(source.exps, selectedOutlet),
+    closings: filterByOutlet(source.closings, selectedOutlet),
+    payouts: filterByOutlet(source.payouts, selectedOutlet)
   }), [source, selectedOutlet]);
 
   const outletIds = selectedOutlet === 'ALL' ? outlets.map((o) => o.id) : [selectedOutlet];
@@ -213,6 +229,12 @@ export default function LabaRugiPage() {
                 Format tabel laba rugi di bawah tidak diubah.
               </p>
             </div>
+            {payoutsMissing && (
+              <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 mb-3">
+                Fee pencairan Mayar (Biaya MDR) belum ikut dihitung karena sesi login staf berakhir. Keluar lalu masuk lagi untuk
+                angka lengkap.
+              </p>
+            )}
             <PnlStatement outletName={outletName} adminName={adminName} left={left} right={right} />
           </>
         )}

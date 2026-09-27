@@ -278,7 +278,8 @@ export default function RequisitionForm({
         created_at: now
       };
       const { error: expErr } = await supabase.from('expenses').insert([
-        { ...cmsRow, description: desc, notes: desc, requisition_id: req.id, status: 'PAID', created_by: actorName }
+        // Dibayar lewat transfer (bukti transfer) → mengurangi rekening bank, bukan kas laci.
+        { ...cmsRow, description: desc, notes: desc, requisition_id: req.id, status: 'PAID', created_by: actorName, paid_from: 'bank' }
       ]);
       if (expErr) {
         const { error: expErr2 } = await supabase.from('expenses').insert([cmsRow]);

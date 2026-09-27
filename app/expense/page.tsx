@@ -7,6 +7,7 @@ import RoleTaskInbox from '@/components/RoleTaskInbox';
 import { getStaffSession, isAdminOpsRole, isOwnerRole } from '@/lib/staffSession';
 import { toast } from '@/lib/toast';
 import { EXPENSE_COA_GROUPS, EXPENSE_COA_OPTIONS, expenseCoaLabel } from '@/lib/pnlReport';
+import { EXPENSE_PAID_FROM } from '@/lib/financeSettlement';
 
 
 export default function ExpensePage() {
@@ -18,6 +19,8 @@ export default function ExpensePage() {
   const [category, setCategory] = useState(EXPENSE_COA_OPTIONS[0]);
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
+  // Sumber dana: menentukan akun yang berkurang di neraca (laci / bank / Mayar / modal owner).
+  const [paidFrom, setPaidFrom] = useState<string>('bank');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showDirect, setShowDirect] = useState(false);
 
@@ -44,6 +47,7 @@ export default function ExpensePage() {
         category: category,
         amount: Number(amount),
         description: description,
+        paid_from: paidFrom,
         created_at: new Date().toISOString()
       }
     ]);
@@ -115,6 +119,16 @@ export default function ExpensePage() {
                         </option>
                       ))}
                     </optgroup>
+                  ))}
+                </select>
+                <select
+                  value={paidFrom}
+                  onChange={(e) => setPaidFrom(e.target.value)}
+                  aria-label="Dibayar dari"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm"
+                >
+                  {EXPENSE_PAID_FROM.map((o) => (
+                    <option key={o.value} value={o.value}>Dibayar dari: {o.label}</option>
                   ))}
                 </select>
                 <input

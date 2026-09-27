@@ -12,7 +12,7 @@ import {
 import { isStaffSessionError, staffRelogin } from '@/lib/staffRelogin';
 import { toast } from '@/lib/toast';
 
-type Outstanding = { profitShare: number; thrPayable: number; thrFund: number };
+type Outstanding = { profitShare: number; thrPayable: number; thrFund: number; clearing: number };
 
 type Props = {
   outlets: { id: string; name: string }[];
@@ -38,6 +38,7 @@ export default function SettlementPanel({ outlets, outletId, outstandingFor, set
   const [outlet, setOutlet] = useState(outletId !== 'ALL' ? outletId : '');
   const [kind, setKind] = useState<SettlementKind>('profit_share');
   const [amount, setAmount] = useState('');
+  const [fee, setFee] = useState('');
   const [paidAt, setPaidAt] = useState(jakartaToday());
   const [source, setSource] = useState<SettlementSource>('bank');
   const [note, setNote] = useState('');
@@ -45,7 +46,8 @@ export default function SettlementPanel({ outlets, outletId, outstandingFor, set
   const [problem, setProblem] = useState<{ text: string; relogin: boolean } | null>(null);
 
   const due = outlet ? outstandingFor(outlet) : null;
-  const dueNow = due ? (kind === 'thr' ? due.thrPayable : due.profitShare) : 0;
+  const payout = kind === 'gateway_payout';
+  const dueNow = due ? (kind === 'thr' ? due.thrPayable : payout ? due.clearing : due.profitShare) : 0;
   const nameOf = (id: unknown) => outlets.find((o) => o.id === String(id))?.name || 'Outlet';
   const rows = useMemo(
     () =>
@@ -81,17 +83,21 @@ export default function SettlementPanel({ outlets, outletId, outstandingFor, set
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     const n = Number(String(amount).replace(/\D/g, ''));
+    const f = payout ? Number(String(fee).replace(/\D/g, '')) || 0 : 0;
     if (!outlet) return setProblem({ text: 'Pilih outlet.', relogin: false });
     if (!(n > 0)) return setProblem({ text: 'Isi nominal pembayaran.', relogin: false });
-    if (n > dueNow + 0.5 && !confirm(`Nominal ${rp(n)} lebih besar dari utang tercatat ${rp(dueNow)}. Tetap simpan?`)) return;
+    if (payout) {
+      if (n + f > dueNow + 0.5 && !confirm(`Pencairan ${rp(n + f)} (termasuk fee) lebih besar dari saldo Mayar tercatat ${rp(dueNow)}. Tetap simpan?`)) return;
+    } else if (n > dueNow + 0.5 && !confirm(`Nominal ${rp(n)} lebih besar dari utang tercatat ${rp(dueNow)}. Tetap simpan?`)) return;
     if (kind === 'thr' && source === 'dana_thr' && due && n > due.thrFund + 0.5 &&
       !confirm(`Dana Tabungan THR hanya ${rp(due.thrFund)}. Tetap bayar ${rp(n)} dari dana ini?`)) return;
     setBusy(true);
-    const ok = await call({ outletId: outlet, kind, amount: n, paidAt, source, note });
+    const ok = await call({ outletId: outlet, kind, amount: n, fee: f, paidAt, source, note });
     setBusy(false);
     if (ok) {
       toast(`${SETTLEMENT_KINDS[kind].label} ${rp(n)} tercatat.`, 'ok');
       setAmount('');
+      setFee('');
       setNote('');
       setOpen(false);
       onChanged();
@@ -113,8 +119,10 @@ export default function SettlementPanel({ outlets, outletId, outstandingFor, set
     <div className="bg-white border rounded-2xl shadow-sm overflow-hidden">
       <div className="px-4 py-3 border-b flex items-center justify-between gap-2">
         <div>
-          <h3 className="text-sm font-black">Pembayaran bagi hasil &amp; THR</h3>
-          <p className="text-[11px] text-slate-400">Catat saat uangnya benar-benar dibayarkan. Utang di neraca berkurang otomatis.</p>
+          <h3 className="text-sm font-black">Pembayaran &amp; pencairan</h3>
+          <p className="text-[11px] text-slate-400">
+            Bagi hasil, THR crew, dan pencairan saldo Mayar ke bank. Catat saat uangnya benar-benar berpindah; neraca menyesuaikan otomatis.
+          </p>
         </div>
         <button
           type="button"
@@ -149,7 +157,7 @@ export default function SettlementPanel({ outlets, outletId, outstandingFor, set
           </label>
           <div className="space-y-1">
             <span className="font-bold text-slate-500 block">Jenis</span>
-            <div className="flex gap-1.5">
+            <div className="flex flex-wrap gap-1.5">
               {(Object.keys(SETTLEMENT_KINDS) as SettlementKind[]).map((k) => (
                 <button
                   key={k}
@@ -164,19 +172,26 @@ export default function SettlementPanel({ outlets, outletId, outstandingFor, set
           </div>
           {due && (
             <p className="sm:col-span-2 text-[11px] text-slate-600 bg-slate-50 border rounded-lg px-3 py-2">
-              Utang {SETTLEMENT_KINDS[kind].label.toLowerCase()} {nameOf(outlet)} saat ini: <b>{rp(dueNow)}</b>
+              {payout ? 'Saldo Mayar (QRIS/Clearing)' : `Utang ${SETTLEMENT_KINDS[kind].label.toLowerCase()}`} {nameOf(outlet)} saat ini:{' '}
+              <b>{rp(dueNow)}</b>
               {kind === 'thr' ? <> · Dana Tabungan THR: <b>{rp(due.thrFund)}</b></> : null}
               {dueNow > 0 && (
-                <button type="button" onClick={() => setAmount(String(Math.round(dueNow)))} className="ml-2 text-emerald-700 font-bold underline">
-                  Isi sesuai utang
+                <button type="button" onClick={() => setAmount(String(Math.round(dueNow - (Number(fee) || 0))))} className="ml-2 text-emerald-700 font-bold underline">
+                  {payout ? 'Isi sesuai saldo' : 'Isi sesuai utang'}
                 </button>
               )}
             </p>
           )}
           <label className="space-y-1">
-            <span className="font-bold text-slate-500">Nominal (Rp)</span>
+            <span className="font-bold text-slate-500">{payout ? 'Diterima di rekening bank (Rp)' : 'Nominal (Rp)'}</span>
             <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="numeric" placeholder="0" className="w-full border rounded-lg p-2" required />
           </label>
+          {payout && (
+            <label className="space-y-1">
+              <span className="font-bold text-slate-500">Fee / MDR dipotong Mayar (Rp)</span>
+              <input value={fee} onChange={(e) => setFee(e.target.value)} inputMode="numeric" placeholder="0" className="w-full border rounded-lg p-2" />
+            </label>
+          )}
           <label className="space-y-1">
             <span className="font-bold text-slate-500">Tanggal bayar</span>
             <input type="date" value={paidAt} max={jakartaToday()} onChange={(e) => setPaidAt(e.target.value)} className="w-full border rounded-lg p-2" required />
@@ -220,14 +235,17 @@ export default function SettlementPanel({ outlets, outletId, outstandingFor, set
           <tbody>
             {rows.map((r) => {
               const voided = Boolean(r.voided_at);
-              const k = (String(r.kind) === 'thr' ? 'thr' : 'profit_share') as SettlementKind;
+              const k = (['thr', 'gateway_payout'].includes(String(r.kind)) ? String(r.kind) : 'profit_share') as SettlementKind;
               return (
                 <tr key={String(r.id)} className={`border-t border-slate-100 ${voided ? 'text-slate-400 line-through' : ''}`}>
                   <td className="p-3">{String(r.paid_at).slice(0, 10)}</td>
                   <td className="p-3">{nameOf(r.outlet_id)}</td>
                   <td className="p-3">{SETTLEMENT_KINDS[k].label}{r.note ? ` · ${String(r.note)}` : ''}</td>
                   <td className="p-3">{SOURCE_LABELS[String(r.source) as SettlementSource] || String(r.source)}</td>
-                  <td className="p-3 text-right font-bold">{rp(Number(r.amount))}</td>
+                  <td className="p-3 text-right font-bold">
+                    {rp(Number(r.amount))}
+                    {Number(r.fee) > 0 ? <span className="block text-[10px] font-normal text-slate-400">fee {rp(Number(r.fee))}</span> : null}
+                  </td>
                   <td className="p-3 text-right">
                     {voided ? (
                       <span className="no-underline">dibatalkan</span>
