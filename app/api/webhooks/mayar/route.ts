@@ -179,7 +179,7 @@ export async function POST(req: Request) {
         customerPhone: tx.customer_phone,
         paidVia: body.simulate ? 'CHECK_STATUS' : 'GATEWAY',
         pickupId: tx.pickup_id
-      });
+      }, paymentServiceDb());
       if (error) {
         await insertErrorLog({
           source: 'mayar_webhook',

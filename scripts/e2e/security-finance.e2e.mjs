@@ -5,23 +5,31 @@
 // E2E (API): security phase 1 + finance controls against `next start` and the in-memory PostgREST mock.
 import { spawn } from 'node:child_process';
 import assert from 'node:assert/strict';
-import { startMock, state } from './mockPostgrest.mjs';
+import { startMock, state, writes } from './mockPostgrest.mjs';
 import { signStaffSession } from '../../lib/staffAuth/core.ts';
 
 const APP = 'http://localhost:3214';
 const STAFF_SECRET = 'e2e-staff-secret-e2e-staff-secret-e2e';
 const OPS = 'e2e-public-ops-secret-e2e-public';
 const OUTLET = '0a000000-0000-4000-8000-00000000000a';
+const OUTLET_B = '0b000000-0000-4000-8000-00000000000b'; // void test; keeps OUTLET's drawer untouched
 
 await startMock(54331);
 state.outlets = [{ id: OUTLET, name: 'Laundrivery Dago' }];
 state.employees = [
   { id: '1', name: 'Owner', role: 'owner', username: 'owner' },
-  { id: '3', name: 'Kasir A', role: 'kasir', username: 'kasir' }
+  { id: '3', name: 'Kasir A', role: 'kasir', username: 'kasir' },
+  { id: '4', name: 'CS Rina', role: 'cs', username: 'cs' }
 ];
 state.transactions = [
-  { id: 't1', outlet_id: OUTLET, amount: 100000, delivery_fee: 0, order_type: 'Offline', payment_method: 'Cash', is_paid: true, payment_status: 'paid', status: 'Selesai', created_at: '2026-01-10T03:00:00.000Z' }
+  { id: 't1', outlet_id: OUTLET, amount: 100000, delivery_fee: 0, order_type: 'Offline', payment_method: 'Cash', is_paid: true, payment_status: 'paid', status: 'Selesai', created_at: '2026-01-10T03:00:00.000Z' },
+  { id: 't2', receipt_number: 'LDV-T2', outlet_id: OUTLET, amount: 45000, payment_method: 'QRIS', is_paid: false, payment_status: 'pending', status: 'menunggu_pembayaran', created_at: new Date().toISOString() },
+  { id: 't3', receipt_number: 'LDV-T3', outlet_id: OUTLET_B, amount: 60000, payment_method: 'Cash', is_paid: true, payment_status: 'paid', status: 'Selesai', created_at: new Date().toISOString() }
 ];
+state.system_tasks = [{ id: 'st2', source_type: 'PAYMENT_VERIFY', source_id: 't2', status: 'pending', title: 'Konfirmasi Pembayaran LDV-T2' }];
+state.cashflow_logs = [{ id: 'cf3', reference_id: 't3', amount: 60000 }];
+state.delete_requests = [{ id: 'dr3', transaction_id: 't3', status: 'pending' }];
+state.pickup_orders = [];
 state.membership_logs = [{ id: 'm1', outlet_id: OUTLET, price: 50000, order_type: 'Offline', created_at: '2026-01-11T03:00:00.000Z' }];
 state.expenses = [{ id: 'e1', outlet_id: OUTLET, amount: 30000, category: '600006 · ATK', created_at: '2026-01-12T03:00:00.000Z' }];
 state.cash_deposits = [{ id: 'd1', outlet_id: OUTLET, amount_cash: 20000, admin_fee: 0, net_deposit_amount: 20000, status: 'BALANCED', paid_at: '2026-01-13T03:00:00.000Z', created_at: '2026-01-13T02:00:00.000Z' }];
@@ -156,6 +164,42 @@ await step('Mayar payout with fee is recorded (owner)', async () => {
   });
   assert.equal(r.status, 200, JSON.stringify(r.json));
   assert.equal(Number(state.finance_settlements.at(-1).fee), 3000);
+});
+
+await step('CS confirms a transfer through the server (session, service-role write, audited)', async () => {
+  const body = { transactionId: 't2', proofUrl: 'https://example.test/bukti.jpg', receipt: 'LDV-T2', amount: 45000, note: 'Bukti transfer dikonfirmasi CS (CS Rina)' };
+  assert.equal((await call('/api/pay/mark-manual', { body })).status, 401);
+  const before = writes.length;
+  const r = await call('/api/pay/mark-manual', { body, cookie: staff('4', 'cs') });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const t2 = state.transactions.find((t) => t.id === 't2');
+  assert.equal(t2.is_paid, true);
+  assert.ok(t2.paid_at);
+  const txWrites = writes.slice(before).filter((w) => w.table === 'transactions');
+  assert.ok(txWrites.length > 0 && txWrites.every((w) => w.key === 'test-service-role'), JSON.stringify(txWrites));
+  assert.equal(state.system_tasks.find((t) => t.id === 'st2').status, 'completed');
+  // mark-manual writes its audit row without awaiting it.
+  for (let i = 0; i < 20 && !state.audit_logs.some((a) => a.entity_id === 't2'); i++) await new Promise((r) => setTimeout(r, 100));
+  assert.ok(state.audit_logs.some((a) => a.action === 'PAYMENT_MANUAL_VERIFIED' && a.entity_id === 't2'), JSON.stringify(state.audit_logs.map((a) => a.action)));
+});
+await step('Void: owner only, reason required, service-role write, audited, idempotent', async () => {
+  const body = { transactionId: 't3', reason: 'Owner menyetujui permintaan hapus' };
+  assert.equal((await call('/api/owner/void-transaction', { body })).status, 401);
+  assert.equal((await call('/api/owner/void-transaction', { body, cookie: staff('3', 'kasir') })).status, 403);
+  assert.equal((await call('/api/owner/void-transaction', { body: { transactionId: 't3', reason: '' }, cookie: staff('1', 'owner') })).status, 400);
+  assert.equal((await call('/api/owner/void-transaction', { body: { transactionId: 'nope', reason: 'salah input' }, cookie: staff('1', 'owner') })).status, 404);
+  assert.notEqual(state.transactions.find((t) => t.id === 't3').is_void, true);
+  const before = writes.length;
+  const r = await call('/api/owner/void-transaction', { body, cookie: staff('1', 'owner') });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const t3 = state.transactions.find((t) => t.id === 't3');
+  assert.equal(t3.is_void, true);
+  assert.ok(t3.voided_at);
+  assert.ok(writes.slice(before).every((w) => w.key === 'test-service-role'));
+  assert.equal(state.cashflow_logs.filter((c) => c.reference_id === 't3').length, 0);
+  assert.ok(state.audit_logs.some((a) => a.action === 'transaction_voided' && a.entity_id === 't3'));
+  const again = await call('/api/owner/void-transaction', { body, cookie: staff('1', 'owner') });
+  assert.equal(again.json?.already, true);
 });
 
 process.kill(-app.pid, 'SIGKILL');

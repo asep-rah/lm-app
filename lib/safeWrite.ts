@@ -44,12 +44,25 @@ export async function updateWithFallback(
   attempts: Record<string, unknown>[],
   match: { column: string; value: unknown }
 ): Promise<{ error: { message: string } | null }> {
+  return updateWithFallbackOn(supabase, table, attempts, match);
+}
+
+/** Klien Supabase apa pun (browser anon atau server service role). */
+export type WriteDb = Pick<typeof supabase, 'from'>;
+
+/** Sama dengan updateWithFallback, tetapi memakai klien yang diberikan (mis. service role di server). */
+export async function updateWithFallbackOn(
+  db: WriteDb,
+  table: string,
+  attempts: Record<string, unknown>[],
+  match: { column: string; value: unknown }
+): Promise<{ error: { message: string } | null }> {
   let lastErr: { message: string } | null = null;
   for (const row of attempts) {
     const clean = cleanRow(row);
     if (Object.keys(clean).length === 0) continue;
     try {
-      const { error } = await supabase.from(table).update(clean).eq(match.column, match.value);
+      const { error } = await db.from(table).update(clean).eq(match.column, match.value);
       if (!error) return { error: null };
       lastErr = { message: error.message };
     } catch (e) {

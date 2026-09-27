@@ -634,11 +634,15 @@ export default function Dashboard() {
   const handleApproveDelete = async (txId: string) => {
     if (!confirm('Yakin menyetujui void transaksi ini? Data tetap tersimpan (soft-void). Omset & antrian proses akan dikoreksi.')) return;
     setIsSaving(true);
-    const { softVoidTransaction } = await import('@/lib/voidTx');
-    const { error } = await softVoidTransaction(txId, {
-      reason: 'Owner approve delete request',
-      approvedBy: currentUserName || 'owner'
-    });
+    // Void hanya lewat server (owner, diaudit); browser tidak bisa lagi me-void langsung.
+    const res = await fetch('/api/owner/void-transaction', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transactionId: txId, reason: 'Owner menyetujui permintaan hapus' })
+    }).catch(() => null);
+    const out = res ? await res.json().catch(() => ({})) : { error: 'Koneksi bermasalah' };
+    const error = res && res.ok ? null : { message: String(out?.error || 'Gagal') };
     if (!error) {
       alert('✅ Transaksi di-void. Hilang dari proses pengerjaan & tidak dihitung omset.');
       setDeleteRequests((prev) => prev.filter((r) => r.id !== txId));

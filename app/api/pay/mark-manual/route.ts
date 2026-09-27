@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { markInvoicePaid } from '@/lib/paymentVerify';
-import { clientIp, insertAuditLog, insertErrorLog } from '@/lib/paymentSecurity';
+import { clientIp, insertAuditLog, insertErrorLog, paymentServiceDb } from '@/lib/paymentSecurity';
 import { requirePaymentOpsAuth } from '@/lib/requirePaymentOpsAuth';
 
 export const dynamic = 'force-dynamic';
@@ -38,7 +38,7 @@ export async function POST(req: Request) {
       paidVia: 'MANUAL_VERIFIED',
       note,
       bankRef: bankRef || undefined
-    });
+    }, paymentServiceDb());
 
     if (result.error) {
       await insertErrorLog({

@@ -70,7 +70,7 @@ export async function POST(req: Request) {
         agentName: auth.agentName,
         customerPhone: tx.customer_phone,
         paidVia: body.force && !paid ? 'MANUAL_VERIFIED' : 'CRON_SYNC'
-      });
+      }, paymentServiceDb());
       if (error) {
         return NextResponse.json({ error: error.message }, { status: 500 });
       }

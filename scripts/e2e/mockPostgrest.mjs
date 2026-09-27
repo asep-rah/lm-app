@@ -11,6 +11,8 @@ const UNIQUE = {
   customer_auth_identities: [(r) => r.customer_phone, (r) => String(r.email || '').toLowerCase()]
 };
 export const state = db;
+/** Writes seen by the mock ({method, table, key}) so tests can check which key a server route used. */
+export const writes = [];
 
 const parseVal = (v) => (v === 'null' ? null : v === 'true' ? true : v === 'false' ? false : v);
 const match = (row, key, expr) => {
@@ -18,7 +20,12 @@ const match = (row, key, expr) => {
   if (expr.startsWith('not.')) { neg = true; expr = expr.slice(4); }
   const dot = expr.indexOf('.');
   const op = expr.slice(0, dot);
-  const raw = decodeURIComponent(expr.slice(dot + 1));
+  let raw = expr.slice(dot + 1);
+  try {
+    raw = decodeURIComponent(raw);
+  } catch {
+    // already decoded by URLSearchParams (e.g. ilike.%x%)
+  }
   const val = row[key];
   let ok;
   switch (op) {
@@ -83,6 +90,7 @@ export function startMock(port) {
     let body = '';
     for await (const c of req) body += c;
     const payload = body ? JSON.parse(body) : null;
+    if (req.method !== 'GET' && req.method !== 'HEAD') writes.push({ method: req.method, table, key: String(req.headers.apikey || '') });
 
     const out = (rows, status = 200) => {
       if (params.get('order')) {

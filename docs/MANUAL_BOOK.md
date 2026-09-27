@@ -250,7 +250,7 @@ Badge / indikator unread mengikuti channel chat & notifikasi tugas (realtime Sup
 Di live chat / alur verifikasi:
 
 1. CS membuka **Tandai Lunas Manual**.
-2. Wajib identitas staf + **Bearer ops secret** + catatan / bukti bila diminta form.
+2. Wajib **sesi staf** (login) + catatan + bukti (URL) atau nomor referensi bank. Tombol "Konfirmasi lunas" di dashboard CS memakai endpoint yang sama.
 3. `POST /api/pay/mark-manual` → `paid_via: MANUAL_VERIFIED` + **audit_logs**.
 4. Role yang diizinkan (manual): CS, Head CS, Owner, Supervisor, Finance, Admin Ops, dll. (lihat `lib/requirePaymentOpsAuth.ts`).
 
@@ -349,12 +349,12 @@ Pendapatan dari transaksi + membership; beban dipetakan dari kategori expense / 
 #### Soft Void (pembatalan aman)
 
 1. Kasir mengajukan hapus (`delete_requested`).
-2. Owner **Setujui Void** → `softVoidTransaction`:
+2. Owner **Setujui Void** → `POST /api/owner/void-transaction` (sesi owner, alasan wajib, audit `transaction_voided`) → `softVoidTransaction` dengan service role:
    - `is_void = true`
    - `status = Dibatalkan`
    - jejak nominal & resi **tetap di database**
 3. Omset / KPI mengabaikan baris void (`isVoidTransaction`).
-4. Di database, **DELETE** transaksi oleh role anon **dicabut** (migration money guardrails).
+4. Di database, **DELETE** transaksi oleh role anon **dicabut** (migration money guardrails), dan sejak `20261008_payment_void_guard.sql` browser juga **tidak bisa** mengisi `is_void` / `voided_at`.
 
 #### Panel Diagnosis (`/owner/system-health`)
 
@@ -574,7 +574,8 @@ A: `docs/SECURITY_AND_MAINTENANCE.md` (env, SQL, checklist fraud mingguan).
 | POST | `/api/auth/staff-login` | Publik (rate-limit disarankan di edge) |
 | POST | `/api/webhooks/mayar` | Webhook secret / signature |
 | GET | `/api/pay/check-status` | Sesuai implementasi route (ops/order context) |
-| POST | `/api/pay/mark-manual` | Bearer ops + role manual |
+| POST | `/api/pay/mark-manual` | Sesi staf + role manual; tulis dengan service role; diaudit |
+| POST | `/api/owner/void-transaction` | Sesi staf + role owner; alasan wajib; diaudit (`transaction_voided`) |
 | POST | `/api/pay/resync` | Bearer ops + role resync |
 | POST | `/api/deposit/mutate` | Bearer ops + role manual (termasuk kasir) |
 | GET | `/api/cron/sync-payments` | Bearer `CRON_SECRET` |

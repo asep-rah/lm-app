@@ -120,7 +120,7 @@ export async function POST(req: Request) {
     customerPhone: tx.customer_phone,
     paidVia: 'CASHIER_CONFIRM',
     pickupId: tx.pickup_id
-  });
+  }, paymentServiceDb());
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   void insertAuditLog({
@@ -174,7 +174,7 @@ async function handleTx(tx: any, req: Request, supabase: ReturnType<typeof payme
       customerPhone: tx.customer_phone,
       paidVia: 'CHECK_STATUS',
       pickupId: tx.pickup_id
-    });
+    }, paymentServiceDb());
     if (error) {
       await insertErrorLog({
         source: 'pay_check_status',
