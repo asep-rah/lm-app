@@ -1,4 +1,5 @@
 import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
+import { postStaffApi } from '@/lib/staffApiClient';
 import { supabase } from '@/lib/supabaseClient';
 
 export type VoucherBenefitType = 'nominal' | 'percent';
@@ -130,7 +131,7 @@ async function readSettingsStore(): Promise<LocalStore> {
   };
 }
 
-async function writeSettingsStore(store: LocalStore) {
+async function writeSettingsStore(store: LocalStore): Promise<string | null> {
   const { data } = await supabase.from('app_settings').select('outlet_overrides, promos_data').eq('id', 1).maybeSingle();
   const overrides = parseJson(data?.outlet_overrides, {});
   const nextOverrides = { ...overrides, __voucher_programs: store };
@@ -154,18 +155,18 @@ async function writeSettingsStore(store: LocalStore) {
     });
   const existingPromos = parseJson(data?.promos_data, []).filter((p: any) => p?.source !== 'voucher');
   const promoPayload = [...existingPromos, ...promoRows];
-  await updateWithFallback(
-    'app_settings',
-    [
+  // app_settings hanya ditulis server (owner, diaudit).
+  const res = await postStaffApi('/api/owner/app-settings', {
+    attempts: [
       { voucher_programs: store, outlet_overrides: nextOverrides, promos_data: promoPayload },
       { voucher_programs: store, promos_data: promoPayload },
       { outlet_overrides: nextOverrides, promos_data: promoPayload },
       { outlet_overrides: JSON.stringify(nextOverrides), promos_data: JSON.stringify(promoPayload) },
       { outlet_overrides: nextOverrides },
       { promos_data: promoPayload }
-    ],
-    { column: 'id', value: 1 }
-  );
+    ]
+  });
+  return res.ok ? null : res.error;
 }
 
 async function publishClaimableCodes(program: VoucherProgram, codes: VoucherCode[]) {
@@ -292,11 +293,11 @@ export async function saveVoucherProgram(
     programs: mergePrograms([savedProgram], settings.programs),
     codes: { ...settings.codes, [savedProgram.id]: codes }
   };
-  await writeSettingsStore(nextStore);
+  const storeErr = await writeSettingsStore(nextStore);
   writeLocal({ ...readLocal(), programs: mergePrograms([savedProgram], readLocal().programs), codes: { ...readLocal().codes, [savedProgram.id]: codes } });
   await publishClaimableCodes(savedProgram, codes);
 
-  return { error: null, program: savedProgram, codes };
+  return { error: storeErr ? { message: storeErr } : null, program: savedProgram, codes };
 }
 
 export async function setVoucherProgramActive(id: string, isActive: boolean) {
@@ -307,9 +308,9 @@ export async function setVoucherProgramActive(id: string, isActive: boolean) {
     programs: mergePrograms(settings.programs, local.programs).map((p) => (p.id === id ? { ...p, is_active: isActive } : p)),
     codes: { ...local.codes, ...settings.codes }
   };
-  await writeSettingsStore(next);
+  const storeErr = await writeSettingsStore(next);
   writeLocal(next);
-  return { error: null };
+  return { error: storeErr ? { message: storeErr } : null };
 }
 
 export function printVoucherPdf(program: VoucherProgram, codes: VoucherCode[], outletName = 'Semua outlet') {

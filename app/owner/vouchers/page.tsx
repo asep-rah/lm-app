@@ -323,7 +323,8 @@ export default function OwnerVouchersPage() {
                   <button
                     type="button"
                     onClick={async () => {
-                      await setVoucherProgramActive(p.id, !p.is_active);
+                      const { error } = await setVoucherProgramActive(p.id, !p.is_active);
+                      if (error) alert(error.message);
                       await load();
                     }}
                     className="text-[10px] font-bold text-amber-700"

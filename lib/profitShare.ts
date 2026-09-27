@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabaseClient';
-import { updateWithFallback } from '@/lib/safeWrite';
+import { postStaffApi } from '@/lib/staffApiClient';
 
 export const DEFAULT_PROFIT_SHARE_PCT = 20;
 const LS_KEY = 'laundry_profit_share_by_outlet';
@@ -64,14 +64,13 @@ export async function saveProfitShareRates(rates: Record<string, number>): Promi
   if (!overrides || typeof overrides !== 'object') overrides = {};
   overrides.__profit_share = rates;
 
-  const { error } = await updateWithFallback(
-    'app_settings',
-    [
+  // app_settings hanya ditulis server (owner, diaudit).
+  const res = await postStaffApi('/api/owner/app-settings', {
+    attempts: [
       { profit_share_by_outlet: rates, outlet_overrides: JSON.stringify(overrides) },
       { profit_share_by_outlet: rates },
       { outlet_overrides: JSON.stringify(overrides) }
-    ],
-    { column: 'id', value: 1 }
-  );
-  return { error: error?.message || null };
+    ]
+  });
+  return { error: res.ok ? null : res.error };
 }

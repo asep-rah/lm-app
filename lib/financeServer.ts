@@ -73,3 +73,20 @@ export async function drawerBalanceNow(db: Db, outletId: string) {
   const data = await loadOutletFinance(db, outletId);
   return buildBalanceSheet({ ...data, asOf: jakartaMonth() }).undepositedCash;
 }
+
+/** Tanggal Asia/Jakarta (YYYY-MM-DD) dari ISO timestamp. */
+export const jakartaDay = (iso: string | number | Date = new Date()) =>
+  new Date(new Date(iso).getTime() + 7 * 3600_000).toISOString().slice(0, 10);
+
+/**
+ * Tutup buku untuk penulisan dari server. Trigger guard_finance_period hanya
+ * mengunci browser (anon/authenticated), jadi route server wajib memeriksa
+ * sendiri. Mengembalikan tanggal kunci bila `iso` jatuh di periode terkunci.
+ */
+export async function lockedPeriodFor(db: Db, outletId: string | null | undefined, iso: string | number | Date = new Date()) {
+  if (!outletId) return null;
+  const { data, error } = await db.from('finance_period_locks').select('locked_through').eq('outlet_id', outletId).maybeSingle();
+  if (error || !data?.locked_through) return null;
+  const lock = String(data.locked_through).slice(0, 10);
+  return jakartaDay(iso) <= lock ? lock : null;
+}

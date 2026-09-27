@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { postStaffApi } from '@/lib/staffApiClient';
+import { staffRelogin } from '@/lib/staffRelogin';
 import { supabase } from '@/lib/supabaseClient';
 import {
   canCreateRequisition,
@@ -270,25 +272,21 @@ export default function RequisitionForm({
         prDescription(req) ||
         `${prTitle(req)} — ${prRequestedBy(req) || 'Outlet'}`;
 
-      const cmsRow = {
-        outlet_id: req.outlet_id,
+      // Dibayar lewat transfer (bukti transfer) → mengurangi rekening bank, bukan kas laci.
+      // Dicatat server (staf login, diaudit); pengajuan yang sama tidak tercatat dua kali.
+      const expRes = await postStaffApi('/api/staff/expense', {
+        op: 'create',
+        outletId: req.outlet_id,
         amount: paidAmount,
         category: req.category || 'Lain-lain',
-        proof_url: proofUrl || null,
-        created_at: now
-      };
-      const { error: expErr } = await supabase.from('expenses').insert([
-        // Dibayar lewat transfer (bukti transfer) → mengurangi rekening bank, bukan kas laci.
-        { ...cmsRow, description: desc, notes: desc, requisition_id: req.id, status: 'PAID', created_by: actorName, paid_from: 'bank' }
-      ]);
-      if (expErr) {
-        const { error: expErr2 } = await supabase.from('expenses').insert([cmsRow]);
-        if (expErr2) {
-          const { error: expErr3 } = await supabase.from('expenses').insert([
-            { outlet_id: req.outlet_id, category: req.category || 'Lain-lain', amount: paidAmount, description: desc }
-          ]);
-          if (expErr3) throw expErr3;
-        }
+        description: desc,
+        paidFrom: 'bank',
+        requisitionId: req.id,
+        proofUrl: proofUrl || ''
+      });
+      if (!expRes.ok) {
+        if (expRes.relogin && confirm(`${expRes.error}\n\nMasuk ulang sekarang?`)) return staffRelogin();
+        throw new Error(expRes.error);
       }
 
       await updatePr(req.id, [

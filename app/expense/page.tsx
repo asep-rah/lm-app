@@ -6,6 +6,8 @@ import Link from 'next/link';
 import RoleTaskInbox from '@/components/RoleTaskInbox';
 import { getStaffSession, isAdminOpsRole, isOwnerRole } from '@/lib/staffSession';
 import { toast } from '@/lib/toast';
+import { postStaffApi } from '@/lib/staffApiClient';
+import { staffRelogin } from '@/lib/staffRelogin';
 import { EXPENSE_COA_GROUPS, EXPENSE_COA_OPTIONS, expenseCoaLabel } from '@/lib/pnlReport';
 import { EXPENSE_PAID_FROM } from '@/lib/financeSettlement';
 
@@ -41,25 +43,20 @@ export default function ExpensePage() {
     if (!selectedOutlet || !amount) return;
 
     setIsSubmitting(true);
-    const { error } = await supabase.from('expenses').insert([
-      {
-        outlet_id: selectedOutlet,
-        category: category,
-        amount: Number(amount),
-        description: description,
-        paid_from: paidFrom,
-        created_at: new Date().toISOString()
-      }
-    ]);
-    if (error) {
-      const retry = await supabase.from('expenses').insert([
-        { outlet_id: selectedOutlet, category, amount: Number(amount), description }
-      ]);
-      if (retry.error) {
-        toast('Gagal simpan pengeluaran: ' + retry.error.message, 'err');
-        setIsSubmitting(false);
-        return;
-      }
+    // Pengeluaran dicatat server (staf login, diaudit, cek tutup buku).
+    const res = await postStaffApi('/api/staff/expense', {
+      op: 'create',
+      outletId: selectedOutlet,
+      category,
+      amount: Number(amount),
+      description,
+      paidFrom
+    });
+    if (!res.ok) {
+      if (res.relogin && confirm(`${res.error}\n\nMasuk ulang sekarang?`)) staffRelogin();
+      else toast('Gagal simpan pengeluaran: ' + res.error, 'err');
+      setIsSubmitting(false);
+      return;
     }
     setAmount('');
     setDescription('');

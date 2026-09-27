@@ -18,13 +18,23 @@ const toErr = (e: unknown): { message: string } => {
 export async function insertWithFallback<T = Record<string, unknown>>(
   table: string,
   attempts: Record<string, unknown>[],
+  opts: { select?: string } = {}
+): Promise<{ data: T[] | null; error: { message: string } | null }> {
+  return insertWithFallbackOn<T>(supabase, table, attempts, opts);
+}
+
+/** Sama dengan insertWithFallback, tetapi memakai klien yang diberikan (mis. service role di server). */
+export async function insertWithFallbackOn<T = Record<string, unknown>>(
+  db: WriteDb,
+  table: string,
+  attempts: Record<string, unknown>[],
   { select }: { select?: string } = {}
 ): Promise<{ data: T[] | null; error: { message: string } | null }> {
   let lastErr: { message: string } | null = null;
   for (const row of attempts) {
     const clean = cleanRow(row);
     try {
-      const q = supabase.from(table).insert([clean]);
+      const q = db.from(table).insert([clean]);
       const { data, error } = select ? await q.select(select) : await q.select();
       if (!error) return { data: ((data || []) as unknown as T[]), error: null };
       lastErr = { message: error.message };

@@ -5,7 +5,8 @@ import Link from 'next/link';
 import { supabase } from '@/lib/supabaseClient';
 import { isVoidTransaction } from '@/lib/voidTx';
 import { toast } from '@/lib/toast';
-import { updateWithFallback } from '@/lib/safeWrite';
+import { postStaffApi } from '@/lib/staffApiClient';
+import { staffRelogin } from '@/lib/staffRelogin';
 import FinanceReconBoard from '@/components/FinanceReconBoard';
 import FinanceAlertListener from '@/components/FinanceAlertListener';
 
@@ -83,14 +84,11 @@ export default function FinanceWorkspacePanel() {
   const saveCoa = async () => {
     setSavingCoa(true);
     const arr = coaText.split('\n').map((s) => s.trim()).filter(Boolean);
-    const { error } = await updateWithFallback(
-      'app_settings',
-      [{ coa_categories: JSON.stringify(arr) }],
-      { column: 'id', value: 1 }
-    );
+    const res = await postStaffApi('/api/owner/app-settings', { attempts: [{ coa_categories: JSON.stringify(arr) }] });
     setSavingCoa(false);
-    if (error) {
-      toast('Gagal simpan COA: ' + error.message, 'err');
+    if (!res.ok) {
+      if (res.relogin && confirm(`${res.error}\n\nMasuk ulang sekarang?`)) staffRelogin();
+      else toast('Gagal simpan COA: ' + res.error, 'err');
       return;
     }
     toast('COA tersimpan.', 'ok');
@@ -99,14 +97,16 @@ export default function FinanceWorkspacePanel() {
   const saveExpense = async (row: any) => {
     const draft = editExp[row.id] || { amount: String(row.amount || ''), description: row.description || '' };
     setBusyExp(row.id);
-    const { error } = await updateWithFallback(
-      'expenses',
-      [{ amount: Number(draft.amount) || 0, description: draft.description }],
-      { column: 'id', value: row.id }
-    );
+    const res = await postStaffApi('/api/staff/expense', {
+      op: 'update',
+      id: row.id,
+      amount: Number(draft.amount) || 0,
+      description: draft.description
+    });
     setBusyExp(null);
-    if (error) {
-      toast('Gagal revisi: ' + error.message, 'err');
+    if (!res.ok) {
+      if (res.relogin && confirm(`${res.error}\n\nMasuk ulang sekarang?`)) staffRelogin();
+      else toast('Gagal revisi: ' + res.error, 'err');
       return;
     }
     toast('Entri pengeluaran diperbarui.', 'ok');

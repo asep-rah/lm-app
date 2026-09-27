@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { updateWithFallback } from '@/lib/safeWrite';
 import { toast } from '@/lib/toast';
+import { postStaffApi } from '@/lib/staffApiClient';
+import { staffRelogin } from '@/lib/staffRelogin';
 import {
   PR_STATUS,
   isPrPending,
@@ -115,44 +117,24 @@ export default function OwnerApprovalsTab({ currentUserName }: { currentUserName
     setApprovalBusy(null);
   };
 
-  const handleApproveKasbon = async (loan: any) => {
+  // Keputusan kasbon hanya lewat server (owner, diaudit).
+  const decideKasbon = async (loan: { id: string }, action: 'approve' | 'reject') => {
     setApprovalBusy(loan.id);
-    const amt = Number(loan.amount || loan.total_loan) || 0;
-    const { error } = await updateWithFallback(
-      'employee_loans',
-      [
-        {
-          status: 'Active',
-          approved_by: currentUserName || 'Owner',
-          total_loan: amt || loan.total_loan,
-          monthly_deduction: Number(loan.monthly_deduction) || Math.ceil(amt / 5) || 0,
-          employee_name: loan.employee_name || currentUserName
-        },
-        { status: 'Active', approved_by: currentUserName || 'Owner' },
-        { status: 'Active' }
-      ],
-      { column: 'id', value: loan.id }
-    );
-    await markSubmission(loan.id, 'approved');
-    if (error) toast(error.message, 'err');
-    else toast('Kasbon staf disetujui.', 'ok');
+    const res = await postStaffApi('/api/owner/employee-loan', { id: loan.id, action });
+    if (res.ok) await markSubmission(loan.id, action === 'approve' ? 'approved' : 'rejected');
+    if (!res.ok) {
+      if (res.relogin && confirm(`${res.error}\n\nMasuk ulang sekarang?`)) staffRelogin();
+      else toast(res.error, 'err');
+    } else toast(action === 'approve' ? 'Kasbon staf disetujui.' : 'Kasbon ditolak.', 'ok');
     await refresh();
     setApprovalBusy(null);
   };
 
+  const handleApproveKasbon = (loan: any) => decideKasbon(loan, 'approve');
+
   const handleRejectKasbon = async (loan: any) => {
     if (!confirm('Tolak kasbon staf ini?')) return;
-    setApprovalBusy(loan.id);
-    const { error } = await updateWithFallback(
-      'employee_loans',
-      [{ status: 'Rejected' }, { status: 'rejected' }],
-      { column: 'id', value: loan.id }
-    );
-    await markSubmission(loan.id, 'rejected');
-    if (error) toast(error.message, 'err');
-    else toast('Kasbon ditolak.', 'ok');
-    await refresh();
-    setApprovalBusy(null);
+    await decideKasbon(loan, 'reject');
   };
 
   const handleUpdateIssueStatus = async (id: string, status: string) => {

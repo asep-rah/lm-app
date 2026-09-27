@@ -576,6 +576,10 @@ A: `docs/SECURITY_AND_MAINTENANCE.md` (env, SQL, checklist fraud mingguan).
 | GET | `/api/pay/check-status` | Sesuai implementasi route (ops/order context) |
 | POST | `/api/pay/mark-manual` | Sesi staf + role manual; tulis dengan service role; diaudit |
 | POST | `/api/owner/void-transaction` | Sesi staf + role owner; alasan wajib; diaudit (`transaction_voided`) |
+| POST | `/api/owner/app-settings` | Sesi staf + role owner (tim keuangan: hanya `coa_categories`); kolom di-whitelist; diaudit (`app_settings_updated`) |
+| POST | `/api/staff/expense` | `op: create` sesi staf (created_by = staf login, cek tutup buku, pengajuan pembelian tidak dobel); `op: update` owner/tim keuangan, nilai lama & baru diaudit |
+| POST | `/api/staff/membership-log` | Sesi staf; harga/saldo/komisi dari paket (`lib/memberPackages.ts`); diaudit (`membership_sold`) |
+| POST | `/api/owner/employee-loan` | Sesi staf + role owner; `approve` / `reject` (hanya pending) / `paid`; diaudit |
 | POST | `/api/pay/resync` | Bearer ops + role resync |
 | POST | `/api/deposit/mutate` | Bearer ops + role manual (termasuk kasir) |
 | GET | `/api/cron/sync-payments` | Bearer `CRON_SECRET` |

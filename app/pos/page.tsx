@@ -33,6 +33,8 @@ import { createPaymentVerifyTask, isCsVerifiedPaid, isNonCashVerifyMethod, isPay
 import { sendInvoiceToLiveChat } from '@/lib/chatInvoice';
 import { requestMayarInvoice, simulateMayarAutoPay } from '@/lib/mayar';
 import { isStaffSessionError, staffRelogin } from '@/lib/staffRelogin';
+import { postStaffApi } from '@/lib/staffApiClient';
+import { posMemberPackageOf } from '@/lib/memberPackages';
 import { paymentOpsClientHeaders } from '@/lib/requirePaymentOpsAuth';
 import { toast } from '@/lib/toast';
 import WalkInPaySuccessModal from '@/components/pos/WalkInPaySuccessModal';
@@ -2251,16 +2253,11 @@ const handleApplyLoan = async (e: React.FormEvent) => {
   const handleAddMembership = async (e: React.FormEvent) => {
     e.preventDefault(); if (!selectedOutlet || !memberPhone || !memberName) return alert('Lengkapi data!'); setIsSubmitting(true);
     const normalizedPhone = cleanPhone(memberPhone);
-    let price = 0; let balanceAdded = 0; let commission = 0;
-    if (memberPackage === 'Silver') { price = 300000; balanceAdded = 320000; commission = 5000; }
-    else if (memberPackage === 'Gold') { price = 500000; balanceAdded = 550000; commission = 10000; }
-    else if (memberPackage === 'Platinum') { price = 900000; balanceAdded = 1000000; commission = 20000; }
+    const pkg = posMemberPackageOf(memberPackage);
+    if (!pkg) { setIsSubmitting(false); return alert('Pilih paket member.'); }
+    const { price, balanceAdded } = pkg;
 
     const { data: existingCust } = await supabase.from('customers').select('*').eq('phone', normalizedPhone).limit(1);
-    let commissionOwner = employeeName;
-    if (existingCust && existingCust.length > 0) {
-      commissionOwner = existingCust[0].registered_by || employeeName;
-    }
 
     let newBalance = balanceAdded;
     try {
@@ -2305,7 +2302,18 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       ...(existingCust?.[0] ? {} : { registered_by: employeeName })
     }).eq('phone', targetPhone);
 
-    const { error: logErr } = await supabase.from('membership_logs').insert([{ outlet_id: selectedOutlet, processed_by: employeeName, commission_owner: commissionOwner, customer_phone: normalizedPhone, package_name: memberPackage, price: price, balance_added: balanceAdded, commission: commission, order_type: memberOrderType }]);
+    // Omset & komisi member dicatat server (harga/komisi dari paket, staf login, diaudit).
+    const logRes = await postStaffApi('/api/staff/membership-log', {
+      outletId: selectedOutlet,
+      phone: normalizedPhone,
+      package: pkg.name,
+      orderType: memberOrderType
+    });
+    const logErr = logRes.ok ? null : { message: logRes.error };
+    if (logRes.relogin && confirm(`${logRes.error}\n\nMasuk ulang sekarang?`)) {
+      setIsSubmitting(false);
+      return staffRelogin();
+    }
     if (!logErr) {
       await logCashflow({
         outlet_id: selectedOutlet,
@@ -2323,7 +2331,21 @@ const handleApplyLoan = async (e: React.FormEvent) => {
 
   const handleExpenseSubmit = async (e: React.FormEvent) => {
     e.preventDefault(); if (!selectedOutlet || !expAmount) return; setIsSubmitting(true);
-    await supabase.from('expenses').insert([{ outlet_id: selectedOutlet, category: expCategory, amount: Number(expAmount), description: expDesc }]);
+    // Pengeluaran kasir dibayar dari kas laci; dicatat server (staf login, diaudit).
+    const expRes = await postStaffApi('/api/staff/expense', {
+      op: 'create',
+      outletId: selectedOutlet,
+      category: expCategory,
+      amount: Number(expAmount),
+      description: expDesc,
+      paidFrom: 'laci'
+    });
+    if (!expRes.ok) {
+      setIsSubmitting(false);
+      if (expRes.relogin && confirm(`${expRes.error}\n\nMasuk ulang sekarang?`)) staffRelogin();
+      else alert('❌ Gagal: ' + expRes.error);
+      return;
+    }
     setExpAmount(''); setExpDesc(''); setSuccessMsg('✅ Pengeluaran Dicatat!'); refreshData(); setTimeout(() => setSuccessMsg(''), 3000); setIsSubmitting(false);
   };
 

@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabaseClient';
-import { updateWithFallback } from '@/lib/safeWrite';
+import { postStaffApi } from '@/lib/staffApiClient';
 import type { PnlMonthRef } from '@/lib/pnlReport';
 
 export const FA_GROUPS = [
@@ -315,17 +315,16 @@ export async function saveOutletBook(book: OutletBook): Promise<{ error: string 
   if (!overrides || typeof overrides !== 'object') overrides = {};
   overrides.__outlet_books = current;
 
-  const { error } = await updateWithFallback(
-    'app_settings',
-    [
+  // app_settings hanya ditulis server (owner, diaudit).
+  const res = await postStaffApi('/api/owner/app-settings', {
+    attempts: [
       { outlet_books: current, outlet_overrides: overrides },
       { outlet_books: current },
       { outlet_overrides: overrides },
       { outlet_overrides: JSON.stringify(overrides) }
-    ],
-    { column: 'id', value: 1 }
-  );
-  return { error: error?.message || null };
+    ]
+  });
+  return { error: res.ok ? null : res.error };
 }
 
 export async function findOutletIdByName(name: string): Promise<string | null> {

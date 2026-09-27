@@ -15,11 +15,17 @@ const OUTLET = '0a000000-0000-4000-8000-00000000000a';
 const OUTLET_B = '0b000000-0000-4000-8000-00000000000b'; // void test; keeps OUTLET's drawer untouched
 
 await startMock(54331);
-state.outlets = [{ id: OUTLET, name: 'Laundrivery Dago' }];
+state.outlets = [{ id: OUTLET, name: 'Laundrivery Dago' }, { id: OUTLET_B, name: 'Laundrivery Buah Batu' }];
 state.employees = [
   { id: '1', name: 'Owner', role: 'owner', username: 'owner' },
   { id: '3', name: 'Kasir A', role: 'kasir', username: 'kasir' },
-  { id: '4', name: 'CS Rina', role: 'cs', username: 'cs' }
+  { id: '4', name: 'CS Rina', role: 'cs', username: 'cs' },
+  { id: '5', name: 'Fina', role: 'finance', username: 'fina' }
+];
+state.customers = [{ id: 'c1', phone: '081234567890', name: 'Bu Ani', registered_by: 'Kasir A' }];
+state.employee_loans = [
+  { id: 'L1', employee_name: 'Kasir A', amount: 100000, status: 'pending' },
+  { id: 'L2', employee_name: 'Kasir A', amount: 50000, status: 'pending' }
 ];
 state.transactions = [
   { id: 't1', outlet_id: OUTLET, amount: 100000, delivery_fee: 0, order_type: 'Offline', payment_method: 'Cash', is_paid: true, payment_status: 'paid', status: 'Selesai', created_at: '2026-01-10T03:00:00.000Z' },
@@ -34,7 +40,7 @@ state.membership_logs = [{ id: 'm1', outlet_id: OUTLET, price: 50000, order_type
 state.expenses = [{ id: 'e1', outlet_id: OUTLET, amount: 30000, category: '600006 · ATK', created_at: '2026-01-12T03:00:00.000Z' }];
 state.cash_deposits = [{ id: 'd1', outlet_id: OUTLET, amount_cash: 20000, admin_fee: 0, net_deposit_amount: 20000, status: 'BALANCED', paid_at: '2026-01-13T03:00:00.000Z', created_at: '2026-01-13T02:00:00.000Z' }];
 state.cash_closings = [];
-state.app_settings = [{ id: 1, outlet_books: {} }];
+state.app_settings = [{ id: 1, outlet_books: {}, coa_categories: '[]', dynamic_services: '[]' }];
 state.finance_settlements = [];
 state.finance_period_locks = [];
 state.audit_logs = [];
@@ -200,6 +206,89 @@ await step('Void: owner only, reason required, service-role write, audited, idem
   assert.ok(state.audit_logs.some((a) => a.action === 'transaction_voided' && a.entity_id === 't3'));
   const again = await call('/api/owner/void-transaction', { body, cookie: staff('1', 'owner') });
   assert.equal(again.json?.already, true);
+});
+
+await step('app_settings: owner saves; finance only COA; kasir refused; unknown column refused; audited', async () => {
+  const body = { attempts: [{ dynamic_services: '[{"id":"svc1","price":9000}]' }] };
+  assert.equal((await call('/api/owner/app-settings', { body })).status, 401);
+  assert.equal((await call('/api/owner/app-settings', { body, cookie: staff('3', 'kasir') })).status, 403);
+  assert.equal((await call('/api/owner/app-settings', { body, cookie: staff('5', 'finance') })).status, 403);
+  assert.equal((await call('/api/owner/app-settings', { body: { attempts: [{ is_admin: true }] }, cookie: staff('1', 'owner') })).status, 400);
+  const coa = await call('/api/owner/app-settings', { body: { attempts: [{ coa_categories: '["600006 · ATK"]' }] }, cookie: staff('5', 'finance') });
+  assert.equal(coa.status, 200, JSON.stringify(coa.json));
+  assert.equal(state.app_settings[0].coa_categories, '["600006 · ATK"]');
+  const ok = await call('/api/owner/app-settings', { body, cookie: staff('1', 'owner') });
+  assert.equal(ok.status, 200, JSON.stringify(ok.json));
+  assert.match(state.app_settings[0].dynamic_services, /9000/);
+  assert.ok(state.audit_logs.some((a) => a.action === 'app_settings_updated' && a.meta?.keys?.includes('dynamic_services')));
+});
+await step('Expense create: staff session; created_by = logged-in staff; bad source refused; requisition not doubled; closed period refused', async () => {
+  const body = { op: 'create', outletId: OUTLET, category: '600006 · ATK', amount: 12000, description: 'lakban', paidFrom: 'laci' };
+  assert.equal((await call('/api/staff/expense', { body })).status, 401);
+  assert.equal((await call('/api/staff/expense', { body: { ...body, paidFrom: 'brankas' }, cookie: staff('3', 'kasir') })).status, 400);
+  assert.equal((await call('/api/staff/expense', { body: { ...body, amount: -5 }, cookie: staff('3', 'kasir') })).status, 400);
+  const r = await call('/api/staff/expense', { body, cookie: staff('3', 'kasir') });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const row = state.expenses.at(-1);
+  assert.equal(row.created_by, 'Kasir A');
+  assert.equal(row.paid_from, 'laci');
+  const req = { ...body, paidFrom: 'bank', requisitionId: 'pr-1', proofUrl: 'data:image/png;base64,xx' };
+  assert.equal((await call('/api/staff/expense', { body: req, cookie: staff('5', 'finance') })).status, 200);
+  const again = await call('/api/staff/expense', { body: req, cookie: staff('5', 'finance') });
+  assert.equal(again.json?.already, true);
+  assert.equal(state.expenses.filter((e) => e.requisition_id === 'pr-1').length, 1);
+  assert.equal(state.expenses.find((e) => e.requisition_id === 'pr-1').proof_url, undefined);
+  const today = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10);
+  state.finance_period_locks.push({ outlet_id: OUTLET_B, locked_through: today });
+  const locked = await call('/api/staff/expense', { body: { ...body, outletId: OUTLET_B }, cookie: staff('3', 'kasir') });
+  assert.equal(locked.status, 409, JSON.stringify(locked.json));
+  state.finance_period_locks = state.finance_period_locks.filter((l) => l.outlet_id !== OUTLET_B);
+});
+await step('Expense revision: owner / finance only; before-after audited; closed period refused', async () => {
+  const id = state.expenses.find((e) => e.description === 'lakban').id;
+  const body = { op: 'update', id, amount: 15000, description: 'lakban + tali' };
+  assert.equal((await call('/api/staff/expense', { body, cookie: staff('3', 'kasir') })).status, 403);
+  const r = await call('/api/staff/expense', { body, cookie: staff('5', 'finance') });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  assert.equal(Number(state.expenses.find((e) => e.id === id).amount), 15000);
+  const log = state.audit_logs.find((a) => a.action === 'expense_revised' && a.entity_id === id);
+  assert.equal(log?.meta?.before?.amount, 12000);
+  const saved = state.finance_period_locks;
+  state.finance_period_locks = [{ outlet_id: OUTLET, locked_through: '2026-01-31' }];
+  const locked = await call('/api/staff/expense', { body: { op: 'update', id: 'e1', amount: 1 }, cookie: staff('1', 'owner') });
+  state.finance_period_locks = saved;
+  assert.equal(locked.status, 409, JSON.stringify(locked.json));
+  assert.equal(Number(state.expenses.find((e) => e.id === 'e1').amount), 30000);
+});
+await step('Membership log: price & commission from the package (not the browser); commission owner = registering staff', async () => {
+  const body = { outletId: OUTLET, phone: '081234567890', package: 'Gold', orderType: 'Offline', price: 1, commission: 999999 };
+  assert.equal((await call('/api/staff/membership-log', { body })).status, 401);
+  assert.equal((await call('/api/staff/membership-log', { body: { ...body, package: 'Diamond' }, cookie: staff('4', 'cs') })).status, 400);
+  const r = await call('/api/staff/membership-log', { body, cookie: staff('4', 'cs') });
+  assert.equal(r.status, 200, JSON.stringify(r.json));
+  const row = state.membership_logs.at(-1);
+  assert.equal(Number(row.price), 500000);
+  assert.equal(Number(row.balance_added), 550000);
+  assert.equal(Number(row.commission), 10000);
+  assert.equal(row.processed_by, 'CS Rina');
+  assert.equal(row.commission_owner, 'Kasir A');
+  assert.ok(state.audit_logs.some((a) => a.action === 'membership_sold'));
+});
+await step('Kasbon decisions: owner only; approve once; paid only after approval; audited', async () => {
+  assert.equal((await call('/api/owner/employee-loan', { body: { id: 'L1', action: 'approve' }, cookie: staff('3', 'kasir') })).status, 403);
+  assert.equal((await call('/api/owner/employee-loan', { body: { id: 'L2', action: 'paid' }, cookie: staff('1', 'owner') })).status, 409);
+  const ok = await call('/api/owner/employee-loan', { body: { id: 'L1', action: 'approve' }, cookie: staff('1', 'owner') });
+  assert.equal(ok.status, 200, JSON.stringify(ok.json));
+  const l1 = state.employee_loans.find((l) => l.id === 'L1');
+  assert.equal(l1.status, 'Active');
+  assert.equal(l1.approved_by, 'Owner');
+  assert.equal(Number(l1.monthly_deduction), 20000);
+  assert.equal((await call('/api/owner/employee-loan', { body: { id: 'L1', action: 'approve' }, cookie: staff('1', 'owner') })).status, 409);
+  assert.equal((await call('/api/owner/employee-loan', { body: { id: 'L1', action: 'paid' }, cookie: staff('1', 'owner') })).status, 200);
+  assert.equal(state.employee_loans.find((l) => l.id === 'L1').status, 'Paid');
+  assert.equal((await call('/api/owner/employee-loan', { body: { id: 'L2', action: 'reject' }, cookie: staff('1', 'owner') })).status, 200);
+  assert.equal(state.employee_loans.find((l) => l.id === 'L2').status, 'Rejected');
+  assert.ok(state.audit_logs.some((a) => a.action === 'employee_loan_approve' && a.entity_id === 'L1'));
 });
 
 process.kill(-app.pid, 'SIGKILL');

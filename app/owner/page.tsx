@@ -9,7 +9,8 @@ import { isVoidTransaction } from '@/lib/voidTx';
 import { canAccessSettings, homePathForRole, isOwnerRole, isWorkspaceRole } from '@/lib/staffSession';
 import { isMultiOutletRole, staffRolesForForm } from '@/lib/staffRoles';
 import { parseAssignedOutletIds } from '@/lib/driverAttendance';
-import { updateWithFallback } from '@/lib/safeWrite';
+import { postStaffApi } from '@/lib/staffApiClient';
+import { staffRelogin } from '@/lib/staffRelogin';
 import FinanceAlertListener from '@/components/FinanceAlertListener';
 import WasherFraudAlertListener from '@/components/WasherFraudAlertListener';
 import OwnerActionPriorityStrip from '@/components/owner/OwnerActionPriorityStrip';
@@ -622,12 +623,12 @@ export default function Dashboard() {
 
   const handleMarkLoanPaid = async (id: string) => {
     if (!confirm('Tandai kasbon ini sudah lunas?')) return;
-    const { error } = await updateWithFallback(
-      'employee_loans',
-      [{ status: 'Paid' }, { status: 'lunas' }],
-      { column: 'id', value: id }
-    );
-    if (error) return alert(error.message);
+    const res = await postStaffApi('/api/owner/employee-loan', { id, action: 'paid' });
+    if (!res.ok) {
+      if (res.relogin && confirm(`${res.error}\n\nMasuk ulang sekarang?`)) staffRelogin();
+      else alert(res.error);
+      return;
+    }
     setLoansList(loansList.map((l) => (l.id === id ? { ...l, status: 'Paid' } : l)));
   };
 
@@ -774,19 +775,14 @@ export default function Dashboard() {
       outlet_overrides: JSON.stringify(outletOverrides),
       supervisor_mapping: JSON.stringify(supervisorMapping)
     };
-    let { error } = await supabase.from('app_settings').update(updatePayload).eq('id', 1);
-    if (error && String(error.message || '').includes('receipt_layout')) {
-      delete updatePayload.receipt_layout;
-      const fallbackRes = await supabase.from('app_settings').update(updatePayload).eq('id', 1);
-      error = fallbackRes.error;
-    }
-    if (error && error.message?.includes('supervisor_mapping')) {
-      delete updatePayload.supervisor_mapping;
-      const fallbackRes = await supabase.from('app_settings').update(updatePayload).eq('id', 1);
-      error = fallbackRes.error;
-      if (!error) { alert('⚠️ Pengaturan Umum Disimpan!\n\n(Catatan: Untuk menyimpan mapping supervisor, jalankan skrip SQL di Supabase).'); setIsSaving(false); return; }
-    }
-    if (!error) alert('✅ Pengaturan Berhasil Disimpan!'); else alert('❌ Gagal: ' + error.message);
+    // Disimpan server (owner, diaudit); kolom opsional yang belum ada di DB lama dilepas bertahap.
+    const without = (keys: string[]) => Object.fromEntries(Object.entries(updatePayload).filter(([k]) => !keys.includes(k)));
+    const res = await postStaffApi('/api/owner/app-settings', {
+      attempts: [updatePayload, without(['receipt_layout']), without(['supervisor_mapping']), without(['receipt_layout', 'supervisor_mapping'])]
+    });
+    if (res.ok) alert('✅ Pengaturan Berhasil Disimpan!');
+    else if (res.relogin && confirm(`${res.error}\n\nMasuk ulang sekarang?`)) staffRelogin();
+    else alert('❌ Gagal: ' + res.error);
     setIsSaving(false);
   };
 
