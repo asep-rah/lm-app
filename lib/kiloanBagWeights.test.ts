@@ -6,6 +6,7 @@ import {
   DEFAULT_BAG_CATEGORY_WEIGHTS_G,
   emptyBagCategoryCounts,
   kiloanOrderKgOf,
+  kiloanMinimumTopUp,
   KILOAN_MIN_ORDER_KG,
   summarizeBagWeight
 } from './kiloanBagWeights';
@@ -107,5 +108,30 @@ describe('kiloanOrderKgOf — minimum 3kg berlaku di level ORDER (jumlah semua k
 
   it('empty lines sum to 0', () => {
     assert.equal(kiloanOrderKgOf([]), 0);
+  });
+});
+
+describe('kiloanMinimumTopUp — di bawah 3kg tetap boleh, ditagih 3kg', () => {
+  it('1,7 kg × Rp 8.000 → kurang 1,3 kg, tambah Rp 10.400 (total = 3 kg)', () => {
+    const lines = [{ kg: 1.7, price: 8000 }];
+    const top = kiloanMinimumTopUp(lines);
+    assert.equal(top.shortKg, 1.3);
+    assert.equal(top.amount, 10400);
+    assert.equal(13600 + top.amount, 3 * 8000);
+  });
+
+  it('tepat 3 kg atau lebih → tidak ada tambahan', () => {
+    assert.deepEqual(kiloanMinimumTopUp([{ kg: 3, price: 8000 }]), { shortKg: 0, amount: 0 });
+    assert.deepEqual(kiloanMinimumTopUp([{ kg: 2, price: 8000 }, { kg: 1.5, price: 12000 }]), { shortKg: 0, amount: 0 });
+  });
+
+  it('beberapa paket < 3 kg → kekurangan dihitung dengan tarif termurah', () => {
+    const top = kiloanMinimumTopUp([{ kg: 1, price: 12000 }, { kg: 1, price: 8000 }]);
+    assert.equal(top.shortKg, 1);
+    assert.equal(top.amount, 8000);
+  });
+
+  it('tanpa kiloan → tidak ada tambahan', () => {
+    assert.deepEqual(kiloanMinimumTopUp([]), { shortKg: 0, amount: 0 });
   });
 });
