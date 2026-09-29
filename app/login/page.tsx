@@ -52,6 +52,17 @@ async function loginViaAnonFallback(username: string, password: string) {
   return { user: safe };
 }
 
+/** Hapus data login staf yang tersimpan di browser (sesi lama / role tidak dikenal). */
+function clearStaffLocalSession() {
+  for (const k of ['laundry_user', 'laundry_owner_user', 'laundry_driver_user', 'staff_role', 'user_id']) {
+    try {
+      localStorage.removeItem(k);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 export default function LoginPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -62,19 +73,31 @@ export default function LoginPage() {
     const raw = localStorage.getItem('laundry_owner_user') || localStorage.getItem('laundry_user');
     if (!raw) return;
     try {
-      const user = JSON.parse(raw);
-      window.location.href = homePathForRole(user.role);
+      const target = homePathForRole(JSON.parse(raw)?.role);
+      // Jangan pernah redirect ke /login dari /login (loop refresh). Role tidak
+      // dikenal → hapus sesi lama, tampilkan form login.
+      if (target === '/login') {
+        clearStaffLocalSession();
+        return;
+      }
+      window.location.href = target;
     } catch {
-      /* ignore */
+      clearStaffLocalSession();
     }
   }, []);
 
   const finishLogin = (user: any) => {
     const role = (user.role || 'kasir').toLowerCase();
+    const target = homePathForRole(role);
+    if (target === '/login') {
+      setIsSubmitting(false);
+      setErrorMsg(`Role "${role}" belum punya halaman. Hubungi owner untuk mengatur role Anda.`);
+      return;
+    }
     localStorage.setItem('laundry_user', JSON.stringify(user));
     localStorage.setItem('laundry_owner_user', JSON.stringify(user));
     if (user?.id) localStorage.setItem('user_id', String(user.id));
-    window.location.href = homePathForRole(role);
+    window.location.href = target;
   };
 
   const handleLogin = async (e: React.FormEvent) => {

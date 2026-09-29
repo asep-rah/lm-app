@@ -95,6 +95,9 @@ export const homePathForRole = (role: string) => {
   if (['driver', 'courier', 'kurir'].includes(r)) return '/driver';
   if (r === 'investor') return '/investor';
   if (r === 'kasir' || r === 'pos') return '/pos';
+  // Supervisor, admin ops, finance, head, dst. punya halaman sendiri. Sebelumnya
+  // jatuh ke '/login' → /login mengarahkan balik ke '/login' → refresh tanpa henti.
+  if (isWorkspaceRole(r)) return '/workspace';
   return '/login';
 };
 
