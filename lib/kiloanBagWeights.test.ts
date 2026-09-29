@@ -7,6 +7,7 @@ import {
   emptyBagCategoryCounts,
   kiloanOrderKgOf,
   kiloanMinimumTopUp,
+  cartKiloanMinimumTopUp,
   KILOAN_MIN_ORDER_KG,
   summarizeBagWeight
 } from './kiloanBagWeights';
@@ -111,7 +112,7 @@ describe('kiloanOrderKgOf — minimum 3kg berlaku di level ORDER (jumlah semua k
   });
 });
 
-describe('kiloanMinimumTopUp — di bawah 3kg tetap boleh, ditagih 3kg', () => {
+describe('kiloanMinimumTopUp — di bawah 3kg tetap boleh, dihitung 3kg', () => {
   it('1,7 kg × Rp 8.000 → kurang 1,3 kg, tambah Rp 10.400 (total = 3 kg)', () => {
     const lines = [{ kg: 1.7, price: 8000 }];
     const top = kiloanMinimumTopUp(lines);
@@ -133,5 +134,30 @@ describe('kiloanMinimumTopUp — di bawah 3kg tetap boleh, ditagih 3kg', () => {
 
   it('tanpa kiloan → tidak ada tambahan', () => {
     assert.deepEqual(kiloanMinimumTopUp([]), { shortKg: 0, amount: 0 });
+  });
+});
+
+describe('cartKiloanMinimumTopUp — keranjang POS', () => {
+  it('1,7 kg reguler Rp 8.000 → +Rp 10.400', () => {
+    const top = cartKiloanMinimumTopUp([{ type: 'kg', qty: 1.7, basePrice: 8000, price: 8000 }]);
+    assert.deepEqual(top, { shortKg: 1.3, amount: 10400 });
+  });
+
+  it('pengali durasi ikut (Express ×2) → kekurangan ×Rp 16.000/kg', () => {
+    const top = cartKiloanMinimumTopUp([{ type: 'kg', qty: 2, basePrice: 8000, price: 8000 }], 2);
+    assert.deepEqual(top, { shortKg: 1, amount: 16000 });
+  });
+
+  it('item satuan tidak dihitung ke berat kiloan', () => {
+    const top = cartKiloanMinimumTopUp([
+      { type: 'kg', qty: 2.5, basePrice: 8000 },
+      { type: 'pcs', qty: 5, basePrice: 25000 }
+    ]);
+    assert.deepEqual(top, { shortKg: 0.5, amount: 4000 });
+  });
+
+  it('hanya satuan / sudah ≥ 3 kg → 0', () => {
+    assert.deepEqual(cartKiloanMinimumTopUp([{ type: 'pcs', qty: 1, basePrice: 25000 }]), { shortKg: 0, amount: 0 });
+    assert.deepEqual(cartKiloanMinimumTopUp([{ type: 'kg', qty: 4, basePrice: 8000 }]), { shortKg: 0, amount: 0 });
   });
 });

@@ -110,3 +110,42 @@ describe('service summary', () => {
     assert.equal(serviceSummaryOf({ service_type: 'Laundry Kiloan (Reguler)' }), 'Laundry Kiloan (Reguler)');
   });
 });
+
+describe('priceBreakdownOf — minimal 3 kg', () => {
+  it('estimasi customer 1,7 kg: baris penyesuaian membuat item = total', () => {
+    const bd = priceBreakdownOf({
+      items: [{ name: 'Cuci Kering Gosok', type: 'kg', weight: 1.7, price: 8000, duration: 'Reguler (3 Hari)' }],
+      delivery_fee: 0,
+      notes: 'Detail: Kiloan: Cuci Kering Gosok 1.7Kg | Minimal 3 kg: est. ~1.7 kg, dihitung 3 kg (+Rp 10.400) | Est. Tagihan: Rp 24.000'
+    });
+    assert.equal(bd.isEstimate, true);
+    assert.deepEqual(bd.items.map((i) => i.amount), [13600, 10400]);
+    assert.equal(bd.itemsTotal, 24000);
+    assert.equal(bd.total, 24000);
+    assert.deepEqual(bd.discounts, []);
+  });
+
+  it('nota POS Express 2 kg: kekurangan dihitung dengan tarif Express', () => {
+    const bd = priceBreakdownOf({
+      receipt_number: 'TRX-1',
+      duration: 'Express 6 Jam',
+      items: [{ name: 'Cuci Kering Gosok', type: 'kg', qty: 2, basePrice: 8000, price: 16000 }],
+      amount: 48000,
+      delivery_fee: 0,
+      notes: 'Minimal 3 kg: timbang 2 kg, dihitung 3 kg'
+    });
+    const top = bd.items.find((i) => i.name === 'Penyesuaian minimal 3 kg');
+    assert.equal(top?.amount, 16000);
+    assert.equal(bd.total, 48000);
+  });
+
+  it('nota lama tanpa catatan minimal tidak berubah', () => {
+    const bd = priceBreakdownOf({
+      receipt_number: 'TRX-2',
+      items: [{ name: 'Cuci Kering Gosok', type: 'kg', qty: 1.7, basePrice: 8000, price: 8000 }],
+      amount: 13600,
+      notes: ''
+    });
+    assert.equal(bd.items.length, 1);
+  });
+});
