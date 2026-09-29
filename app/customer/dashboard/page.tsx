@@ -30,6 +30,7 @@ import {
   BAG_CATEGORY_ORDER,
   emptyBagCategoryCounts,
   KILOAN_MIN_ORDER_KG,
+  kiloanMinimumTopUp,
   kiloanOrderKgOf,
   MAX_KILOAN_BAGS,
   summarizeBagWeight,
@@ -2081,8 +2082,15 @@ function CustomerDashboardPage() {
   // proses cuci (lebih dari 1 paket = dicuci terpisah).
   const kiloanBagTotal = kiloanLines.reduce((sum, k) => sum + Math.max(1, Number(k.bags) || 1), 0);
   const kiloanWashFinal = kiloanLines.length > 1 ? 'Pisah Perkantong' : 'Gabung Semua';
-  const kiloanSubtotal = kiloanLines.reduce((sum, line) => sum + kiloanLineTotal(line.price, line.kg), 0);
   const kiloanTotalKg = kiloanOrderKgOf(kiloanLines);
+  // Di bawah minimal 3 kg tetap boleh dipesan, tetapi ditagih 3 kg.
+  const kiloanTopUp = kiloanMinimumTopUp(kiloanLines);
+  const kiloanSubtotal =
+    kiloanLines.reduce((sum, line) => sum + kiloanLineTotal(line.price, line.kg), 0) + kiloanTopUp.amount;
+  const kiloanMinimumNote =
+    kiloanTopUp.amount > 0
+      ? `Minimal ${KILOAN_MIN_ORDER_KG} kg: est. ~${kiloanTotalKg} kg, ditagih ${KILOAN_MIN_ORDER_KG} kg (+${idr(kiloanTopUp.amount)})`
+      : '';
 
   let satuanSubtotal = 0;
   if (isSatuanChecked) {
@@ -2154,9 +2162,6 @@ function CustomerDashboardPage() {
       }
       if (isKiloanChecked && kiloanLines.length === 0) {
         return 'Tekan "Tambah Paket Kiloan Ini" untuk memasukkan kiloan, atau hapus centang Paket Laundry Kiloan.';
-      }
-      if (kiloanLines.length > 0 && kiloanOrderKgOf(kiloanLines) < KILOAN_MIN_ORDER_KG) {
-        return `Total kiloan minimal ${KILOAN_MIN_ORDER_KG} kg (saat ini ~${kiloanOrderKgOf(kiloanLines)} kg). Tambah cucian kiloan lagi.`;
       }
       if (isSatuanChecked && cartSatuan.length === 0) {
         return 'Tekan "Tambah Item Satuan Ini" untuk memasukkan item satuan, atau hapus centang Items Satuan.';
@@ -2235,6 +2240,7 @@ function CustomerDashboardPage() {
       }).join(', ');
       detailLines.push(`Satuan: ${items}`);
     }
+    if (kiloanMinimumNote) detailLines.push(kiloanMinimumNote);
     if (claimedPromo) detailLines.push(`Promo: ${claimedPromo.title}`);
     if (loyaltyDiscountVal > 0) detailLines.push(`Poin loyalty: -${idr(loyaltyDiscountVal)}`);
     detailLines.push(`Est. Tagihan: Rp ${grandTotalEstimate.toLocaleString('id-ID')}`);
@@ -3198,7 +3204,7 @@ function CustomerDashboardPage() {
                         Berat & harga di atas adalah ESTIMASI. Kasir akan menimbang ulang cucian di outlet dan mengonfirmasi tagihan final.
                       </p>
                       <p className="text-[10px] bg-amber-50 border border-amber-100 text-amber-800 rounded-xl px-2.5 py-1.5 font-semibold">
-                        Info: Total kiloan minimal {KILOAN_MIN_ORDER_KG} kg per order (1 Mesin Cuci = 1 Customer, pakaian tidak dicampur dengan pelanggan lain).
+                        Info: Kiloan minimal {KILOAN_MIN_ORDER_KG} kg per order (1 Mesin Cuci = 1 Customer, pakaian tidak dicampur dengan pelanggan lain). Di bawah {KILOAN_MIN_ORDER_KG} kg tetap bisa dipesan, ditagih {KILOAN_MIN_ORDER_KG} kg.
                       </p>
 
                       {kiloanFormError && (
@@ -3211,9 +3217,9 @@ function CustomerDashboardPage() {
                       </button>
                       {cartKiloan.length > 0 && (
                         <div className="space-y-1.5">
-                          {kiloanTotalKg < KILOAN_MIN_ORDER_KG && (
+                          {kiloanTopUp.amount > 0 && (
                             <p className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-100 rounded-xl px-2.5 py-1.5">
-                              Total kiloan saat ini ~{kiloanTotalKg} Kg, masih di bawah minimal {KILOAN_MIN_ORDER_KG} Kg. Tambah kantong/paket lagi.
+                              Total kiloan saat ini ~{kiloanTotalKg} Kg, di bawah minimal {KILOAN_MIN_ORDER_KG} Kg — tetap ditagih {KILOAN_MIN_ORDER_KG} Kg (+{idr(kiloanTopUp.amount)}). Tambah cucian agar tidak rugi.
                             </p>
                           )}
                           {cartKiloan.map((item, idx) => (
@@ -3580,6 +3586,12 @@ function CustomerDashboardPage() {
                         <span className="shrink-0">Rp {kiloanLineTotal(k.price, k.kg).toLocaleString('id-ID')}</span>
                       </p>
                     ))}
+                    {kiloanTopUp.amount > 0 && (
+                      <p className="flex justify-between gap-2 font-semibold text-amber-700">
+                        <span className="min-w-0">Minimal {KILOAN_MIN_ORDER_KG} Kg (kurang ~{kiloanTopUp.shortKg} Kg)</span>
+                        <span className="shrink-0">Rp {kiloanTopUp.amount.toLocaleString('id-ID')}</span>
+                      </p>
+                    )}
                     {isSatuanChecked &&
                       cartSatuan.map((it, i) => (
                         <p key={`s-${i}`} className="flex justify-between gap-2 font-semibold text-slate-800">

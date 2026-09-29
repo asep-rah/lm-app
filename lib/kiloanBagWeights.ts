@@ -10,6 +10,8 @@
  * untuk bagaimana harga akhir tetap dihitung dari kg, bukan dari angka ini.
  */
 
+import { kiloanLineTotal } from './kiloanPrice';
+
 export type BagCategoryKey = 'bajuRingan' | 'celanaBiasa' | 'celanaJeans' | 'cd' | 'bra';
 
 export const BAG_CATEGORY_ORDER: BagCategoryKey[] = ['bajuRingan', 'celanaBiasa', 'celanaJeans', 'cd', 'bra'];
@@ -90,3 +92,21 @@ export const bagCategoryCountsValid = (
 /** Total kg dari beberapa baris kiloan (satu order bisa punya beberapa kantong/paket). */
 export const kiloanOrderKgOf = (lines: Array<{ kg?: number | string }>): number =>
   Math.round(lines.reduce((sum, l) => sum + (Number(l.kg) || 0), 0) * 100) / 100;
+
+/**
+ * Order kiloan di bawah KILOAN_MIN_ORDER_KG tetap boleh dipesan, tetapi ditagih
+ * minimal KILOAN_MIN_ORDER_KG. Kekurangan kg dihitung dengan tarif/kg termurah
+ * di keranjang (satu paket = tarif paket itu). Tanpa kiloan atau sudah ≥ minimal
+ * → tidak ada tambahan.
+ */
+export const kiloanMinimumTopUp = (
+  lines: Array<{ kg?: number | string; price?: number | string }>,
+  minKg: number = KILOAN_MIN_ORDER_KG
+): { shortKg: number; amount: number } => {
+  const totalKg = kiloanOrderKgOf(lines);
+  if (!lines.length || totalKg >= minKg) return { shortKg: 0, amount: 0 };
+  const rates = lines.map((l) => Number(l.price) || 0).filter((p) => p > 0);
+  if (!rates.length) return { shortKg: 0, amount: 0 };
+  const shortKg = Math.round((minKg - totalKg) * 100) / 100;
+  return { shortKg, amount: kiloanLineTotal(Math.min(...rates), shortKg) };
+};
