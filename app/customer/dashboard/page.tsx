@@ -2083,13 +2083,13 @@ function CustomerDashboardPage() {
   const kiloanBagTotal = kiloanLines.reduce((sum, k) => sum + Math.max(1, Number(k.bags) || 1), 0);
   const kiloanWashFinal = kiloanLines.length > 1 ? 'Pisah Perkantong' : 'Gabung Semua';
   const kiloanTotalKg = kiloanOrderKgOf(kiloanLines);
-  // Di bawah minimal 3 kg tetap boleh dipesan, tetapi ditagih 3 kg.
+  // Di bawah minimal 3 kg tetap boleh dipesan, biayanya dihitung 3 kg.
   const kiloanTopUp = kiloanMinimumTopUp(kiloanLines);
   const kiloanSubtotal =
     kiloanLines.reduce((sum, line) => sum + kiloanLineTotal(line.price, line.kg), 0) + kiloanTopUp.amount;
   const kiloanMinimumNote =
     kiloanTopUp.amount > 0
-      ? `Minimal ${KILOAN_MIN_ORDER_KG} kg: est. ~${kiloanTotalKg} kg, ditagih ${KILOAN_MIN_ORDER_KG} kg (+${idr(kiloanTopUp.amount)})`
+      ? `Minimal ${KILOAN_MIN_ORDER_KG} kg: est. ~${kiloanTotalKg} kg, dihitung ${KILOAN_MIN_ORDER_KG} kg (+${idr(kiloanTopUp.amount)})`
       : '';
 
   let satuanSubtotal = 0;
@@ -3197,15 +3197,16 @@ function CustomerDashboardPage() {
                         </div>
                       )}
 
-                      <p className="text-[10px] text-slate-400 font-medium">
-                        Jumlah pcs & estimasi kg dihitung otomatis dari isian di atas — tidak perlu diisi ulang.
-                      </p>
-                      <p className="text-[10px] bg-brand-50 border border-brand-100 text-brand-800 rounded-xl px-2.5 py-1.5 font-semibold">
-                        Berat & harga di atas adalah ESTIMASI. Kasir akan menimbang ulang cucian di outlet dan mengonfirmasi tagihan final.
-                      </p>
-                      <p className="text-[10px] bg-amber-50 border border-amber-100 text-amber-800 rounded-xl px-2.5 py-1.5 font-semibold">
-                        Info: Kiloan minimal {KILOAN_MIN_ORDER_KG} kg per order (1 Mesin Cuci = 1 Customer, pakaian tidak dicampur dengan pelanggan lain). Di bawah {KILOAN_MIN_ORDER_KG} kg tetap bisa dipesan, ditagih {KILOAN_MIN_ORDER_KG} kg.
-                      </p>
+                      <div className="text-[10px] bg-brand-50 border border-brand-100 text-brand-800 rounded-xl px-3 py-2 font-semibold space-y-0.5">
+                        <p>• Berat & harga masih perkiraan, kasir akan menimbang ulang di outlet.</p>
+                        <p>• Cucian Anda dicuci di mesin tersendiri, minimal {KILOAN_MIN_ORDER_KG} kg per pesanan.</p>
+                        <p>• Di bawah {KILOAN_MIN_ORDER_KG} kg, biaya dihitung {KILOAN_MIN_ORDER_KG} kg.</p>
+                        {kiloanTopUp.amount > 0 && (
+                          <p className="text-amber-700 font-bold pt-0.5">
+                            Saat ini ~{kiloanTotalKg.toLocaleString('id-ID')} kg, jadi dihitung {KILOAN_MIN_ORDER_KG} kg (+{idr(kiloanTopUp.amount)}).
+                          </p>
+                        )}
+                      </div>
 
                       {kiloanFormError && (
                         <p className="text-[11px] font-bold text-rose-700 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2" role="alert">
@@ -3217,11 +3218,6 @@ function CustomerDashboardPage() {
                       </button>
                       {cartKiloan.length > 0 && (
                         <div className="space-y-1.5">
-                          {kiloanTopUp.amount > 0 && (
-                            <p className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-100 rounded-xl px-2.5 py-1.5">
-                              Total kiloan saat ini ~{kiloanTotalKg} Kg, di bawah minimal {KILOAN_MIN_ORDER_KG} Kg — tetap ditagih {KILOAN_MIN_ORDER_KG} Kg (+{idr(kiloanTopUp.amount)}). Tambah cucian agar tidak rugi.
-                            </p>
-                          )}
                           {cartKiloan.map((item, idx) => (
                             <div key={idx} className="bg-white p-2.5 rounded-xl flex justify-between items-center text-xs border border-brand-100">
                               <div className="min-w-0">
@@ -3588,7 +3584,7 @@ function CustomerDashboardPage() {
                     ))}
                     {kiloanTopUp.amount > 0 && (
                       <p className="flex justify-between gap-2 font-semibold text-amber-700">
-                        <span className="min-w-0">Minimal {KILOAN_MIN_ORDER_KG} Kg (kurang ~{kiloanTopUp.shortKg} Kg)</span>
+                        <span className="min-w-0">Penyesuaian minimal {KILOAN_MIN_ORDER_KG} kg</span>
                         <span className="shrink-0">Rp {kiloanTopUp.amount.toLocaleString('id-ID')}</span>
                       </p>
                     )}

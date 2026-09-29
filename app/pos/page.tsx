@@ -17,7 +17,8 @@ import { isCancelledOrVoided, isVoidTransaction } from '@/lib/voidTx';
 import { updatePickupOrder, markPickupConvertedToPos, claimPickupForPos } from '@/lib/pickupUpdates';
 import { insertWithFallback, updateWithFallback } from '@/lib/safeWrite';
 import { uploadProofFile } from '@/lib/uploadProof';
-import { cartLineAmount } from '@/lib/kiloanPrice';
+import { cartLineAmount, durationPriceMultiplier } from '@/lib/kiloanPrice';
+import { cartKiloanMinimumTopUp, KILOAN_MIN_ORDER_KG, kiloanMinimumTopUp } from '@/lib/kiloanBagWeights';
 import { assertPosQtyReady } from '@/lib/posQtyGate';
 import PickupItemsDetail from '@/components/PickupItemsDetail';
 import {
@@ -964,7 +965,11 @@ const handleApplyLoan = async (e: React.FormEvent) => {
 
     let qty = activeSvc && activeSvc.type === 'pcs' ? Number(editPcsCount) || 0 : Number(editWeightKg) || 0;
     
-    const kiloanSubtotal = Math.round(unitPrice * qty * durationMultiplier);
+    let kiloanSubtotal = Math.round(unitPrice * qty * durationMultiplier);
+    // Kiloan di bawah 3 kg, biayanya dihitung 3 kg.
+    if (!(activeSvc && activeSvc.type === 'pcs') && qty > 0) {
+      kiloanSubtotal += kiloanMinimumTopUp([{ kg: qty, price: Math.round(unitPrice * durationMultiplier) }]).amount;
+    }
     const ongkir = Number(editDeliveryFee) || 0;
     const biayaSatuan = Number(editSatuanFee) || 0;
 
@@ -985,6 +990,8 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       cartItems.forEach(item => {
         totalSubtotal += cartLineAmount(item, durationMultiplier);
       });
+      // Kiloan di bawah 3 kg, biayanya dihitung 3 kg.
+      totalSubtotal += cartKiloanMinimumTopUp(cartItems, durationMultiplier).amount;
     } else {
       const targetSvcName = selectedServiceInput || serviceType;
       const activeSvc = services.find(
@@ -1008,6 +1015,9 @@ const handleApplyLoan = async (e: React.FormEvent) => {
       const qty = activeSvc && activeSvc.type === 'pcs' ? qtyPcs : qtyKg;
 
       totalSubtotal = Math.round(baseUnitPrice * qty * durationMultiplier);
+      if (!(activeSvc && activeSvc.type === 'pcs') && qty > 0) {
+        totalSubtotal += kiloanMinimumTopUp([{ kg: qty, price: Math.round(baseUnitPrice * durationMultiplier) }]).amount;
+      }
     }
 
     let discVal = Number(discountValue) || 0;
@@ -1778,6 +1788,14 @@ const handleApplyLoan = async (e: React.FormEvent) => {
     if (!qtyGate.ok) {
       setIsSubmitting(false);
       return alert(`⚠️ ${qtyGate.message}`);
+    }
+    // Catatan audit: kiloan di bawah 3 kg, biayanya dihitung 3 kg.
+    const kiloanKgForMin = cartItems.length
+      ? cartItems.reduce((sum, it) => sum + (it.type === 'kg' ? Number(it.qty) || 0 : 0), 0)
+      : activeSvcForQty?.type === 'pcs' ? 0 : totalKgSum;
+    if (kiloanKgForMin > 0 && kiloanKgForMin < KILOAN_MIN_ORDER_KG) {
+      const minNote = `Minimal ${KILOAN_MIN_ORDER_KG} kg: timbang ${Math.round(kiloanKgForMin * 100) / 100} kg, dihitung ${KILOAN_MIN_ORDER_KG} kg`;
+      combinedNotes = combinedNotes ? `${combinedNotes} | ${minNote}` : minNote;
     }
 
     const needsPayVerify = isNonCashVerifyMethod(finalPaymentMethodLabel);
@@ -3408,6 +3426,7 @@ const handleStatusChange = async (
     [completedPickups, queueSearch]
   );
 
+  const posCartTopUp = cartKiloanMinimumTopUp(cartItems, durationPriceMultiplier(duration));
   const totalPayNum = Number(amount) || 0;
   const split1Num = Number(splitAmount1) || 0;
   const split2Num = Math.max(0, totalPayNum - split1Num);
@@ -3450,6 +3469,18 @@ const handleStatusChange = async (
                     <span className="font-bold">Rp {cartLineAmount(item).toLocaleString('id-ID')}</span>
                   </div>
                 ))}
+                {(() => {
+                  const top = cartKiloanMinimumTopUp(lastOrderInfo.cartItems, durationPriceMultiplier(lastOrderInfo.duration));
+                  return top.amount > 0 ? (
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <span className="font-bold block">Penyesuaian min. {KILOAN_MIN_ORDER_KG} kg</span>
+                        <span className="text-[8px]">Kurang {top.shortKg.toLocaleString('id-ID')} kg</span>
+                      </div>
+                      <span className="font-bold">Rp {top.amount.toLocaleString('id-ID')}</span>
+                    </div>
+                  ) : null;
+                })()}
               </div>
             ) : (
               <div className="mb-2">
@@ -4561,6 +4592,15 @@ const handleStatusChange = async (
                   </div>
                 );
               })}
+              {posCartTopUp.amount > 0 && (
+                <div className="bg-amber-50 p-2.5 rounded-xl border border-amber-200 flex justify-between items-center text-xs">
+                  <div>
+                    <p className="font-bold text-amber-800">Penyesuaian minimal {KILOAN_MIN_ORDER_KG} kg</p>
+                    <p className="text-[10px] text-amber-700">Kurang ~{posCartTopUp.shortKg.toLocaleString('id-ID')} kg, dihitung {KILOAN_MIN_ORDER_KG} kg</p>
+                  </div>
+                  <span className="font-black text-amber-700">Rp {posCartTopUp.amount.toLocaleString('id-ID')}</span>
+                </div>
+              )}
             </div>
           ) : (
             <p className="text-xs text-slate-400 italic py-6 text-center">Keranjang kosong — pilih layanan di kiri.</p>

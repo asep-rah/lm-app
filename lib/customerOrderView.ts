@@ -9,7 +9,8 @@
  */
 import { buildStageTimeline, isOrderPaid, stageKeyOf, type WorkLogRow } from '@/lib/stageTimeline';
 import { isPaymentLocked } from '@/lib/paymentVerify';
-import { displayItemAmount } from '@/lib/kiloanPrice';
+import { displayItemAmount, durationPriceMultiplier } from '@/lib/kiloanPrice';
+import { cartKiloanMinimumTopUp, KILOAN_MIN_ORDER_KG } from '@/lib/kiloanBagWeights';
 import { parseOrderItems } from '@/lib/posQueue';
 
 /** Row came from `transactions` (POS nota) rather than a pickup request only. */
@@ -133,6 +134,16 @@ export const priceBreakdownOf = (order: any): PriceBreakdown => {
       .join(' · ');
     return { name: String(it?.name || it?.service_type || 'Item cucian'), detail, amount: displayItemAmount(it) };
   });
+  // Kiloan < 3 kg, biayanya dihitung 3 kg. Baris tambahan hanya untuk order yang memang
+  // ditandai (catatan "Minimal 3 kg" dari form customer / POS), supaya nota lama
+  // tidak berubah. Estimasi customer: harga item sudah termasuk durasi.
+  if (new RegExp(`Minimal ${KILOAN_MIN_ORDER_KG} kg`, 'i').test(String(order?.notes || ''))) {
+    const mult = isTransactionRow(order) ? durationPriceMultiplier(order?.duration) : 1;
+    const top = cartKiloanMinimumTopUp(rawItems, mult);
+    if (top.amount > 0) {
+      items.push({ name: `Penyesuaian minimal ${KILOAN_MIN_ORDER_KG} kg`, detail: `Kurang ${top.shortKg.toLocaleString('id-ID')} kg`, amount: top.amount });
+    }
+  }
   const itemsTotal = items.reduce((s, i) => s + i.amount, 0);
   const deliveryFee = Math.max(0, Math.round(Number(order?.delivery_fee) || 0));
 

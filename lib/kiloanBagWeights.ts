@@ -10,7 +10,7 @@
  * untuk bagaimana harga akhir tetap dihitung dari kg, bukan dari angka ini.
  */
 
-import { kiloanLineTotal } from './kiloanPrice';
+import { isKiloanItem, kiloanLineTotal, kiloanWeightOf } from './kiloanPrice';
 
 export type BagCategoryKey = 'bajuRingan' | 'celanaBiasa' | 'celanaJeans' | 'cd' | 'bra';
 
@@ -94,7 +94,7 @@ export const kiloanOrderKgOf = (lines: Array<{ kg?: number | string }>): number 
   Math.round(lines.reduce((sum, l) => sum + (Number(l.kg) || 0), 0) * 100) / 100;
 
 /**
- * Order kiloan di bawah KILOAN_MIN_ORDER_KG tetap boleh dipesan, tetapi ditagih
+ * Order kiloan di bawah KILOAN_MIN_ORDER_KG tetap boleh dipesan, biayanya dihitung
  * minimal KILOAN_MIN_ORDER_KG. Kekurangan kg dihitung dengan tarif/kg termurah
  * di keranjang (satu paket = tarif paket itu). Tanpa kiloan atau sudah ≥ minimal
  * → tidak ada tambahan.
@@ -110,3 +110,21 @@ export const kiloanMinimumTopUp = (
   const shortKg = Math.round((minKg - totalKg) * 100) / 100;
   return { shortKg, amount: kiloanLineTotal(Math.min(...rates), shortKg) };
 };
+
+/**
+ * kiloanMinimumTopUp untuk keranjang POS (item {type,qty,basePrice,price}).
+ * Tarif per kg = basePrice × pengali durasi, sama seperti cartLineAmount, jadi
+ * total POS = jumlah baris + tambahan ini. Item satuan (pcs) diabaikan.
+ */
+export const cartKiloanMinimumTopUp = (
+  items: Array<Record<string, unknown>>,
+  durationMultiplier = 1,
+  minKg: number = KILOAN_MIN_ORDER_KG
+): { shortKg: number; amount: number } =>
+  kiloanMinimumTopUp(
+    items.filter(isKiloanItem).map((it) => ({
+      kg: kiloanWeightOf(it),
+      price: Math.round((Number(it.basePrice ?? it.price) || 0) * durationMultiplier)
+    })),
+    minKg
+  );
