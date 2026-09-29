@@ -35,3 +35,12 @@ export const displayItemAmount = (item: any) => {
   if (!typedPcs && kg > 0) return kiloanLineTotal(unit, kg);
   return cartLineAmount(item);
 };
+
+/** Pengali harga per durasi (aturan POS): Quick ×3, Express ×2, Oneday ×1,5, Reguler ×1. */
+export const durationPriceMultiplier = (duration: unknown): number => {
+  const d = String(duration || '');
+  if (d.includes('Quick') || d.includes('3 Jam')) return 3.0;
+  if (d.includes('Express') || d.includes('6 Jam')) return 2.0;
+  if (d.includes('Oneday') || d.includes('1 Hari')) return 1.5;
+  return 1.0;
+};
