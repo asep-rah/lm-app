@@ -7,6 +7,7 @@ import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabaseClient';
 import { fetchThreadMessages, insertChatMessage, isStaffOnlyMessage, phoneVariants, threadKeyOf } from '@/lib/csChat';
+import { debounce, phoneInFilter, threadKeyFilter } from '@/lib/realtimeFilter';
 import { parseChatInvoice } from '@/lib/chatInvoice';
 import { findPromoByCode, mapDbPromo, mapSettingsPromo, promoDiscountRp, promoIsClaimable, type CatalogPromo } from '@/lib/promoCatalog';
 import { cashbackCopy, DEFAULT_CRM_SETTINGS, idr, type CrmProfile, type CrmSettings } from '@/lib/crm';
@@ -847,15 +848,31 @@ function CustomerDashboardPage() {
       });
     };
 
-    const channel = supabase
-      .channel('cust_cs_' + key)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'support_chats' }, (payload) =>
-        ingestIncoming(payload.new, true)
-      )
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'support_chat_messages' }, (payload) =>
-        ingestIncoming(payload.new, false)
-      )
-      .subscribe();
+    // Hanya baris milik customer ini (nomor ATAU thread) — bukan seluruh tabel chat.
+    // Baris yang cocok di kedua filter datang dua kali → disaring per id.
+    const seenIds = new Set<string>();
+    const ingestOnce = (row: Record<string, unknown>, notify: boolean) => {
+      const id = String(row?.id ?? '');
+      if (id) {
+        if (seenIds.has(id)) return;
+        seenIds.add(id);
+      }
+      ingestIncoming(row, notify);
+    };
+    const chatFilters = [phoneInFilter('customer_phone', [...phoneVariants(customerPhone)]), threadKeyFilter(key)].filter(
+      (f): f is string => Boolean(f)
+    );
+    let channel = supabase.channel('cust_cs_' + key);
+    for (const filter of chatFilters) {
+      channel = channel
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'support_chats', filter }, (payload) =>
+          ingestOnce(payload.new, true)
+        )
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'support_chat_messages', filter }, (payload) =>
+          ingestOnce(payload.new, false)
+        );
+    }
+    channel.subscribe();
 
     const onVisible = () => {
       if (document.visibilityState === 'visible') loadCustomerChats(customerPhone);
@@ -873,17 +890,24 @@ function CustomerDashboardPage() {
   useEffect(() => {
     if (!customerPhone) return;
 
-    const channel = supabase
-      .channel('realtime_pickup_customer')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'pickup_orders' }, () => {
-        fetchCustomerProfile(customerPhone);
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
-        fetchCustomerProfile(customerPhone);
-      })
-      .subscribe();
+    // Hanya perubahan pesanan milik customer ini. Beberapa event beruntun
+    // (mis. kasir ubah status + bayar) → satu kali muat ulang.
+    const reload = debounce(() => fetchCustomerProfile(customerPhone), 600);
+    const variants = [...phoneVariants(customerPhone)];
+    const listeners: Array<[string, string | null]> = [
+      ['pickup_orders', phoneInFilter('customer_phone', variants)],
+      ['pickup_orders', phoneInFilter('phone_number', variants)],
+      ['transactions', phoneInFilter('customer_phone', variants)]
+    ];
+    let channel = supabase.channel('realtime_pickup_customer');
+    for (const [table, filter] of listeners) {
+      if (!filter) continue;
+      channel = channel.on('postgres_changes', { event: '*', schema: 'public', table, filter }, () => reload());
+    }
+    channel.subscribe();
 
     return () => {
+      reload.cancel();
       supabase.removeChannel(channel);
     };
   }, [customerPhone]);
@@ -1387,9 +1411,27 @@ function CustomerDashboardPage() {
     if (!norm) return;
 
     try {
-      let { data: cust } = await supabase.from('customers').select('*').eq('phone', norm).limit(1);
-      // Didaftarkan dengan bentuk lain (mis. 62… dari POS atau +kode negara).
-      if (!cust?.length) ({ data: cust } = await supabase.from('customers').select('*').in('phone', phoneLookupKeys(norm)).limit(1));
+      // Semua bentuk simpanan nomor ini: 08…/62…/+62… atau +kode negara (lib/phone).
+      const lookupKeys = phoneLookupKeys(norm);
+      const keyList = lookupKeys.map((k) => `"${k}"`).join(',');
+      // Tiga query tidak saling bergantung → jalan paralel (satu round-trip, bukan tiga).
+      const [custRes, pickupRes, txRes] = await Promise.all([
+        supabase.from('customers').select('*').in('phone', lookupKeys).limit(5),
+        supabase
+          .from('pickup_orders')
+          .select('*')
+          .or(`customer_phone.in.(${keyList}),phone_number.in.(${keyList})`)
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('transactions')
+          .select('*')
+          .in('customer_phone', lookupKeys)
+          .order('created_at', { ascending: false })
+      ]);
+      // Utamakan baris dengan nomor persis sama; bentuk lain (62…/+kode negara) sebagai cadangan.
+      const custRows = custRes.data || [];
+      const exact = custRows.find((c) => c.phone === norm);
+      const cust = exact ? [exact] : custRows.slice(0, 1);
       if (cust && cust.length > 0) {
         setCustomerData(cust[0]);
         if (cust[0].name) setCustomerName(cust[0].name);
@@ -1397,24 +1439,8 @@ function CustomerDashboardPage() {
         setCustomerData({ name: customerName || 'Pelanggan', deposit_balance: 0 });
       }
 
-      // Semua bentuk simpanan nomor ini: 08…/62…/+62… atau +kode negara (lib/phone).
-    const keyList = phoneLookupKeys(norm)
-      .map((k) => `"${k}"`)
-      .join(',');
-
-  // Tarik data pickup_orders langsung dengan query database
-  const { data: pickupOrders } = await supabase
-    .from('pickup_orders')
-    .select('*')
-    .or(`customer_phone.in.(${keyList}),phone_number.in.(${keyList})`)
-    .order('created_at', { ascending: false });
-
-  // Tarik data transactions langsung dengan query database
-  const { data: posTransactions } = await supabase
-    .from('transactions')
-    .select('*')
-    .in('customer_phone', phoneLookupKeys(norm))
-    .order('created_at', { ascending: false });
+  const pickupOrders = pickupRes.data;
+  const posTransactions = txRes.data;
 
   // Filter dan gabungkan data pickup & POS agar pesanan 'Tiba di Outlet' TIDAK PERNAH HILANG
   const activePickups = pickupOrders || [];
