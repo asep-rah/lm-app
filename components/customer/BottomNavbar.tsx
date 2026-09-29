@@ -9,7 +9,8 @@ import {
   isIncomingStaffChat,
   markCustomerChatsRead
 } from '@/lib/customerChatUnread';
-import { canonicalPhone } from '@/lib/csChat';
+import { canonicalPhone, phoneVariants, threadKeyOf } from '@/lib/csChat';
+import { phoneInFilter, threadKeyFilter } from '@/lib/realtimeFilter';
 import {
   alertCustomerIncomingChat,
   ensurePushSubscription,
@@ -67,28 +68,43 @@ export default function BottomNavbar({
     void refreshUnread(phone);
 
     const canon = canonicalPhone(phone) || phone;
-    const channel = supabase
-      .channel('cust_nav_unread_' + canon)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'support_chats' }, (payload) => {
-        const row = payload.new;
-        if (!chatBelongsToCustomer(row, phone) || !isIncomingStaffChat(row)) return;
-        const viewingChat = inChatRef.current && typeof document !== 'undefined' && document.visibilityState === 'visible';
-        if (viewingChat) {
-          void clearUnread(phone);
-          return;
-        }
-        alertCustomerIncomingChat({ preview: row?.message, inChat: false });
-        setUnreadChatCount((n) => n + 1);
-        void countUnreadCustomerChats(phone).then((n) => {
-          if (n > 0) setUnreadChatCount(n);
-        });
-      })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'support_chats' }, (payload) => {
-        const row = payload.new;
-        if (!chatBelongsToCustomer(row, phone)) return;
-        void refreshUnread(phone);
-      })
-      .subscribe();
+    // Hanya chat milik customer ini (nomor ATAU thread), bukan seluruh tabel.
+    // Baris yang cocok di kedua filter datang dua kali → INSERT disaring per id.
+    const seenIds = new Set<string>();
+    const filters = [
+      phoneInFilter('customer_phone', [...phoneVariants(phone)]),
+      threadKeyFilter(threadKeyOf({ customer_phone: phone }))
+    ].filter((f): f is string => Boolean(f));
+    const onInsert = (payload: { new: Record<string, unknown> }) => {
+      const row = payload.new;
+      const id = String(row.id ?? '');
+      if (id) {
+        if (seenIds.has(id)) return;
+        seenIds.add(id);
+      }
+      if (!chatBelongsToCustomer(row, phone) || !isIncomingStaffChat(row)) return;
+      const viewingChat = inChatRef.current && typeof document !== 'undefined' && document.visibilityState === 'visible';
+      if (viewingChat) {
+        void clearUnread(phone);
+        return;
+      }
+      alertCustomerIncomingChat({ preview: typeof row.message === 'string' ? row.message : undefined, inChat: false });
+      setUnreadChatCount((n) => n + 1);
+      void countUnreadCustomerChats(phone).then((n) => {
+        if (n > 0) setUnreadChatCount(n);
+      });
+    };
+    const onUpdate = (payload: { new: Record<string, unknown> }) => {
+      if (!chatBelongsToCustomer(payload.new, phone)) return;
+      void refreshUnread(phone);
+    };
+    let channel = supabase.channel('cust_nav_unread_' + canon);
+    for (const filter of filters) {
+      channel = channel
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'support_chats', filter }, onInsert)
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'support_chats', filter }, onUpdate);
+    }
+    channel.subscribe();
 
     const onVisible = () => {
       if (document.visibilityState === 'visible') void refreshUnread(phone);
